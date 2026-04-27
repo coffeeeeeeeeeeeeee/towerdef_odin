@@ -18,7 +18,7 @@ Projectile :: struct {
 	// Properties
 	speed: f32,
 	damage: f32,
-	type: constants.tower_type,
+	type: constants.Tower_Type,
 	aoe: f32,
 	critical_level: i32,
 }
@@ -29,7 +29,8 @@ projectile_init :: proc(
 	target: ^Enemy,
 	speed: f32,
 	damage: f32,
-	proj_type: constants.tower_type,
+	target_strategy: constants.Target_Strategy,
+	type: constants.Tower_Type,
 	aoe: f32,
 	critical_level: i32,
 ) -> Projectile {
@@ -41,7 +42,7 @@ projectile_init :: proc(
 		target_orig_y = target.y,
 		speed = speed,
 		damage = damage,
-		type = proj_type,
+		type = type,
 		aoe = aoe,
 		critical_level = critical_level,
 	}

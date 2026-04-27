@@ -2,8 +2,8 @@ package entities
 
 import "core:math"
 import "core:fmt"
-import "../constants"
 import "vendor:raylib"
+import "../constants"
 
 // Enemy type
 Enemy_Type :: enum {
@@ -90,7 +90,11 @@ enemy_destroy :: proc(e: ^Enemy) {
 // Set enemy path starting position
 enemy_set_path :: proc(e: ^Enemy, path: [dynamic]Path_Node) {
 	delete(e.path)
-	e.path = path
+	// Clone the path so each enemy has its own copy
+	e.path = make([dynamic]Path_Node, len(path))
+	for node, i in path {
+		e.path[i] = node
+	}
 	if len(path) > 0 {
 		e.x = f32(path[0].x)
 		e.y = f32(path[0].y)
@@ -99,6 +103,7 @@ enemy_set_path :: proc(e: ^Enemy, path: [dynamic]Path_Node) {
 }
 
 // Move enemy along path
+// Grid cells are 1.0 units apart, so speed is in cells per second
 enemy_move :: proc(e: ^Enemy, dt: f32) -> bool {
 	next_idx := e.path_idx + 1
 	
@@ -114,7 +119,16 @@ enemy_move :: proc(e: ^Enemy, dt: f32) -> bool {
 	dx := target_x - e.x
 	dy := target_y - e.y
 	dist := math.sqrt(dx * dx + dy * dy)
-	move_dist := e.speed * dt
+	
+	// If already at target, move to next node
+	if dist < 0.001 {
+		e.path_idx = next_idx
+		return false
+	}
+	
+	// Scale speed - cells per second
+	GRID_SPEED_SCALE :: 2.0
+	move_dist := e.speed * GRID_SPEED_SCALE * dt
 	
 	if move_dist >= dist {
 		e.x = target_x
@@ -164,25 +178,32 @@ enemy_apply_obstacle_damage :: proc(e: ^Enemy, grid_x, grid_y, obstacle_level: i
 
 // Get enemy color
 enemy_get_color :: proc(e: ^Enemy) -> raylib.Color {
-	if e.is_boss {
+	switch {
+	case e.is_boss:
 		return e.boss_color
+	case e.is_green:
+		return raylib.Color{0, 255, 0, 255}
+	case e.is_blue:
+		return raylib.Color{0, 0, 255, 255}
+	case e.is_flying:
+		return raylib.Color{255, 0, 0, 255}
+	case:
+		return constants.COLOR_ENEMY
 	}
-	if e.is_green {
-		return constants.COLOR_ENEMY_GREEN
-	}
-	if e.is_blue {
-		return constants.COLOR_ENEMY_BLUE
-	}
-	if e.is_flying {
-		return constants.COLOR_ENEMY_FLYING
-	}
-	return constants.COLOR_ENEMY
 }
 
 // Get enemy size
 enemy_get_size :: proc(e: ^Enemy) -> f32 {
-	if e.is_boss {
-		return 0.8
+	switch {
+	case e.is_boss:
+		return 0.60
+	case e.is_flying:
+		return 0.25
+	case e.is_blue:
+		return 0.30
+	case e.is_green:
+		return 0.17
+	case:
+		return 0.30
 	}
-	return 0.4
 }

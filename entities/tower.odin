@@ -1,6 +1,7 @@
 package entities
 
 import "core:math"
+import "vendor:raylib"
 import "../constants"
 
 // Tower structure
@@ -10,7 +11,7 @@ Tower :: struct {
 	c: i32,
 	
 	// Tower properties
-	type: constants.tower_type,
+	type: constants.Tower_Type,
 	range: f32,
 	damage: f32,
 	cooldown: f32,
@@ -45,8 +46,8 @@ Tower :: struct {
 }
 
 // Initialize a new tower
-tower_init :: proc(tile: constants.Tile, row, col: i32) -> Tower {
-	spec := constants.TOWER_SPECS[tile]
+tower_init :: proc(tile_type: constants.Tower_Type, row, col: i32) -> Tower {
+	spec := constants.TOWER_SPECS[tile_type]
 	return Tower{
 		r = row,
 		c = col,
@@ -75,12 +76,8 @@ tower_init :: proc(tile: constants.Tile, row, col: i32) -> Tower {
 
 // Get base cost of tower
 tower_get_base_cost :: proc(t: ^Tower) -> i32 {
-	for tile, spec in constants.TOWER_SPECS {
-		if spec.type == t.type {
-			return spec.cost
-		}
-	}
-	return 0
+	spec := constants.TOWER_SPECS[t.type]
+	return spec.cost
 }
 
 // Get upgrade cost
@@ -88,7 +85,7 @@ tower_get_upgrade_cost :: proc(level: i32) -> i32 {
 	if level <= 1 {
 		return 0
 	}
-	return constants.UPGRADE_COST_PER_LEVEL * (level - 1) * level
+	return constants.UPGRADE_COST_BASE + (level - 1) * constants.UPGRADE_COST_INCREMENTVEL
 }
 
 // Calculate sell refund
@@ -104,7 +101,7 @@ tower_get_sell_refund :: proc(t: ^Tower) -> i32 {
 
 // Upgrade damage
 tower_upgrade_damage :: proc(t: ^Tower) -> bool {
-	cost := constants.UPGRADE_BASE_COST + (t.damage_level - 1) * constants.UPGRADE_COST_PER_LEVEL
+	cost := constants.UPGRADE_COST_BASE + (t.damage_level - 1) * constants.UPGRADE_COST_INCREMENTVEL
 	// Money check should be done externally
 	t.damage_level += 1
 	t.damage *= (1.0 + constants.LASER_DAMAGE_MULTIPLIER_PER_LEVEL)
@@ -113,15 +110,16 @@ tower_upgrade_damage :: proc(t: ^Tower) -> bool {
 
 // Upgrade rate (cooldown reduction)
 tower_upgrade_rate :: proc(t: ^Tower) -> bool {
-	cost := constants.UPGRADE_BASE_COST + (t.rate_level - 1) * constants.UPGRADE_COST_PER_LEVEL
+	cost := constants.UPGRADE_COST_BASE + (t.rate_level - 1) * constants.UPGRADE_COST_INCREMENTVEL
 	// Money check should be done externally
 	t.rate_level += 1
+	t.cooldown *= (1.0 - constants.LASER_COOLDOWN_REDUCTION_PER_LEVEL)
 	return true
 }
 
 // Upgrade critical chance
 tower_upgrade_critical :: proc(t: ^Tower) -> bool {
-	cost := constants.UPGRADE_BASE_COST + (t.critical_level - 1) * constants.UPGRADE_COST_PER_LEVEL
+	cost := constants.UPGRADE_COST_BASE + (t.critical_level - 1) * constants.UPGRADE_COST_INCREMENTVEL
 	// Money check should be done externally
 	t.critical_level += 1
 	return true
@@ -129,7 +127,7 @@ tower_upgrade_critical :: proc(t: ^Tower) -> bool {
 
 // Get critical chance
 tower_get_critical_chance :: proc(t: ^Tower) -> f32 {
-	return constants.CRIT_BASE_CHANCE + f32(t.critical_level - 1) * constants.CRIT_PER_LEVEL
+	return constants.GRID_SIZE_CHANCE + f32(t.critical_level - 1) * constants.CRIT_PER_LEVEL
 }
 
 // Get damage multiplier from damage level

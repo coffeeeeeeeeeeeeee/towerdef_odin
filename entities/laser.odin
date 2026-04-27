@@ -1,6 +1,8 @@
 package entities
 
 import "core:math"
+import "core:math/rand"
+import "vendor:raylib"
 import "../constants"
 
 // Laser beam structure (for rendering)
@@ -34,7 +36,7 @@ laser_beam_update :: proc(lb: ^Laser_Beam, dt: f32) -> bool {
 // Laser tower update logic
 // This handles the burst firing and cooldown system
 laser_tower_update :: proc(t: ^Tower, dt: f32) -> (damage_dealt: f32, beam_active: bool) {
-	LASER_FIRING_DURATION :: 1.0
+	LASER_FIRING_DURATION :: constants.LASER_FIRING_DURATION
 	
 	// Decrement cooldown timer
 	if t.cooldown_timer > 0 {
@@ -48,7 +50,7 @@ laser_tower_update :: proc(t: ^Tower, dt: f32) -> (damage_dealt: f32, beam_activ
 	
 	// Start firing if not firing and not in cooldown
 	if t.firing_timer <= 0 && t.cooldown_timer <= 0 && t.target != nil {
-		t.firing_timer = LASER_FIRING_DURATION
+		t.firing_timer = constants.LASER_FIRING_DURATION
 	}
 	
 	// While firing: apply damage and decrement firing timer
@@ -85,8 +87,8 @@ laser_tower_update :: proc(t: ^Tower, dt: f32) -> (damage_dealt: f32, beam_activ
 // Check if laser accumulated damage should be displayed
 laser_should_show_damage :: proc(t: ^Tower) -> (should_show: bool, damage: f32, is_critical: bool) {
 	if t._laser_accum_timer >= constants.LASER_ACCUMULATION_TIME {
-		critical_chance := constants.CRIT_BASE_CHANCE + f32(t.critical_level - 1) * constants.CRIT_PER_LEVEL
-		is_crit := math.rand_f32() < critical_chance
+		critical_chance := constants.CRIT_BASE_CHANCE + f32(t.damage_level - 1) * constants.CRIT_PER_LEVEL
+		is_crit := rand.float32() < critical_chance
 		
 		final_damage := t._laser_accum
 		if is_crit {

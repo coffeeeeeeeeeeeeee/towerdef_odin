@@ -2,22 +2,22 @@ package systems
 
 import "core:math"
 import "core:fmt"
+import "core:strings"
 import "vendor:raylib"
-import "../constants"
 import "../entities"
-import "../game"
+import "../constants"
 
 // Render the entire game
-render_game :: proc() {
-	render_map()
-	render_gameplay()
-	render_ui()
+render_game :: proc(app: ^entities.App_State) {
+	render_map(app)
+	render_gameplay(app)
+	render_ui(app)
 }
 
 // Render map (grid, paths, obstacles)
-render_map :: proc() {
-	m := &game.app.editor.map
-	cs := f32(game.app.settings.cell_size)
+render_map :: proc(app: ^entities.App_State) {
+	m := &app.editor.game_map
+	cs := f32(app.settings.cell_size) * app.zoom
 	gs := constants.GRID_SIZE
 	
 	// Background
@@ -27,31 +27,37 @@ render_map :: proc() {
 	// Fill grid background
 	total_size := f32(gs) * cs
 	raylib.DrawRectangle(
-		i32(game.app.camera_offset_x),
-		i32(game.app.camera_offset_y),
+		i32(app.camera_offset_x),
+		i32(app.camera_offset_y),
 		i32(total_size),
 		i32(total_size),
 		biome_colors.bg_grid,
 	)
 	
 	// Draw paths
-	render_paths(cs, gs)
+	render_paths(app, cs, i32(gs))
 	
 	// Draw gameplay tiles (towers, accessories)
 	for row in 0..<gs {
 		for col in 0..<gs {
 			tile := m.grid[row][col]
-			x := f32(col) * cs + f32(game.app.camera_offset_x)
-			y := f32(row) * cs + f32(game.app.camera_offset_y)
+			x := f32(col) * cs + f32(app.camera_offset_x)
+			y := f32(row) * cs + f32(app.camera_offset_y)
 			
-			switch tile {
+			#partial switch tile {
 			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER:
-				// Find corresponding tower
-				for &tower in game.app.sim.towers {
-					if tower.r == row && tower.c == col {
-						render_tower(&tower, x, y, cs)
-						break
+				// In game mode, find tower entity
+				if app.state == .PLAYING || app.state == .PAUSED {
+					for &tower in app.sim.towers {
+						if tower.r == i32(row) && tower.c == i32(col) {
+							render_tower(app, &tower, x, y, cs)
+							break
+						}
 					}
+				} else {
+					// In editor, render tower directly from tile type
+					tower_type := tile_to_tower_type(tile)
+					render_tower_preview(x, y, cs, tower_type)
 				}
 				
 			case .SPAWN:
@@ -61,7 +67,7 @@ render_map :: proc() {
 				render_goal(x, y, cs)
 				
 			case .ACCESSORY_TREE:
-				render_tree(x, y, cs)
+				render_tree(x, y, cs, app.editor.game_map.biome, i32(row), i32(col))
 				
 			case .ACCESSORY_BLOCK:
 				render_block(x, y, cs)
@@ -70,22 +76,29 @@ render_map :: proc() {
 	}
 	
 	// Draw obstacles
-	render_obstacles(cs, gs)
+	render_obstacles(app, cs, i32(gs))
 	
 	// Draw laser beams (on top of everything)
-	if game.app.state == .PLAYING || (game.app.state == .PAUSED && game.app.previous_state == .PLAYING) {
-		render_laser_beams(cs)
+	if app.state == .PLAYING || (app.state == .PAUSED && app.previous_state == .PLAYING) {
+		render_laser_beams(app, cs)
 	}
 	
 	// Grid lines
-	if game.app.settings.show_grid {
-		render_grid_lines(cs, gs)
+	if app.settings.show_grid {
+		render_grid_lines(app, cs, i32(gs))
+	}
+	
+	// Draw reticle for selected cell (in editor and simulation modes)
+	if app.selected_cell.valid && (app.state == .EDITOR || app.state == .PLAYING || app.state == .PAUSED) {
+		sx := f32(app.selected_cell.col) * cs + f32(app.camera_offset_x)
+		sy := f32(app.selected_cell.row) * cs + f32(app.camera_offset_y)
+		render_reticle(sx, sy, cs, constants.TOWER_RETICLE_COLOR)
 	}
 }
 
 // Render paths
-render_paths :: proc(cs: f32, gs: i32) {
-	m := &game.app.editor.map
+render_paths :: proc(app: ^entities.App_State, cs: f32, gs: i32) {
+	m := &app.editor.game_map
 	path_width := cs * 0.6
 	path_color := constants.BIOME_COLORS[m.biome].path
 	
@@ -104,8 +117,8 @@ render_paths :: proc(cs: f32, gs: i32) {
 				continue
 			}
 			
-			x := f32(col) * cs + f32(game.app.camera_offset_x)
-			y := f32(row) * cs + f32(game.app.camera_offset_y)
+			x := f32(col) * cs + f32(app.camera_offset_x)
+			y := f32(row) * cs + f32(app.camera_offset_y)
 			cx := x + cs / 2
 			cy := y + cs / 2
 			
@@ -170,70 +183,17 @@ render_paths :: proc(cs: f32, gs: i32) {
 }
 
 // Render grid lines
-render_grid_lines :: proc(cs: f32, gs: i32) {
+render_grid_lines :: proc(app: ^entities.App_State, cs: f32, gs: i32) {
 	for i in 0..=gs {
-		x := i32(f32(i) * cs) + game.app.camera_offset_x
-		y := i32(f32(i) * cs) + game.app.camera_offset_y
+		x := i32(f32(i) * cs) + app.camera_offset_x
+		y := i32(f32(i) * cs) + app.camera_offset_y
 		
 		// Vertical
-		raylib.DrawLine(x, game.app.camera_offset_y, x, game.app.camera_offset_y + i32(f32(gs) * cs), constants.COLOR_GRID_LINE)
+		raylib.DrawLine(x, app.camera_offset_y, x, app.camera_offset_y + i32(f32(gs) * cs), constants.COLOR_GRID_LINE)
 		
 		// Horizontal
-		raylib.DrawLine(game.app.camera_offset_x, y, game.app.camera_offset_x + i32(f32(gs) * cs), y, constants.COLOR_GRID_LINE)
+		raylib.DrawLine(app.camera_offset_x, y, app.camera_offset_x + i32(f32(gs) * cs), y, constants.COLOR_GRID_LINE)
 	}
-}
-
-// Render tower
-render_tower :: proc(tower: ^entities.Tower, x, y, cs: f32) {
-	// Get tower color from type
-	tower_color := tower_type_to_color(tower.type)
-	
-	// Draw base
-	raylib.DrawRectangle(
-		i32(x + cs * 0.1),
-		i32(y + cs * 0.1),
-		i32(cs * 0.8),
-		i32(cs * 0.8),
-		gray(100),
-	)
-	
-	// Draw cannon
-	center_x := x + cs / 2
-	center_y := y + cs / 2
-	cannon_length := cs * 0.45
-	
-	end_x := center_x + math.cos(tower.angle) * cannon_length
-	end_y := center_y + math.sin(tower.angle) * cannon_length
-	
-	raylib.DrawLineEx(
-		raylib.Vector2{center_x, center_y},
-		raylib.Vector2{end_x, end_y},
-		cs * 0.15,
-		tower_color,
-	)
-	
-	// Draw tower icon/center
-	raylib.DrawCircle(
-		i32(center_x),
-		i32(center_y),
-		cs * 0.25,
-		tower_color,
-	)
-	
-	// Draw upgrade indicators
-	render_tower_upgrades(tower, x, y, cs)
-}
-
-// Helper to get tower spec color
-tower_type_to_color :: proc(t: constants.tower_type) -> raylib.Color {
-	switch t {
-	case .ARCHER: return constants.TOWER_SPECS[.TOWER_ARCHER].color
-	case .CANNON: return constants.TOWER_SPECS[.TOWER_CANNON].color
-	case .SNIPER: return constants.TOWER_SPECS[.TOWER_SNIPER].color
-	case .MISSILE: return constants.TOWER_SPECS[.TOWER_MISSILE].color
-	case .LASER: return constants.TOWER_SPECS[.TOWER_LASER].color
-	}
-	return raylib.GRAY
 }
 
 // Render tower upgrades (small dots)
@@ -270,8 +230,6 @@ render_spawn :: proc(x, y, cs: f32) {
 	center_y := y + cs / 2
 	
 	raylib.DrawCircle(i32(center_x), i32(center_y), cs * 0.4, constants.COLOR_SPAWN)
-	raylib.DrawCircle(i32(center_x), i32(center_y), cs * 0.25, raylib.WHITE)
-	raylib.DrawText("S", i32(center_x - cs * 0.1), i32(center_y - cs * 0.15), i32(cs * 0.3), raylib.BLACK)
 }
 
 // Render goal
@@ -280,34 +238,109 @@ render_goal :: proc(x, y, cs: f32) {
 	center_y := y + cs / 2
 	
 	raylib.DrawCircle(i32(center_x), i32(center_y), cs * 0.4, constants.COLOR_GOAL)
-	raylib.DrawCircle(i32(center_x), i32(center_y), cs * 0.25, raylib.WHITE)
-	raylib.DrawText("G", i32(center_x - cs * 0.1), i32(center_y - cs * 0.15), i32(cs * 0.3), raylib.BLACK)
+}
+
+// Simple hash function for pseudo-random numbers based on position
+hash_position :: proc(row, col: i32) -> u32 {
+	// FNV-1a inspired hash
+	h: u32 = 2166136261
+	h = (h ~ u32(row)) * 16777619
+	h = (h ~ u32(col)) * 16777619
+	return h
+}
+
+// Get random float between 0 and 1 from hash
+hash_random :: proc(row, col: i32, offset: i32 = 0) -> f32 {
+	h := hash_position(row + offset, col + offset * 31)
+	return f32(h % 10000) / 10000.0
 }
 
 // Render tree accessory
-render_tree :: proc(x, y, cs: f32) {
-	// Trunk
-	trunk_width := cs * 0.2
-	trunk_height := cs * 0.3
-	trunk_x := x + cs / 2 - trunk_width / 2
-	trunk_y := y + cs * 0.5
-	
-	raylib.DrawRectangle(
-		i32(trunk_x),
-		i32(trunk_y),
-		i32(trunk_width),
-		i32(trunk_height),
-		constants.COLOR_TREE_TRUNK,
-	)
-	
-	// Leaves (three circles)
-	leaf_radius := cs * 0.25
+render_tree :: proc(x, y: f32, cs: f32, biome: constants.Biome, row: i32 = 0, col: i32 = 0) {
 	center_x := x + cs / 2
-	center_y := y + cs * 0.4
+	center_y := y + cs / 2
 	
-	raylib.DrawCircle(i32(center_x), i32(center_y), leaf_radius, constants.COLOR_TREE_LEAVES)
-	raylib.DrawCircle(i32(center_x - leaf_radius * 0.6), i32(center_y + leaf_radius * 0.3), leaf_radius * 0.8, constants.COLOR_TREE_LEAVES)
-	raylib.DrawCircle(i32(center_x + leaf_radius * 0.6), i32(center_y + leaf_radius * 0.3), leaf_radius * 0.8, constants.COLOR_TREE_LEAVES)
+	switch biome {
+	case .PLAIN:
+		// Round tree (plain) - top view: large green circle with slight variation
+		seed := hash_position(row, col)
+		size_var := f32(seed % 20) / 100.0  // 0.0 to 0.19 variation
+		leaf_radius := cs * (0.30 + size_var)
+		
+		// Slight position offset for natural look
+		offset_x := (f32(seed % 10) - 5.0) * cs * 0.02
+		offset_y := (f32((seed / 10) % 10) - 5.0) * cs * 0.02
+		
+		// Leaves (large green circle)
+		raylib.DrawCircle(i32(center_x + offset_x), i32(center_y + offset_y), f32(leaf_radius), constants.COLOR_TREE_LEAVES)
+		
+	case .FOREST:
+		// Pine tree (forest) - hexagonal layers with rotation
+		seed := hash_position(row, col)
+		tree_colors := constants.BIOME_TREE_COLORS[.FOREST]
+		
+		// Base size variation per tree
+		base_size := 0.32 + (f32(seed % 15) / 100.0)  // 0.32 to 0.46
+		
+		// Position jitter - each tree is slightly offset
+		jitter_x := (f32(seed % 7) - 3.0) * cs * 0.015
+		jitter_y := (f32((seed / 7) % 7) - 3.0) * cs * 0.015
+		cx := center_x + jitter_x
+		cy := center_y + jitter_y
+		
+		// Base rotation for this tree (varies by seed)
+		base_rotation := f32(seed % 60)  // 0 to 59 degrees
+		
+		// Draw pine as concentric hexagons (layers of needles)
+		layers := 4 + int(seed % 3)  // 4 to 6 layers
+		
+		// Needle layers - each hexagon slightly smaller, lighter, and rotated
+		for i in 0..<layers {
+			layer_ratio := 1.0 - (f32(i) * 0.18)
+			radius := cs * base_size * layer_ratio
+			
+			// Choose color based on layer from biome colors
+			color := tree_colors.layer_dark if i < layers / 3 else (tree_colors.layer_mid if i < 2 * layers / 3 else tree_colors.layer_light)
+			if i == layers - 1 {
+				color = tree_colors.layer_tip  // Lightest at top
+			}
+			
+			// Each hexagon layer has slightly different rotation
+			layer_rotation := base_rotation + f32(i * 15)  // Offset by 15 degrees per layer
+			
+			// Draw hexagon (6 sides)
+			raylib.DrawPoly(
+				raylib.Vector2{f32(cx), f32(cy)},
+				6,  // hexagon
+				radius,
+				layer_rotation,
+				color,
+			)
+		}
+		
+		// No trunk visible from top view in hexagon pine style
+		
+	case .DESERT:
+		// Palm tree (desert) - top view: oval fronds
+		leaf_radius_x := cs * 0.35
+		leaf_radius_y := cs * 0.25
+		
+		// Palm fronds (ovals)
+		raylib.DrawEllipse(i32(center_x), i32(center_y), f32(leaf_radius_x), f32(leaf_radius_y), raylib.Color{34, 139, 34, 255})
+		raylib.DrawEllipse(i32(center_x), i32(center_y), f32(leaf_radius_x * 0.7), f32(leaf_radius_y * 0.7), raylib.Color{0, 100, 0, 255})
+		
+	case .MOUNTAIN:
+		// Dead bush (mountain) - top view: branches radiating from center
+		branch_length := cs * 0.25
+		
+		// Branches radiating from center
+		for i in 0..<8 {
+			angle := f32(i) * math.PI / 4
+			end_x := center_x + math.cos(angle) * branch_length
+			end_y := center_y + math.sin(angle) * branch_length
+			raylib.DrawLine(i32(center_x), i32(center_y), i32(end_x), i32(end_y), raylib.Color{101, 67, 33, 255})
+		}
+	}
 }
 
 // Render block accessory
@@ -331,14 +364,14 @@ render_block :: proc(x, y, cs: f32) {
 }
 
 // Render obstacles
-render_obstacles :: proc(cs: f32, gs: i32) {
-	m := &game.app.editor.map
+render_obstacles :: proc(app: ^entities.App_State, cs: f32, gs: i32) {
+	m := &app.editor.game_map
 	
 	for row in 0..<gs {
 		for col in 0..<gs {
 			if m.obstacle_grid[row][col] == .OBSTACLE {
-				x := f32(col) * cs + f32(game.app.camera_offset_x)
-				y := f32(row) * cs + f32(game.app.camera_offset_y)
+				x := f32(col) * cs + f32(app.camera_offset_x)
+				y := f32(row) * cs + f32(app.camera_offset_y)
 				
 				// Draw spike/obstacle
 				center_x := x + cs / 2
@@ -365,7 +398,7 @@ render_obstacles :: proc(cs: f32, gs: i32) {
 				if level > 1 {
 					level_text := fmt.tprintf("%d", level)
 					raylib.DrawText(
-						level_text,
+						strings.clone_to_cstring(level_text),
 						i32(x + cs * 0.45),
 						i32(y + cs * 0.4),
 						i32(cs * 0.25),
@@ -378,8 +411,8 @@ render_obstacles :: proc(cs: f32, gs: i32) {
 }
 
 // Render laser beams
-render_laser_beams :: proc(cs: f32) {
-	sim := &game.app.sim
+render_laser_beams :: proc(app: ^entities.App_State, cs: f32) {
+	sim := &app.sim
 	
 	for &beam in sim.laser_beams {
 		alpha := beam.duration / beam.max_duration
@@ -391,8 +424,8 @@ render_laser_beams :: proc(cs: f32) {
 		}
 		
 		raylib.DrawLineEx(
-			raylib.Vector2{beam.start_x + f32(game.app.camera_offset_x), beam.start_y + f32(game.app.camera_offset_y)},
-			raylib.Vector2{beam.end_x + f32(game.app.camera_offset_x), beam.end_y + f32(game.app.camera_offset_y)},
+			raylib.Vector2{beam.start_x + f32(app.camera_offset_x), beam.start_y + f32(app.camera_offset_y)},
+			raylib.Vector2{beam.end_x + f32(app.camera_offset_x), beam.end_y + f32(app.camera_offset_y)},
 			3.0,
 			color,
 		)
@@ -400,49 +433,50 @@ render_laser_beams :: proc(cs: f32) {
 }
 
 // Render gameplay elements (enemies, projectiles, effects)
-render_gameplay :: proc() {
-	if game.app.state != .PLAYING && game.app.state != .PAUSED {
+render_gameplay :: proc(app: ^entities.App_State) {
+	if app.state != .PLAYING && app.state != .PAUSED {
 		return
 	}
 	
-	cs := f32(game.app.settings.cell_size)
+	cs := f32(app.settings.cell_size) * app.zoom
 	
 	// Render enemies
-	render_enemies(cs)
+	render_enemies(app, cs)
+	
+	// Render enemy paths for debugging (if enabled)
+	if app.editor.show_paths {
+		render_enemy_paths(app, cs)
+	}
 	
 	// Render projectiles
-	render_projectiles(cs)
+	render_projectiles(app, cs)
 	
 	// Render explosions
-	render_explosions(cs)
+	render_explosions(app, cs)
 	
 	// Render damage numbers
-	render_damage_numbers(cs)
+	render_damage_numbers(app, cs)
 }
 
 // Render enemies
-render_enemies :: proc(cs: f32) {
-	for &enemy in game.app.sim.enemies {
-		x := enemy.x * cs + f32(game.app.camera_offset_x)
-		y := enemy.y * cs + f32(game.app.camera_offset_y)
+render_enemies :: proc(app: ^entities.App_State, cs: f32) {
+	for &enemy in app.sim.enemies {
+		x := enemy.x * cs + f32(app.camera_offset_x)
+		y := enemy.y * cs + f32(app.camera_offset_y)
 		
+		// Enemy size reduced to 3/4 of original
 		size := entities.enemy_get_size(&enemy) * cs
 		color := entities.enemy_get_color(&enemy)
 		
 		// Draw enemy body
 		raylib.DrawCircle(i32(x + cs / 2), i32(y + cs / 2), size, color)
 		
-		// Draw flying indicator
-		if enemy.is_flying {
-			raylib.DrawCircle(i32(x + cs / 2), i32(y + cs / 2 - size * 0.5), size * 0.3, raylib.WHITE)
-		}
-		
-		// Health bar background
+		// Health bar - positioned higher up and slightly taller
 		hp_percent := enemy.hp / enemy.max_hp
-		hp_bar_width := cs * 0.8
+		hp_bar_width := cs * 0.6
 		hp_bar_height := cs * 0.1
 		hp_bar_x := x + cs / 2 - hp_bar_width / 2
-		hp_bar_y := y + cs * 0.1
+		hp_bar_y := y - cs * 0.05
 		
 		raylib.DrawRectangle(
 			i32(hp_bar_x),
@@ -453,18 +487,24 @@ render_enemies :: proc(cs: f32) {
 		)
 		
 		// Health bar fill
-		if hp_percent > 0 {
+		if hp_percent > 0.01 {
 			hp_color := raylib.GREEN
 			if hp_percent < 0.3 {
-				hp_color = raylib.RED
+				hp_color = raylib.Color{200, 50, 50, 255}  // Softer red
 			} else if hp_percent < 0.6 {
 				hp_color = raylib.YELLOW
+			}
+			
+			// Ensure minimum width of 1 pixel to avoid artifacts
+			fill_width := hp_bar_width * hp_percent
+			if fill_width < 1.0 {
+				fill_width = 1.0
 			}
 			
 			raylib.DrawRectangle(
 				i32(hp_bar_x),
 				i32(hp_bar_y),
-				i32(hp_bar_width * hp_percent),
+				i32(fill_width),
 				i32(hp_bar_height),
 				hp_color,
 			)
@@ -472,11 +512,60 @@ render_enemies :: proc(cs: f32) {
 	}
 }
 
+// Render enemy paths for debugging
+render_enemy_paths :: proc(app: ^entities.App_State, cs: f32) {
+	// Draw paths from spawns
+	for &spawn in app.sim.spawns {
+		if len(spawn.path) < 2 {
+			continue
+		}
+		
+		// Draw lines between path nodes
+		for i in 0..<len(spawn.path) - 1 {
+			x1 := f32(spawn.path[i].x) * cs + f32(app.camera_offset_x) + cs / 2
+			y1 := f32(spawn.path[i].y) * cs + f32(app.camera_offset_y) + cs / 2
+			x2 := f32(spawn.path[i + 1].x) * cs + f32(app.camera_offset_x) + cs / 2
+			y2 := f32(spawn.path[i + 1].y) * cs + f32(app.camera_offset_y) + cs / 2
+			
+			raylib.DrawLine(i32(x1), i32(y1), i32(x2), i32(y2), raylib.YELLOW)
+		}
+		
+		// Draw dots at path nodes
+		for node in spawn.path {
+			x := f32(node.x) * cs + f32(app.camera_offset_x) + cs / 2
+			y := f32(node.y) * cs + f32(app.camera_offset_y) + cs / 2
+			raylib.DrawCircle(i32(x), i32(y), cs * 0.15, raylib.GOLD)
+		}
+	}
+	
+	// Draw paths for active enemies
+	for &enemy in app.sim.enemies {
+		if len(enemy.path) < 2 {
+			continue
+		}
+		
+		// Draw remaining path from current position
+		start_idx := enemy.path_idx
+		if start_idx < 0 {
+			start_idx = 0
+		}
+		
+		for i in start_idx..<i32(len(enemy.path) - 1) {
+			x1 := f32(enemy.path[i].x) * cs + f32(app.camera_offset_x) + cs / 2
+			y1 := f32(enemy.path[i].y) * cs + f32(app.camera_offset_y) + cs / 2
+			x2 := f32(enemy.path[i + 1].x) * cs + f32(app.camera_offset_x) + cs / 2
+			y2 := f32(enemy.path[i + 1].y) * cs + f32(app.camera_offset_y) + cs / 2
+			
+			raylib.DrawLine(i32(x1), i32(y1), i32(x2), i32(y2), raylib.Color{255, 255, 0, 128})
+		}
+	}
+}
+
 // Render projectiles
-render_projectiles :: proc(cs: f32) {
-	for &proj in game.app.sim.projectiles {
-		x := proj.x * cs + f32(game.app.camera_offset_x)
-		y := proj.y * cs + f32(game.app.camera_offset_y)
+render_projectiles :: proc(app: ^entities.App_State, cs: f32) {
+	for &proj in app.sim.projectiles {
+		x := proj.x * cs + f32(app.camera_offset_x)
+		y := proj.y * cs + f32(app.camera_offset_y)
 		
 		switch proj.type {
 		case .ARCHER:
@@ -504,10 +593,10 @@ render_projectiles :: proc(cs: f32) {
 }
 
 // Render explosions
-render_explosions :: proc(cs: f32) {
-	for &explosion in game.app.sim.explosions {
-		x := explosion.x * cs + f32(game.app.camera_offset_x)
-		y := explosion.y * cs + f32(game.app.camera_offset_y)
+render_explosions :: proc(app: ^entities.App_State, cs: f32) {
+	for &explosion in app.sim.explosions {
+		x := explosion.x * cs + f32(app.camera_offset_x)
+		y := explosion.y * cs + f32(app.camera_offset_y)
 		
 		radius := explosion.radius * cs
 		alpha := u8(255 * (explosion.life / explosion.max_life))
@@ -519,10 +608,10 @@ render_explosions :: proc(cs: f32) {
 }
 
 // Render damage numbers
-render_damage_numbers :: proc(cs: f32) {
-	for &dn in game.app.sim.damage_numbers {
-		x := dn.x * cs + f32(game.app.camera_offset_x)
-		y := dn.y * cs + f32(game.app.camera_offset_y)
+render_damage_numbers :: proc(app: ^entities.App_State, cs: f32) {
+	for &dn in app.sim.damage_numbers {
+		x := dn.x * cs + f32(app.camera_offset_x)
+		y := dn.y * cs + f32(app.camera_offset_y)
 		
 		alpha := u8(255 * dn.life)
 		color := dn.color
@@ -534,100 +623,154 @@ render_damage_numbers :: proc(cs: f32) {
 			font_size = i32(cs * 0.5)
 		}
 		
-		raylib.DrawText(damage_text, i32(x), i32(y), font_size, color)
+		raylib.DrawText(strings.clone_to_cstring(damage_text), i32(x), i32(y), font_size, color)
 	}
 }
 
 // Render UI
-render_ui :: proc() {
-	switch game.app.state {
+render_ui :: proc(app: ^entities.App_State) {
+	switch app.state {
 	case .MENU:
-		render_menu_ui()
+		render_menu_ui(app)
 	case .PLAYING, .PAUSED:
-		render_game_ui()
+		render_game_ui(app)
 	case .EDITOR:
-		render_editor_ui()
+		render_editor_ui(app)
 	case .GAME_OVER:
-		render_game_over_ui()
+		render_game_over_ui(app)
 	}
 	
 	// FPS counter
-	if game.app.settings.show_fps {
+	if app.settings.show_fps {
 		fps_text := fmt.tprintf("FPS: %d", raylib.GetFPS())
-		raylib.DrawText(fps_text, 10, 10, 20, raylib.WHITE)
+		raylib.DrawText(strings.clone_to_cstring(fps_text), 10, 10, 20, raylib.WHITE)
 	}
 }
 
 // Render menu UI
-render_menu_ui :: proc() {
+render_menu_ui :: proc(app: ^entities.App_State) {
 	screen_width := raylib.GetScreenWidth()
 	screen_height := raylib.GetScreenHeight()
+	
+	// Black background
+	raylib.DrawRectangle(0, 0, screen_width, screen_height, raylib.BLACK)
 	
 	// Title
 	title := "Tower Defense"
 	title_size := 60
-	title_x := screen_width / 2 - raylib.MeasureText(title, i32(title_size)) / 2
-	raylib.DrawText(title, title_x, screen_height / 4, i32(title_size), raylib.WHITE)
+	title_cstr := strings.clone_to_cstring(title)
+	title_x := screen_width / 2 - raylib.MeasureText(title_cstr, i32(title_size)) / 2
+	raylib.DrawText(title_cstr, title_x, screen_height / 4, i32(title_size), raylib.WHITE)
 	
-	// Buttons
-	button_width := 200
-	button_height := 50
-	button_x := screen_width / 2 - button_width / 2
+	// Buttons (using UI constants)
+	menu_button_width := i32(constants.UI_BUTTON_WIDTH)
+	menu_button_height := i32(constants.UI_BUTTON_HEIGHT)
+	menu_button_x := screen_width / 2 - menu_button_width / 2
 	
-	// Start button
-	start_y := screen_height / 2
-	if render_button("Start Game", button_x, start_y, button_width, button_height) {
-		game.app_set_state(.EDITOR)
+	// Editor button
+	editor_button_y := screen_height / 2
+	if render_button(app, "Editor", menu_button_x, editor_button_y, menu_button_width, menu_button_height) {
+		entities.app_set_state(app, .EDITOR)
 	}
 	
 	// Exit button
-	exit_y := start_y + button_height + 20
-	if render_button("Exit", button_x, exit_y, button_width, button_height) {
+	exit_button_y := editor_button_y + menu_button_height + 10
+	if render_button(app, "Exit", menu_button_x, exit_button_y, menu_button_width, menu_button_height) {
 		// Signal to quit
 	}
 }
 
 // Render game UI (HUD)
-render_game_ui :: proc() {
+render_game_ui :: proc(app: ^entities.App_State) {
+	screen_width := raylib.GetScreenWidth()
+	screen_height := raylib.GetScreenHeight()
+	
 	// Money
-	money_text := fmt.tprintf("Money: $%d", game.app.sim.money)
-	raylib.DrawText(money_text, 10, 40, 20, raylib.GOLD)
+	money_text := fmt.tprintf("Money: $%d", app.sim.money)
+	raylib.DrawText(strings.clone_to_cstring(money_text), 10, 40, 20, raylib.GOLD)
 	
 	// Health
-	health_text := fmt.tprintf("Health: %d", game.app.sim.health)
-	raylib.DrawText(health_text, 10, 70, 20, raylib.RED)
+	health_text := fmt.tprintf("Health: %d", app.sim.health)
+	raylib.DrawText(strings.clone_to_cstring(health_text), 10, 70, 20, raylib.RED)
 	
 	// Wave
-	wave_text := fmt.tprintf("Wave: %d", game.app.sim.wave_number)
-	raylib.DrawText(wave_text, 10, 100, 20, raylib.WHITE)
+	wave_text := fmt.tprintf("Wave: %d", app.sim.wave_number)
+	raylib.DrawText(strings.clone_to_cstring(wave_text), 10, 100, 20, raylib.WHITE)
 	
 	// Enemies remaining
-	enemies_text := fmt.tprintf("Enemies: %d", len(game.app.sim.enemies))
-	raylib.DrawText(enemies_text, 10, 130, 20, raylib.WHITE)
+	enemies_text := fmt.tprintf("Enemies: %d", len(app.sim.enemies))
+	raylib.DrawText(strings.clone_to_cstring(enemies_text), 10, 130, 20, raylib.WHITE)
 	
 	// Pause button
 	pause_text := "PAUSE"
-	if game.app.sim.paused {
+	if app.sim.paused {
 		pause_text = "RESUME"
 	}
-	if render_button(pause_text, raylib.GetScreenWidth() - 110, 10, 100, 40) {
-		simulation_toggle_pause()
+	if render_button(app, pause_text, screen_width - constants.UI_BUTTON_WIDTH - 10, 10, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
+		simulation_toggle_pause(app)
 	}
 	
 	// Speed buttons
-	if render_button("1x", raylib.GetScreenWidth() - 220, 10, 50, 40) {
-		simulation_set_speed(1.0)
+	if render_button(app, "1x", screen_width - constants.UI_BUTTON_WIDTH * 2 - 20, 10, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
+		simulation_set_speed(app, 1.0)
 	}
-	if render_button("2x", raylib.GetScreenWidth() - 165, 10, 50, 40) {
-		simulation_set_speed(2.0)
+	if render_button(app, "2x", screen_width - constants.UI_BUTTON_WIDTH - 10, 10, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
+		simulation_set_speed(app, 2.0)
+	}
+	
+	// Tower build buttons
+	tower_types := []constants.Tile{.TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER}
+	tower_names := []string{"Archer", "Cannon", "Sniper", "Missile", "Laser"}
+	tower_costs := []i32{20, 40, 60, 50, 80}
+	
+	for i := 0; i < len(tower_types); i += 1 {
+		x := i32(10 + i * (constants.UI_BUTTON_WIDTH + 5))
+		y := i32(screen_height - constants.UI_BUTTON_HEIGHT - 10)
+		
+		// Highlight selected tower
+		is_selected := app.sim.selected_build_tower == tower_types[i]
+		button_color := raylib.LIGHTGRAY
+		if is_selected {
+			button_color = raylib.GREEN
+		}
+		
+		// Check if can afford
+		can_afford := app.sim.money >= tower_costs[i]
+		if !can_afford {
+			button_color = raylib.DARKGRAY
+		}
+		
+		// Draw button manually for color control
+		raylib.DrawRectangle(x, y, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT, button_color)
+		raylib.DrawRectangleLines(x, y, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT, raylib.WHITE)
+		
+		// Text
+		name_cstr := strings.clone_to_cstring(tower_names[i])
+		text_width := raylib.MeasureText(name_cstr, constants.UI_BUTTON_FONT_SIZE)
+		text_x := x + constants.UI_BUTTON_WIDTH / 2 - text_width / 2
+		text_y := y + constants.UI_BUTTON_HEIGHT / 2 - constants.UI_BUTTON_FONT_SIZE / 2
+		raylib.DrawText(name_cstr, text_x, text_y, constants.UI_BUTTON_FONT_SIZE, raylib.WHITE)
+		
+		// Click check
+		mouse_x := raylib.GetMouseX()
+		mouse_y := raylib.GetMouseY()
+		hovered := mouse_x >= x && mouse_x <= x + constants.UI_BUTTON_WIDTH &&
+		           mouse_y >= y && mouse_y <= y + constants.UI_BUTTON_HEIGHT
+		
+		if hovered && raylib.IsMouseButtonPressed(.LEFT) && can_afford {
+			if is_selected {
+				app.sim.selected_build_tower = .EMPTY  // Deselect
+			} else {
+				app.sim.selected_build_tower = tower_types[i]  // Select
+			}
+		}
 	}
 }
 
 // Render editor UI
-render_editor_ui :: proc() {
-	// Toolbar background
+render_editor_ui :: proc(app: ^entities.App_State) {
 	screen_width := raylib.GetScreenWidth()
-	raylib.DrawRectangle(0, 0, screen_width, 60, raylib.Color{50, 50, 50, 200})
+	screen_height := raylib.GetScreenHeight()
 	
 	// Tool buttons
 	tools := []struct {
@@ -648,45 +791,105 @@ render_editor_ui :: proc() {
 		{"Block", .ACCESSORY_BLOCK},
 	}
 	
-	button_width := 80
-	button_height := 40
-	margin := 10
+	button_width := i32(80)
+	button_height := i32(30)
+	margin := i32(5)
 	
+	// Calculate toolbar dimensions
+	toolbar_width := button_width + margin * 2
+	toolbar_height := i32(len(tools)) * (button_height + margin) + margin * 2
+	
+	// Position toolbar on left center
+	toolbar_x := i32(20)
+	toolbar_y := (screen_height - toolbar_height) / 2
+	
+	// Draw floating toolbar with rounded corners
+	raylib.DrawRectangleRounded(
+		raylib.Rectangle{f32(toolbar_x), f32(toolbar_y), f32(toolbar_width), f32(toolbar_height)},
+		0.2, 8, raylib.Color{50, 50, 50, 230}
+	)
+	raylib.DrawRectangleRoundedLines(
+		raylib.Rectangle{f32(toolbar_x), f32(toolbar_y), f32(toolbar_width), f32(toolbar_height)},
+		0.2, 8, 2, raylib.WHITE
+	)
+	
+	// Draw tool buttons in a column
 	for tool, i in tools {
-		x := margin + i * (button_width + margin)
-		y := 10
+		x := toolbar_x + margin
+		y := toolbar_y + margin + i32(i) * (button_height + margin)
 		
-		is_selected := game.app.editor.current_tool == tool.tile
+		is_selected := app.editor.current_tool == tool.tile
 		color := raylib.DARKGRAY
 		if is_selected {
 			color = raylib.BLUE
 		}
 		
-		raylib.DrawRectangle(i32(x), i32(y), button_width, button_height, color)
-		raylib.DrawText(tool.name, i32(x + 5), i32(y + 10), 15, raylib.WHITE)
+		raylib.DrawRectangleRounded(
+			raylib.Rectangle{f32(x), f32(y), f32(button_width), f32(button_height)},
+			0.1, 4, color
+		)
+		raylib.DrawText(strings.clone_to_cstring(tool.name), x + 5, y + 10, 15, raylib.WHITE)
 	}
 	
 	// Bottom toolbar
-	raylib.DrawRectangle(0, raylib.GetScreenHeight() - 60, screen_width, 60, raylib.Color{50, 50, 50, 200})
+	raylib.DrawRectangle(0, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT, screen_width, constants.UI_TOOLBAR_HEIGHT, raylib.Color{50, 50, 50, 200})
 	
-	// Biome selector
-	raylib.DrawText("Biome:", 10, raylib.GetScreenHeight() - 50, 20, raylib.WHITE)
+	// Biome selector using raygui
+	biome_text := "Plain;Forest;Desert;Mountain"
+	biome_dropdown_bounds := raylib.Rectangle{f32(10), f32(raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4), constants.UI_DROPDOWN_WIDTH, constants.UI_DROPDOWN_HEIGHT}
+	
+	// Convert biome enum to i32 index for dropdown
+	biome_index := i32(app.editor.current_biome)
+	
+	if raylib.GuiComboBox(biome_dropdown_bounds, strings.clone_to_cstring(biome_text), &biome_index) != -1 {
+		app.editor.current_biome = constants.Biome(biome_index)
+		app.editor.game_map.biome = constants.Biome(biome_index)
+	}
+	
+	// Show Paths toggle button
+	paths_button_text := app.editor.show_paths ? "Hide Paths" : "Show Paths"
+	if render_button(app, paths_button_text, screen_width - 510, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
+		app.editor.show_paths = !app.editor.show_paths
+	}
+	
+	// Save button
+	if render_button(app, "Save Map", screen_width - 420, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
+		// Save with timestamp AND as last_saved.map for quick loading
+		filename := fmt.tprintf("map_%d.map", i32(raylib.GetTime()))
+		_ = entities.map_save(&app.editor.game_map, filename)
+		_ = entities.map_save(&app.editor.game_map, "last_saved.map")
+	}
+	
+	// Load button - loads last_saved.map
+	load_bounds := raylib.Rectangle{f32(screen_width - 330), f32(raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4), constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT}
+	if raylib.GuiButton(load_bounds, "Load Map") {
+		if entities.map_load(&app.editor.game_map, "last_saved.map") {
+			app.editor.current_biome = app.editor.game_map.biome
+		}
+	}
+	
+	// Quick load last map button
+	quick_load_bounds := raylib.Rectangle{f32(screen_width - 240), f32(raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4), constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT}
+	if raylib.GuiButton(quick_load_bounds, "Quick Load") {
+		// Try to load the most recently saved map
+		_ = entities.map_load(&app.editor.game_map, "last_saved.map")
+	}
 	
 	// Test button
-	if render_button("Test Map", screen_width - 120, raylib.GetScreenHeight() - 50, 100, 40) {
-		if game.simulation_init_from_editor() {
-			game.app_set_state(.PLAYING)
+	if render_button(app, "Test Map", screen_width - 150, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
+		if simulation_init_from_editor(app) {
+			entities.app_set_state(app, .PLAYING)
 		}
 	}
 	
 	// Menu button
-	if render_button("Menu", screen_width - 230, raylib.GetScreenHeight() - 50, 100, 40) {
-		game.app_set_state(.MENU)
+	if render_button(app, "Menu", screen_width - 60, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
+		entities.app_set_state(app, .MENU)
 	}
 }
 
 // Render game over UI
-render_game_over_ui :: proc() {
+render_game_over_ui :: proc(app: ^entities.App_State) {
 	screen_width := raylib.GetScreenWidth()
 	screen_height := raylib.GetScreenHeight()
 	
@@ -696,49 +899,52 @@ render_game_over_ui :: proc() {
 	// Game Over text
 	title := "GAME OVER"
 	title_size := 60
-	title_x := screen_width / 2 - raylib.MeasureText(title, i32(title_size)) / 2
-	raylib.DrawText(title, title_x, screen_height / 3, i32(title_size), raylib.RED)
+	title_cstr := strings.clone_to_cstring(title)
+	title_x := screen_width / 2 - raylib.MeasureText(title_cstr, i32(title_size)) / 2
+	raylib.DrawText(title_cstr, title_x, screen_height / 3, i32(title_size), raylib.RED)
 	
 	// Wave survived
-	wave_text := fmt.tprintf("You survived %d waves", game.app.sim.wave_number)
+	wave_text := fmt.tprintf("You survived %d waves", app.sim.wave_number)
 	wave_size := 30
-	wave_x := screen_width / 2 - raylib.MeasureText(wave_text, i32(wave_size)) / 2
-	raylib.DrawText(wave_text, wave_x, screen_height / 2, i32(wave_size), raylib.WHITE)
+	wave_cstr := strings.clone_to_cstring(wave_text)
+	wave_x := screen_width / 2 - raylib.MeasureText(wave_cstr, i32(wave_size)) / 2
+	raylib.DrawText(strings.clone_to_cstring(wave_text), wave_x, screen_height / 2, i32(wave_size), raylib.WHITE)
 	
 	// Menu button
-	button_width := 200
-	button_height := 50
+	button_width :i32= constants.UI_BUTTON_WIDTH
+	button_height :i32= constants.UI_BUTTON_HEIGHT
 	button_x := screen_width / 2 - button_width / 2
 	button_y := screen_height * 2 / 3
 	
-	if render_button("Main Menu", button_x, button_y, button_width, button_height) {
-		game.app_set_state(.MENU)
+	if render_button(app, "Main Menu", button_x, button_y, button_width, button_height) {
+		entities.app_set_state(app, .MENU)
 	}
 }
 
 // Helper to render a button
-render_button :: proc(text: string, x, y, width, height: i32) -> bool {
+render_button :: proc(app: ^entities.App_State, text: string, x, y, width, height: i32) -> bool {
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
 	
 	hovered := mouse_x >= x && mouse_x <= x + width &&
 	           mouse_y >= y && mouse_y <= y + height
 	
-	// Button background
-	color := raylib.DARKGRAY
+	color := raylib.LIGHTGRAY
 	if hovered {
 		color = raylib.GRAY
+		if raylib.IsMouseButtonDown(.LEFT) {
+			color = raylib.DARKGRAY
+		}
 	}
-	raylib.DrawRectangle(x, y, width, height, color)
 	
-	// Button border
+	raylib.DrawRectangle(x, y, width, height, color)
 	raylib.DrawRectangleLines(x, y, width, height, raylib.WHITE)
 	
-	// Text
-	text_width := raylib.MeasureText(text, 20)
+	// Text (centered) - using UI font size
+	text_width := raylib.MeasureText(strings.clone_to_cstring(text), constants.UI_BUTTON_FONT_SIZE)
 	text_x := x + width / 2 - text_width / 2
-	text_y := y + height / 2 - 10
-	raylib.DrawText(text, text_x, text_y, 20, raylib.WHITE)
+	text_y := y + height / 2 - constants.UI_BUTTON_FONT_SIZE / 2
+	raylib.DrawText(strings.clone_to_cstring(text), text_x, text_y, constants.UI_BUTTON_FONT_SIZE, raylib.WHITE)
 	
 	// Click check
 	if hovered && raylib.IsMouseButtonPressed(.LEFT) {
@@ -751,4 +957,294 @@ render_button :: proc(text: string, x, y, width, height: i32) -> bool {
 // Helper for gray color
 gray :: proc(value: u8) -> raylib.Color {
 	return raylib.Color{value, value, value, 255}
+}
+
+// Unified tower drawing function (JS style) - works for both editor and simulation
+// This is the main function that should be used everywhere
+draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, angle: f32 = 0, is_ghost: bool = false) {
+	cx := x + cs / 2
+	cy := y + cs / 2
+	base_w := cs * 0.8
+	base_h := cs * 0.8
+	bx := cx - base_w / 2
+	by := cy - base_h / 2
+	rad := max(2, cs * 0.15)
+	shadow_offset := max(2, cs * 0.08)
+	
+	// Get colors based on tower type
+	fill, stroke: raylib.Color
+	switch tower_type {
+	case .LASER:
+		fill = constants.TOWER_LASER_BASE
+		stroke = raylib.Color{80, 90, 100, 255}
+	case .CANNON:
+		fill = constants.TOWER_CANNON_BASE
+		stroke = raylib.Color{90, 100, 110, 255}
+	case .MISSILE:
+		fill = constants.TOWER_MISSILE_BASE
+		stroke = raylib.Color{100, 90, 80, 255}
+	case .SNIPER:
+		fill = raylib.Color{100, 110, 120, 255}
+		stroke = raylib.Color{70, 80, 90, 255}
+	case .ARCHER:
+		fill = raylib.Color{120, 100, 80, 255}
+		stroke = raylib.Color{90, 70, 50, 255}
+	}
+	
+	// Draw shadow (hard shadow offset to bottom-right like JS)
+	if !is_ghost {
+		raylib.DrawRectangleRounded(
+			raylib.Rectangle{f32(bx + shadow_offset), f32(by + shadow_offset), f32(base_w), f32(base_h)},
+			0.15, 6, constants.TOWER_SHADOW,
+		)
+	}
+	
+	// Draw base
+	raylib.DrawRectangleRounded(
+		raylib.Rectangle{f32(bx), f32(by), f32(base_w), f32(base_h)},
+		0.15, 6, fill,
+	)
+	
+	// Draw stroke
+	raylib.DrawRectangleRoundedLines(
+		raylib.Rectangle{f32(bx), f32(by), f32(base_w), f32(base_h)},
+		0.15, 6, 2, stroke,
+	)
+	
+	// Draw tower-specific components
+	r := cs * 0.25
+	so := cs * 0.03  // Shadow offset for components
+	
+	// Rotate for barrel orientation (pointing up by default like JS: angle + PI/2)
+	rotation := angle + math.PI / 2
+	
+	// Draw shadow pass for components (offset like JS)
+	switch tower_type {
+	case .LASER:
+		// Barrel shadow
+		raylib.DrawRectangleRounded(
+			raylib.Rectangle{
+				f32(cx + so - cs*0.1*math.cos(rotation) - cs*0.35*math.sin(rotation)),
+				f32(cy + so - cs*0.1*math.sin(rotation) + cs*0.35*math.cos(rotation)),
+				cs * 0.2, cs * 0.3,
+			},
+			0.05, 4, constants.TOWER_SHADOW,
+		)
+		// Circle shadow
+		raylib.DrawCircle(i32(cx + so), i32(cy + so), r, constants.TOWER_SHADOW)
+		
+	case .CANNON, .SNIPER:
+		// Barrel shadow
+		barrel_w := cs * 0.08 if tower_type == .SNIPER else cs * 0.1
+		barrel_h := cs * 0.45 if tower_type == .SNIPER else cs * 0.4
+		raylib.DrawRectangleRounded(
+			raylib.Rectangle{
+				f32(cx + so - barrel_w/2),
+				f32(cy + so - barrel_h),
+				barrel_w, barrel_h,
+			},
+			0.04, 4, constants.TOWER_SHADOW,
+		)
+		// Circle shadow
+		raylib.DrawCircle(i32(cx + so), i32(cy + so), r * 0.8, constants.TOWER_SHADOW)
+		
+	case .MISSILE:
+		pod_w := r * 0.8
+		pod_h := r * 1.6
+		pod_rad := pod_w * 0.3
+		// Left pod shadow
+		raylib.DrawRectangleRounded(
+			raylib.Rectangle{f32(cx + so - r*1.4), f32(cy + so - r*0.8), pod_w, pod_h},
+			pod_rad, 4, constants.TOWER_SHADOW,
+		)
+		// Right pod shadow
+		raylib.DrawRectangleRounded(
+			raylib.Rectangle{f32(cx + so + r*0.6), f32(cy + so - r*0.8), pod_w, pod_h},
+			pod_rad, 4, constants.TOWER_SHADOW,
+		)
+		
+	case .ARCHER:
+		// Bow shadow
+		bow_r := r * 1.2
+		raylib.DrawCircle(i32(cx + so - bow_r), i32(cy + so), r * 0.15, constants.TOWER_SHADOW)
+		raylib.DrawCircle(i32(cx + so), i32(cy + so - bow_r*0.3), r * 0.15, constants.TOWER_SHADOW)
+		raylib.DrawCircle(i32(cx + so + bow_r), i32(cy + so), r * 0.15, constants.TOWER_SHADOW)
+	}
+	
+	// Draw normal pass (rotated components)
+	switch tower_type {
+	case .LASER:
+		// Barrel (rounded rectangle pointing up)
+		barrel_x := cx - cs*0.1*math.cos(rotation) - cs*0.35*math.sin(rotation)
+		barrel_y := cy - cs*0.1*math.sin(rotation) + cs*0.35*math.cos(rotation)
+		raylib.DrawRectangleRounded(
+			raylib.Rectangle{f32(barrel_x), f32(barrel_y), cs * 0.2, cs * 0.3},
+			0.05, 4, constants.TOWER_BARREL,
+		)
+		// Circle body
+		raylib.DrawCircle(i32(cx), i32(cy), r, constants.TOWER_LASER_CORE)
+		// Inner white glow
+		raylib.DrawCircle(i32(cx), i32(cy), r * 0.4, raylib.Color{255, 255, 255, 180})
+		
+	case .CANNON:
+		// Barrel - rotated using DrawRectanglePro with pivot at bottom (connection to tower center)
+		barrel_w := cs * 0.16
+		barrel_h := cs * 0.4
+		// Position barrel so bottom is at tower center
+		barrel_rect := raylib.Rectangle{
+			x = f32(cx - barrel_w/2),
+			y = f32(cy - barrel_h),
+			width = f32(barrel_w),
+			height = f32(barrel_h),
+		}
+		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}  // Pivot at bottom of barrel (tower center)
+		raylib.DrawRectanglePro(barrel_rect, origin, rotation * 180.0 / math.PI, constants.TOWER_BARREL)
+		// Circle body at center
+		raylib.DrawCircle(i32(cx), i32(cy), r * 0.8, stroke)
+
+	case .SNIPER:
+		// Thin barrel - rotated using DrawRectanglePro with pivot at bottom (connection to tower center)
+		barrel_w := cs * 0.16
+		barrel_h := cs * 0.45
+		// Position barrel so bottom is at tower center
+		barrel_rect := raylib.Rectangle{
+			x = f32(cx - barrel_w/2),
+			y = f32(cy - barrel_h/4),
+			width = f32(barrel_w),
+			height = f32(barrel_h),
+		}
+		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}  // Pivot at bottom of barrel (tower center)
+		raylib.DrawRectanglePro(barrel_rect, origin, rotation * 180.0 / math.PI, constants.TOWER_BARREL)
+		// Circle body
+		raylib.DrawCircle(i32(cx), i32(cy), r * 0.8, stroke)
+		
+	case .MISSILE:
+		pod_w := r * 0.8
+		pod_h := r * 1.6
+		pod_rad := pod_w * 0.3
+		pod_color := constants.TOWER_MISSILE_POD
+		
+		// Left pod - position relative to center, then rotate around tower center
+		left_pod_offset_x := -r*1.4
+		left_pod_offset_y := -r*0.8
+		// Rotate offset around center
+		rot_left_offset_x := left_pod_offset_x*math.cos(rotation) - left_pod_offset_y*math.sin(rotation)
+		rot_left_offset_y := left_pod_offset_x*math.sin(rotation) + left_pod_offset_y*math.cos(rotation)
+		left_pod_x := cx + rot_left_offset_x
+		left_pod_y := cy + rot_left_offset_y
+		
+		left_pod_rect := raylib.Rectangle{
+			x = f32(left_pod_x - pod_w/2),
+			y = f32(left_pod_y - pod_h/2),
+			width = f32(pod_w),
+			height = f32(pod_h),
+		}
+		left_origin := raylib.Vector2{f32(pod_w/2), f32(pod_h/2)}  // Pivot at center of pod
+		raylib.DrawRectanglePro(left_pod_rect, left_origin, rotation * 180.0 / math.PI, pod_color)
+		
+		// Right pod - position relative to center, then rotate around tower center
+		right_pod_offset_x := r*0.6
+		right_pod_offset_y := -r*0.8
+		// Rotate offset around center
+		rot_right_offset_x := right_pod_offset_x*math.cos(rotation) - right_pod_offset_y*math.sin(rotation)
+		rot_right_offset_y := right_pod_offset_x*math.sin(rotation) + right_pod_offset_y*math.cos(rotation)
+		right_pod_x := cx + rot_right_offset_x
+		right_pod_y := cy + rot_right_offset_y
+		
+		right_pod_rect := raylib.Rectangle{
+			x = f32(right_pod_x - pod_w/2),
+			y = f32(right_pod_y - pod_h/2),
+			width = f32(pod_w),
+			height = f32(pod_h),
+		}
+		right_origin := raylib.Vector2{f32(pod_w/2), f32(pod_h/2)}  // Pivot at center of pod
+		raylib.DrawRectanglePro(right_pod_rect, right_origin, rotation * 180.0 / math.PI, pod_color)
+		
+		// Draw missiles inside pods (rotated positions)
+		missile_r := pod_w * 0.35
+		missile_left_x := cx - r*math.cos(rotation) - r*0.3*math.sin(rotation)
+		missile_left_y := cy - r*math.sin(rotation) + r*0.3*math.cos(rotation)
+		missile_right_x := cx + r*math.cos(rotation) - r*0.3*math.sin(rotation)
+		missile_right_y := cy + r*math.sin(rotation) + r*0.3*math.cos(rotation)
+		
+		raylib.DrawCircle(i32(missile_left_x), i32(missile_left_y), missile_r, constants.TOWER_MISSILE_WARHEAD)
+		raylib.DrawCircle(i32(missile_right_x), i32(missile_right_y), missile_r, constants.TOWER_MISSILE_WARHEAD)
+		
+	case .ARCHER:
+		// Draw bow (wood arc) - rotated to face target
+		bow_r := r * 1.2
+		for i := -2; i <= 2; i += 1 {
+			a := f32(i) * 0.3
+			// Original position relative to center
+			orig_x := bow_r * a
+			orig_y := -r * 0.3 + bow_r * (a * a) * 0.5
+			// Rotate position
+			bx_ := cx + orig_x*math.cos(rotation) - orig_y*math.sin(rotation)
+			by_ := cy + orig_x*math.sin(rotation) + orig_y*math.cos(rotation)
+			raylib.DrawCircle(i32(bx_), i32(by_), cs * 0.04, constants.TOWER_ARCHER_WOOD)
+		}
+		// Bow string (rotated)
+		string_left_x := cx - bow_r*math.cos(rotation) - (r*0.2)*math.sin(rotation)
+		string_left_y := cy - bow_r*math.sin(rotation) + (r*0.2)*math.cos(rotation)
+		string_right_x := cx + bow_r*math.cos(rotation) - (r*0.2)*math.sin(rotation)
+		string_right_y := cy + bow_r*math.sin(rotation) + (r*0.2)*math.cos(rotation)
+		raylib.DrawLine(
+			i32(string_left_x), i32(string_left_y),
+			i32(string_right_x), i32(string_right_y),
+			constants.TOWER_ARCHER_STRING,
+		)
+	}
+}
+
+// Render tower preview for editor (calls unified function)
+render_tower_preview :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type) {
+	draw_tower_tile(x, y, cs, tower_type, 0, false)
+}
+
+// Render tower for simulation (calls unified function with rotation)
+render_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, x, y, cs: f32) {
+	// Draw range outline first (so it appears behind the tower)
+	spec := constants.TOWER_SPECS[tower.type]
+	center_x := x + cs / 2
+	center_y := y + cs / 2
+	range_px := spec.range * cs
+	
+	// Draw range circle outline
+	raylib.DrawCircleLines(i32(center_x), i32(center_y), range_px, constants.TOWER_RANGE_OUTLINE)
+	
+	// Draw tower
+	draw_tower_tile(x, y, cs, tower.type, tower.angle, false)
+	// Draw upgrade indicators on top
+	render_tower_upgrades(tower, x, y, cs)
+}
+
+// Render reticle for selected cell (corner brackets style like JS)
+render_reticle :: proc(x, y, cs: f32, color: raylib.Color) {
+	reticle_size := cs * 0.7
+	reticle_len := cs * 0.15
+	corner_thickness := max(2, cs * 0.04)
+	
+	// Center position
+	cx := x + cs / 2
+	cy := y + cs / 2
+	
+	// Left side
+	rx := cx - reticle_size / 2
+	ry := cy - reticle_size / 2
+	
+	// Top-left corner (horizontal + vertical)
+	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry)}, raylib.Vector2{f32(rx + reticle_len), f32(ry)}, f32(corner_thickness), color)
+	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry)}, raylib.Vector2{f32(rx), f32(ry + reticle_len)}, f32(corner_thickness), color)
+	
+	// Top-right corner
+	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size - reticle_len), f32(ry)}, raylib.Vector2{f32(rx + reticle_size), f32(ry)}, f32(corner_thickness), color)
+	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size), f32(ry)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_len)}, f32(corner_thickness), color)
+	
+	// Bottom-left corner
+	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry + reticle_size - reticle_len)}, raylib.Vector2{f32(rx), f32(ry + reticle_size)}, f32(corner_thickness), color)
+	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry + reticle_size)}, raylib.Vector2{f32(rx + reticle_len), f32(ry + reticle_size)}, f32(corner_thickness), color)
+	
+	// Bottom-right corner
+	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size - reticle_len)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)}, f32(corner_thickness), color)
+	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size - reticle_len), f32(ry + reticle_size)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)}, f32(corner_thickness), color)
 }

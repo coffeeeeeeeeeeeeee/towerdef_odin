@@ -1,116 +1,160 @@
 package systems
 
 import "vendor:raylib"
-import "../constants"
-import "../game"
 import "../entities"
+import "../constants"
+import "core:fmt"
 
 // Handle all input
-input_handle :: proc() {
-	switch game.app.state {
+input_handle :: proc(app: ^entities.App_State) {
+	// Handle camera controls (global)
+	input_handle_camera(app)
+	
+	switch app.state {
 	case .MENU:
-		input_handle_menu()
+		input_handle_menu(app)
 	case .PLAYING:
-		input_handle_playing()
+		input_handle_playing(app)
 	case .PAUSED:
-		input_handle_paused()
+		input_handle_paused(app)
 	case .EDITOR:
-		input_handle_editor()
+		input_handle_editor(app)
 	case .GAME_OVER:
-		input_handle_game_over()
+		input_handle_game_over(app)
 	}
 }
 
 // Menu input
-input_handle_menu :: proc() {
+input_handle_menu :: proc(app: ^entities.App_State) {
 	// Handled by render_button in rendering.odin
 }
 
 // Playing input
-input_handle_playing :: proc() {
+input_handle_playing :: proc(app: ^entities.App_State) {
 	// Mouse position for grid selection
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
 	
-	cs := f32(game.app.settings.cell_size)
+	// Convert to grid coordinates using helper function
+	grid_x, grid_y := screen_to_grid(app, mouse_x, mouse_y)
 	
-	// Convert to grid coordinates
-	grid_x := i32((f32(mouse_x) - f32(game.app.camera_offset_x)) / cs)
-	grid_y := i32((f32(mouse_y) - f32(game.app.camera_offset_y)) / cs)
+	app.mouse_x = grid_x
+	app.mouse_y = grid_y
 	
-	game.app.mouse_x = grid_x
-	game.app.mouse_y = grid_y
+	// Update selected cell for reticle display
+	if is_valid_grid_pos(grid_x, grid_y) {
+		app.selected_cell.row = grid_y
+		app.selected_cell.col = grid_x
+		app.selected_cell.valid = true
+	} else {
+		app.selected_cell.valid = false
+	}
 	
 	// Left click to place tower
 	if raylib.IsMouseButtonPressed(.LEFT) {
 		if is_valid_grid_pos(grid_x, grid_y) {
 			// Check if clicking on a tower
-			tile := game.app.editor.map.grid[grid_y][grid_x]
+			tile := app.editor.game_map.grid[grid_y][grid_x]
+			_ = tile  // Use tile to avoid unused variable warning
 			
-			switch tile {
+			#partial switch tile {
 			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER:
 				// Select tower for upgrade
-				select_tower_at(grid_y, grid_x)
+				select_tower_at(app, grid_y, grid_x)
 			case .EMPTY:
-				// Open build menu or use default tower
-				// For now, do nothing (would open a build menu)
+				// Place selected tower if one is selected
+				if app.sim.selected_build_tower != .EMPTY {
+					// Get tower spec for cost
+					tower_type := tile_to_tower_type(app.sim.selected_build_tower)
+					spec := constants.TOWER_SPECS[tower_type]
+					
+					if app.sim.money >= spec.cost {
+						// Place the tower
+						app.editor.game_map.grid[grid_y][grid_x] = app.sim.selected_build_tower
+						app.sim.money -= spec.cost
+						
+						// Create tower entity
+						tower := entities.tower_init(tower_type, grid_y, grid_x)
+						append(&app.sim.towers, tower)
+						
+						// Deselect after placing
+						app.sim.selected_build_tower = .EMPTY
+					}
+				}
 			}
 		}
 	}
 	
 	// Right click to deselect or cancel
 	if raylib.IsMouseButtonPressed(.RIGHT) {
-		game.app.selected_tower = nil
+		app.selected_tower = nil
 	}
 	
 	// Keyboard shortcuts
 	if raylib.IsKeyPressed(.ESCAPE) {
-		game.app_set_state(.PAUSED)
+		entities.app_set_state(app, .PAUSED)
 	}
 	
 	if raylib.IsKeyPressed(.SPACE) {
-		simulation_toggle_pause()
+		simulation_toggle_pause(app)
 	}
 	
 	// Number keys for speed
 	if raylib.IsKeyPressed(.ONE) {
-		simulation_set_speed(1.0)
+		simulation_set_speed(app, 1.0)
 	}
 	if raylib.IsKeyPressed(.TWO) {
-		simulation_set_speed(2.0)
+		simulation_set_speed(app, 2.0)
 	}
 }
 
 // Paused input
-input_handle_paused :: proc() {
+input_handle_paused :: proc(app: ^entities.App_State) {
 	if raylib.IsKeyPressed(.ESCAPE) || raylib.IsKeyPressed(.SPACE) {
-		game.app_set_state(.PLAYING)
+		// State change handled by caller
 	}
 }
 
 // Editor input
-input_handle_editor :: proc() {
+input_handle_editor :: proc(app: ^entities.App_State) {
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
 	
-	cs := f32(game.app.settings.cell_size)
+	// Convert to grid coordinates using helper function
+	grid_x, grid_y := screen_to_grid(app, mouse_x, mouse_y)
 	
-	// Convert to grid coordinates
-	grid_x := i32((f32(mouse_x) - f32(game.app.camera_offset_x)) / cs)
-	grid_y := i32((f32(mouse_y) - f32(game.app.camera_offset_y)) / cs)
+	app.mouse_x = grid_x
+	app.mouse_y = grid_y
 	
-	game.app.mouse_x = grid_x
-	game.app.mouse_y = grid_y
+	// Update selected cell for reticle display
+	if is_valid_grid_pos(grid_x, grid_y) {
+		app.selected_cell.row = grid_y
+		app.selected_cell.col = grid_x
+		app.selected_cell.valid = true
+	} else {
+		app.selected_cell.valid = false
+	}
 	
-	// Toolbar click detection
-	if mouse_y < 60 {
-		// Clicked on top toolbar
-		input_handle_toolbar_click(mouse_x)
+	// Sidebar toolbar click detection
+	button_width := i32(80)
+	button_height := i32(30)
+	margin := i32(5)
+	toolbar_width := button_width + margin * 2
+	toolbar_height := i32(12) * (button_height + margin) + margin * 2
+	toolbar_x := i32(20)
+	toolbar_y := (raylib.GetScreenHeight() - toolbar_height) / 2
+	
+	// Check if clicked on sidebar toolbar
+	if mouse_x >= toolbar_x && mouse_x <= toolbar_x + toolbar_width &&
+	   mouse_y >= toolbar_y && mouse_y <= toolbar_y + toolbar_height {
+		if raylib.IsMouseButtonPressed(.LEFT) {
+			input_handle_toolbar_click(app, mouse_x, mouse_y, toolbar_x, toolbar_y, button_width, button_height, margin)
+		}
 		return
 	}
 	
 	// Bottom toolbar
-	if mouse_y > raylib.GetScreenHeight() - 60 {
+	if mouse_y > raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT {
 		// Clicked on bottom toolbar
 		return
 	}
@@ -120,84 +164,84 @@ input_handle_editor :: proc() {
 		return
 	}
 	
-	// Left click to place or erase
+	// Left click to place or erase (continuous with IsMouseButtonDown)
 	if raylib.IsMouseButtonDown(.LEFT) {
-		tool := game.app.editor.current_tool
+		tool := app.editor.current_tool
 		
 		switch tool {
 		case .EMPTY:
 			// Erase
-			editor_erase_cell(grid_y, grid_x)
+			editor_erase_cell(app, grid_y, grid_x)
 		case .PATH, .SPAWN, .GOAL:
 			// Place path elements
-			game.app.editor.map.grid[grid_y][grid_x] = tool
+			app.editor.game_map.grid[grid_y][grid_x] = tool
 		case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER:
 			// Place tower (only on empty cells)
-			if game.app.editor.map.grid[grid_y][grid_x] == .EMPTY {
-				game.app.editor.map.grid[grid_y][grid_x] = tool
+			if app.editor.game_map.grid[grid_y][grid_x] == .EMPTY {
+				app.editor.game_map.grid[grid_y][grid_x] = tool
 			}
 		case .OBSTACLE:
 			// Place obstacle (in obstacle layer)
-			game.app.editor.map.obstacle_grid[grid_y][grid_x] = .OBSTACLE
+			app.editor.game_map.obstacle_grid[grid_y][grid_x] = .OBSTACLE
 		case .ACCESSORY_TREE, .ACCESSORY_BLOCK:
 			// Place accessories
-			if game.app.editor.map.grid[grid_y][grid_x] == .EMPTY {
-				game.app.editor.map.grid[grid_y][grid_x] = tool
+			if app.editor.game_map.grid[grid_y][grid_x] == .EMPTY {
+				app.editor.game_map.grid[grid_y][grid_x] = tool
 			}
 		}
 	}
 	
 	// Right click to erase
-	if raylib.IsMouseButtonDown(.RIGHT) {
-		editor_erase_cell(grid_y, grid_x)
+	if raylib.IsMouseButtonPressed(.RIGHT) {
+		editor_erase_cell(app, grid_y, grid_x)
 	}
 	
 	// Keyboard shortcuts
 	if raylib.IsKeyPressed(.ESCAPE) {
-		game.app_set_state(.MENU)
+		entities.app_set_state(app, .MENU)
 	}
 	
 	// Tool selection hotkeys
 	if raylib.IsKeyPressed(.ONE) {
-		game.app.editor.current_tool = .EMPTY
+		app.editor.current_tool = .EMPTY
 	}
 	if raylib.IsKeyPressed(.TWO) {
-		game.app.editor.current_tool = .PATH
+		app.editor.current_tool = .PATH
 	}
 	if raylib.IsKeyPressed(.THREE) {
-		game.app.editor.current_tool = .SPAWN
+		app.editor.current_tool = .SPAWN
 	}
 	if raylib.IsKeyPressed(.FOUR) {
-		game.app.editor.current_tool = .GOAL
+		app.editor.current_tool = .GOAL
 	}
 	if raylib.IsKeyPressed(.FIVE) {
-		game.app.editor.current_tool = .TOWER_ARCHER
+		app.editor.current_tool = .TOWER_ARCHER
 	}
 	if raylib.IsKeyPressed(.SIX) {
-		game.app.editor.current_tool = .TOWER_CANNON
+		app.editor.current_tool = .TOWER_CANNON
 	}
 	if raylib.IsKeyPressed(.SEVEN) {
-		game.app.editor.current_tool = .TOWER_SNIPER
+		app.editor.current_tool = .TOWER_SNIPER
 	}
 	if raylib.IsKeyPressed(.EIGHT) {
-		game.app.editor.current_tool = .TOWER_MISSILE
+		app.editor.current_tool = .TOWER_MISSILE
 	}
 	if raylib.IsKeyPressed(.NINE) {
-		game.app.editor.current_tool = .TOWER_LASER
+		app.editor.current_tool = .TOWER_LASER
 	}
 	if raylib.IsKeyPressed(.ZERO) {
-		game.app.editor.current_tool = .OBSTACLE
+		app.editor.current_tool = .OBSTACLE
 	}
 	
 	// Grid toggle
 	if raylib.IsKeyPressed(.G) {
-		game.app.editor.show_grid = !game.app.editor.show_grid
-		game.app.settings.show_grid = game.app.editor.show_grid
+		app.editor.show_grid = !app.editor.show_grid
+		app.settings.show_grid = app.editor.show_grid
 	}
 }
 
 // Handle toolbar click
-input_handle_toolbar_click :: proc(mouse_x: i32) {
+input_handle_toolbar_click :: proc(app: ^entities.App_State, mouse_x, mouse_y, toolbar_x, toolbar_y, button_width, button_height, margin: i32) {
 	tools := []constants.Tile{
 		.EMPTY,
 		.PATH,
@@ -213,40 +257,38 @@ input_handle_toolbar_click :: proc(mouse_x: i32) {
 		.ACCESSORY_BLOCK,
 	}
 	
-	button_width := 80
-	margin := 10
-	
 	for i in 0..<len(tools) {
-		x_start := margin + i * (button_width + margin)
-		x_end := x_start + button_width
+		button_x := toolbar_x + margin
+		button_y := toolbar_y + margin + i32(i) * (button_height + margin)
 		
-		if mouse_x >= i32(x_start) && mouse_x <= i32(x_end) {
-			game.app.editor.current_tool = tools[i]
+		// Check if clicked on this button
+		if mouse_x >= button_x && mouse_x <= button_x + button_width &&
+		   mouse_y >= button_y && mouse_y <= button_y + button_height {
+			app.editor.current_tool = tools[i]
 			return
 		}
 	}
 }
 
 // Editor erase cell
-editor_erase_cell :: proc(row, col: i32) {
+editor_erase_cell :: proc(app: ^entities.App_State, row, col: i32) {
 	if row < 0 || row >= constants.GRID_SIZE || col < 0 || col >= constants.GRID_SIZE {
 		return
 	}
 	
 	// Remove from main grid
-	tile := game.app.editor.map.grid[row][col]
-	game.app.editor.map.grid[row][col] = .EMPTY
+	app.editor.game_map.grid[row][col] = .EMPTY
 	
 	// Also remove from obstacle grid
-	game.app.editor.map.obstacle_grid[row][col] = .EMPTY
+	app.editor.game_map.obstacle_grid[row][col] = .EMPTY
 	
 	// Remove tile data
 	key := entities.map_get_tile_key(row, col)
-	delete_key(&game.app.editor.map.tile_data, key)
+	delete_key(&app.editor.game_map.tile_data, key)
 }
 
 // Game over input
-input_handle_game_over :: proc() {
+input_handle_game_over :: proc(app: ^entities.App_State) {
 	// Handled by render_button in rendering.odin
 }
 
@@ -255,36 +297,42 @@ is_valid_grid_pos :: proc(x, y: i32) -> bool {
 	return x >= 0 && x < constants.GRID_SIZE && y >= 0 && y < constants.GRID_SIZE
 }
 
+// Convert screen coordinates to grid coordinates (accounts for camera offset and zoom)
+screen_to_grid :: proc(app: ^entities.App_State, screen_x, screen_y: i32) -> (grid_x, grid_y: i32) {
+	cs := f32(app.settings.cell_size) * app.zoom
+	grid_x = i32((f32(screen_x) - f32(app.camera_offset_x)) / cs)
+	grid_y = i32((f32(screen_y) - f32(app.camera_offset_y)) / cs)
+	return
+}
+
 // Select tower at position
-select_tower_at :: proc(row, col: i32) {
-	for &tower in game.app.sim.towers {
+select_tower_at :: proc(app: ^entities.App_State, row, col: i32) {
+	for &tower in app.sim.towers {
 		if tower.r == row && tower.c == col {
-			game.app.selected_tower = &tower
+			app.selected_tower = &tower
 			return
 		}
 	}
-	game.app.selected_tower = nil
+	app.selected_tower = nil
 }
 
 // Get hovered cell info
-input_get_hovered_cell :: proc() -> (row, col: i32, valid: bool) {
+input_get_hovered_cell :: proc(app: ^entities.App_State) -> (row, col: i32, valid: bool) {
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
 	
-	cs := f32(game.app.settings.cell_size)
-	
-	col = i32((f32(mouse_x) - f32(game.app.camera_offset_x)) / cs)
-	row = i32((f32(mouse_y) - f32(game.app.camera_offset_y)) / cs)
+	// Convert to grid coordinates using helper function
+	col, row = screen_to_grid(app, mouse_x, mouse_y)
 	
 	valid = is_valid_grid_pos(col, row)
 	return
 }
 
 // Process editor shortcuts
-input_process_editor_shortcuts :: proc() {
+input_process_editor_shortcuts :: proc(app: ^entities.App_State) {
 	// Clear map
 	if raylib.IsKeyDown(.LEFT_CONTROL) && raylib.IsKeyPressed(.C) {
-		entities.map_clear(&game.app.editor.map)
+		entities.map_clear(&app.editor.game_map)
 	}
 	
 	// Save map (placeholder)
@@ -295,5 +343,62 @@ input_process_editor_shortcuts :: proc() {
 	// Load map (placeholder)
 	if raylib.IsKeyDown(.LEFT_CONTROL) && raylib.IsKeyPressed(.O) {
 		// TODO: Implement load
+	}
+}
+
+// Convert tile type to tower type
+tile_to_tower_type :: proc(tile: constants.Tile) -> constants.Tower_Type {
+	#partial switch tile {
+	case .TOWER_ARCHER:
+		return .ARCHER
+	case .TOWER_CANNON:
+		return .CANNON
+	case .TOWER_SNIPER:
+		return .SNIPER
+	case .TOWER_MISSILE:
+		return .MISSILE
+	case .TOWER_LASER:
+		return .LASER
+	case:
+		return .ARCHER  // Default
+	}
+}
+
+// Handle camera controls (zoom and pan)
+input_handle_camera :: proc(app: ^entities.App_State) {
+	// Zoom with mouse wheel (centered on mouse, continuous smooth zoom)
+	wheel_movement := raylib.GetMouseWheelMove()
+	if wheel_movement != 0 {
+		mouse_x := raylib.GetMouseX()
+		mouse_y := raylib.GetMouseY()
+		
+		// Update target zoom with continuous value
+		app.target_zoom += wheel_movement * constants.ZOOM_SPEED
+		
+		// Clamp target zoom
+		if app.target_zoom < constants.ZOOM_MIN {
+			app.target_zoom = constants.ZOOM_MIN
+		}
+		if app.target_zoom > constants.ZOOM_MAX {
+			app.target_zoom = constants.ZOOM_MAX
+		}
+		
+		// Use current zoom for calculation (not target, to avoid jumping)
+		old_zoom := app.zoom
+		
+		// Calculate zoom ratio (inverted for correct direction)
+		zoom_ratio := old_zoom / app.target_zoom
+		
+		// Calculate offset adjustment to keep mouse position stable
+		// new_offset = mouse - (mouse - old_offset) * zoom_ratio
+		app.camera_offset_x = i32(f32(mouse_x) - (f32(mouse_x) - f32(app.camera_offset_x)) * zoom_ratio)
+		app.camera_offset_y = i32(f32(mouse_y) - (f32(mouse_y) - f32(app.camera_offset_y)) * zoom_ratio)
+	}
+	
+	// Pan with middle mouse button
+	if raylib.IsMouseButtonDown(.MIDDLE) {
+		mouse_delta := raylib.GetMouseDelta()
+		app.camera_offset_x += i32(mouse_delta.x)
+		app.camera_offset_y += i32(mouse_delta.y)
 	}
 }

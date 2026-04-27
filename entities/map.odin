@@ -1,6 +1,9 @@
 package entities
 
 import "core:fmt"
+import "core:os"
+import "core:strings"
+import "core:strconv"
 import "../constants"
 
 // Map/Grid structure
@@ -18,20 +21,15 @@ Map :: struct {
 	seed: i32,
 	
 	// Tile data (for obstacle levels, etc.)
-	tile_data: map[string]Tile_Data,
-}
-
-// Tile data for extra properties
-tile_data :: struct {
-	level: i32,
+	tile_data: map[string]constants.Tile_Data,
 }
 
 // Initialize map
 map_init :: proc() -> Map {
 	m := Map{
-		biome = .PLAIN,
+		biome = constants.Biome.PLAIN,
 		seed = 0,
-		tile_data = make(map[string]Tile_Data),
+		tile_data = make(map[string]constants.Tile_Data),
 	}
 	
 	// Initialize grids to EMPTY
@@ -99,7 +97,7 @@ map_get_obstacle_level :: proc(m: ^Map, row, col: i32) -> i32 {
 // Set obstacle level
 map_set_obstacle_level :: proc(m: ^Map, row, col: i32, level: i32) {
 	key := map_get_tile_key(row, col)
-	m.tile_data[key] = tile_data{level = level}
+	m.tile_data[key] = constants.Tile_Data{level = level}
 }
 
 // Clear map (set all to EMPTY)
@@ -111,7 +109,7 @@ map_clear :: proc(m: ^Map) {
 		}
 	}
 	delete(m.tile_data)
-	m.tile_data = make(map[string]Tile_Data)
+	m.tile_data = make(map[string]constants.Tile_Data)
 }
 
 // Check if tile is a path tile
@@ -123,7 +121,7 @@ map_is_path :: proc(m: ^Map, row, col: i32) -> bool {
 // Check if position has a tower
 map_has_tower :: proc(m: ^Map, row, col: i32) -> bool {
 	tile := map_get_tile(m, row, col)
-	switch tile {
+	#partial switch tile {
 	case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER:
 		return true
 	}
@@ -137,7 +135,7 @@ map_find_spawns :: proc(m: ^Map) -> [dynamic]Spawn_Point {
 	for row in 0..<constants.GRID_SIZE {
 		for col in 0..<constants.GRID_SIZE {
 			if m.grid[row][col] == .SPAWN {
-				append(&spawns, Spawn_Point{r = row, c = col})
+				append(&spawns, Spawn_Point{r = i32(row), c = i32(col)})
 			}
 		}
 	}
@@ -150,7 +148,7 @@ map_find_goal :: proc(m: ^Map) -> (i32, i32, bool) {
 	for row in 0..<constants.GRID_SIZE {
 		for col in 0..<constants.GRID_SIZE {
 			if m.grid[row][col] == .GOAL {
-				return row, col, true
+				return i32(row), i32(col), true
 			}
 		}
 	}
@@ -167,3 +165,290 @@ Spawn_Point :: struct {
 	wave_time: f32,
 	next_spawn_delay: f32,
 }
+
+// BFS node for pathfinding
+BFS_Node :: struct {
+	r: i32,
+	c: i32,
+	parent_r: i32,
+	parent_c: i32,
+	has_parent: bool,
+}
+
+// Find path from start to goal using BFS
+// Returns a dynamic array of Path_Node from start to goal (inclusive)
+map_find_path_bfs :: proc(m: ^Map, start_r, start_c, goal_r, goal_c: i32, is_flying: bool) -> [dynamic]Path_Node {
+	path := make([dynamic]Path_Node)
+	
+	// Check if start or goal is out of bounds
+	if start_r < 0 || start_r >= constants.GRID_SIZE || start_c < 0 || start_c >= constants.GRID_SIZE {
+		return path
+	}
+	if goal_r < 0 || goal_r >= constants.GRID_SIZE || goal_c < 0 || goal_c >= constants.GRID_SIZE {
+		return path
+	}
+	
+	// If start is goal, return just the start
+	if start_r == goal_r && start_c == goal_c {
+		append(&path, Path_Node{x = start_c, y = start_r})
+		return path
+	}
+	
+	// Directions: up, down, left, right
+	dr := [4]i32{-1, 1, 0, 0}
+	dc := [4]i32{0, 0, -1, 1}
+	
+	// Visited grid
+	visited: [constants.GRID_SIZE][constants.GRID_SIZE]bool
+	
+	// Queue for BFS (using slice as queue)
+	queue := make([dynamic]BFS_Node)
+	defer delete(queue)
+	
+	// Parent tracking grid to reconstruct path (-1 means no parent)
+	parent_r: [constants.GRID_SIZE][constants.GRID_SIZE]i32
+	parent_c: [constants.GRID_SIZE][constants.GRID_SIZE]i32
+	for i in 0..<constants.GRID_SIZE {
+		for j in 0..<constants.GRID_SIZE {
+			parent_r[i][j] = -1
+			parent_c[i][j] = -1
+		}
+	}
+	
+	// Start node
+	start_node := BFS_Node{r = start_r, c = start_c, parent_r = -1, parent_c = -1, has_parent = false}
+	append(&queue, start_node)
+	visited[start_r][start_c] = true
+	
+	// BFS
+	found := false
+	
+	for len(queue) > 0 && !found {
+		// Dequeue
+		current := queue[0]
+		ordered_remove(&queue, 0)
+		
+		// Check all neighbors
+		for i in 0..<4 {
+			nr := current.r + dr[i]
+			nc := current.c + dc[i]
+			
+			// Check bounds
+			if nr < 0 || nr >= constants.GRID_SIZE || nc < 0 || nc >= constants.GRID_SIZE {
+				continue
+			}
+			
+			// Skip if visited
+			if visited[nr][nc] {
+				continue
+			}
+			
+			// Check if walkable
+			tile := m.grid[nr][nc]
+			is_walkable := false
+			
+			if is_flying {
+				// Flying enemies can go over everything except map boundaries
+				is_walkable = true
+			} else {
+				// Ground enemies can ONLY walk on: PATH, SPAWN, GOAL
+				// Cannot walk on: EMPTY (grass), TOWER_*, OBSTACLE
+				#partial switch tile {
+				case .PATH, .SPAWN, .GOAL:
+					is_walkable = true
+				}
+			}
+			
+			if !is_walkable {
+				continue
+			}
+			
+				// Mark as visited and store parent
+			visited[nr][nc] = true
+			parent_r[nr][nc] = current.r
+			parent_c[nr][nc] = current.c
+			
+			// Check if we reached the goal
+			if nr == goal_r && nc == goal_c {
+				found = true
+				break
+			}
+			
+			// Enqueue for further exploration
+			new_node := BFS_Node{r = nr, c = nc, parent_r = current.r, parent_c = current.c, has_parent = true}
+			append(&queue, new_node)
+		}
+	}
+	
+	if !found {
+		// No path found, return empty path
+		return path
+	}
+	
+	// Reconstruct path from goal to start using parent pointers
+	// Build path from goal back to start, then reverse
+	reverse_path := make([dynamic]Path_Node)
+	defer delete(reverse_path)
+	
+	cr := goal_r
+	cc := goal_c
+	max_iterations := constants.GRID_SIZE * constants.GRID_SIZE
+	iterations := 0
+	
+	for iterations < max_iterations {
+		iterations += 1
+		append(&reverse_path, Path_Node{x = cc, y = cr})
+		// Stop when we reach the start
+		if cr == start_r && cc == start_c {
+			break
+		}
+		next_r := parent_r[cr][cc]
+		next_c := parent_c[cr][cc]
+		// Safety check: if parent is invalid, we've reached the start or an error occurred
+		if next_r < 0 || next_c < 0 {
+			break
+		}
+		cr = next_r
+		cc = next_c
+	}
+	
+	// Reverse the path (start -> goal)
+	for i := len(reverse_path) - 1; i >= 0; i -= 1 {
+		append(&path, reverse_path[i])
+	}
+	
+	return path
+}
+
+// Save map to file
+map_save :: proc(m: ^Map, filename: string) -> bool {
+	// Create maps directory if it doesn't exist
+	os.make_directory("maps")
+	
+	// Build file content using strings.Builder
+	builder: strings.Builder
+	strings.builder_init(&builder)
+	defer strings.builder_destroy(&builder)
+	
+	// Header: FIRST_IMPACT_MAP
+	// Data: version, width, height, biome, seed
+	fmt.sbprint(&builder, "FIRST_IMPACT_MAP\n")
+	fmt.sbprintf(&builder, "1\n")  // version
+	fmt.sbprintf(&builder, "%d\n", constants.GRID_SIZE)  // width
+	fmt.sbprintf(&builder, "%d\n", constants.GRID_SIZE)  // height
+	fmt.sbprintf(&builder, "%d\n", m.biome)
+	fmt.sbprintf(&builder, "%d\n", m.seed)
+	
+	// Main grid
+	for row in 0..<constants.GRID_SIZE {
+		for col in 0..<constants.GRID_SIZE {
+			fmt.sbprintf(&builder, "%d ", i32(m.grid[row][col]))
+		}
+		fmt.sbprint(&builder, "\n")
+	}
+	
+	// Obstacle grid
+	for row in 0..<constants.GRID_SIZE {
+		for col in 0..<constants.GRID_SIZE {
+			fmt.sbprintf(&builder, "%d ", i32(m.obstacle_grid[row][col]))
+		}
+		fmt.sbprint(&builder, "\n")
+	}
+	
+	// Write to file
+	full_path := fmt.tprintf("maps/%s", filename)
+	content := strings.to_string(builder)
+	result := os.write_entire_file(full_path, transmute([]u8)content)
+	
+	return result
+}
+
+// Helper to parse integer from string
+parse_i32 :: proc(s: string) -> i32 {
+	val, ok := strconv.parse_int(s)
+	if !ok {
+		return 0
+	}
+	return i32(val)
+}
+
+// Load map from file
+map_load :: proc(m: ^Map, filename: string) -> bool {
+	full_path := fmt.tprintf("maps/%s", filename)
+	data, ok := os.read_entire_file(full_path)
+	if !ok {
+		return false
+	}
+	defer delete(data)
+	
+	// Parse file content
+	content := string(data)
+	lines := strings.split_lines(content)
+	defer delete(lines)
+	
+	if len(lines) < 6 {
+		return false
+	}
+	
+	// Check header
+	header := strings.trim_space(lines[0])
+	if header != "FIRST_IMPACT_MAP" {
+		return false
+	}
+	
+	// Format: version, width, height, biome, seed
+	version := parse_i32(strings.trim_space(lines[1]))
+	_ = version  // For future version handling
+	
+	width := parse_i32(strings.trim_space(lines[2]))
+	height := parse_i32(strings.trim_space(lines[3]))
+	if width != constants.GRID_SIZE || height != constants.GRID_SIZE {
+		return false
+	}
+	biome_val := parse_i32(strings.trim_space(lines[4]))
+	m.biome = constants.Biome(biome_val)
+	m.seed = parse_i32(strings.trim_space(lines[5]))
+	grid_start_idx := 6
+	
+	// Parse main grid
+	for row in 0..<constants.GRID_SIZE {
+		line_idx := grid_start_idx + int(row)
+		if line_idx >= len(lines) {
+			return false
+		}
+		
+		parts := strings.split(strings.trim_space(lines[line_idx]), " ")
+		defer delete(parts)
+		
+		for col in 0..<constants.GRID_SIZE {
+			if col >= len(parts) {
+				break
+			}
+			tile_val := parse_i32(parts[col])
+			m.grid[row][col] = constants.Tile(tile_val)
+		}
+	}
+	
+	// Parse obstacle grid
+	obstacle_start := grid_start_idx + constants.GRID_SIZE
+	for row in 0..<constants.GRID_SIZE {
+		line_idx := int(obstacle_start) + int(row)
+		if line_idx >= len(lines) {
+			return false
+		}
+		
+		parts := strings.split(strings.trim_space(lines[line_idx]), " ")
+		defer delete(parts)
+		
+		for col in 0..<constants.GRID_SIZE {
+			if col >= len(parts) {
+				break
+			}
+			tile_val := parse_i32(parts[col])
+			m.obstacle_grid[row][col] = constants.Tile(tile_val)
+		}
+	}
+	
+	return true
+}
+
