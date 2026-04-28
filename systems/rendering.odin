@@ -89,7 +89,7 @@ render_map :: proc(app: ^entities.App_State) {
 	}
 	
 	// Draw reticle for selected cell (in editor and simulation modes)
-	if app.selected_cell.valid && (app.state == .EDITOR || app.state == .PLAYING || app.state == .PAUSED) {
+	if app.selected_cell.valid && app.state == .EDITOR {
 		sx := f32(app.selected_cell.col) * cs + f32(app.camera_offset_x)
 		sy := f32(app.selected_cell.row) * cs + f32(app.camera_offset_y)
 		render_reticle(sx, sy, cs, constants.TOWER_RETICLE_COLOR)
@@ -345,20 +345,24 @@ render_tree :: proc(x, y: f32, cs: f32, biome: constants.Biome, row: i32 = 0, co
 
 // Render block accessory
 render_block :: proc(x, y, cs: f32) {
-	raylib.DrawRectangle(
-		i32(x + cs * 0.1),
-		i32(y + cs * 0.1),
-		i32(cs * 0.8),
-		i32(cs * 0.8),
+	raylib.DrawRectangleRounded(
+		raylib.Rectangle{
+			x + cs * 0.1,
+			y + cs * 0.1,
+			cs * 0.8,
+			cs * 0.8,
+		},
+		0.1,
+		4,
 		constants.COLOR_BLOCK,
 	)
 	
 	// Highlight
 	raylib.DrawRectangle(
-		i32(x + cs * 0.15),
-		i32(y + cs * 0.15),
-		i32(cs * 0.3),
-		i32(cs * 0.3),
+		i32(x + cs * 0.25),
+		i32(y + cs * 0.25),
+		i32(cs * 0.5),
+		i32(cs * 0.5),
 		gray(150),
 	)
 }
@@ -468,8 +472,53 @@ render_enemies :: proc(app: ^entities.App_State, cs: f32) {
 		size := entities.enemy_get_size(&enemy) * cs
 		color := entities.enemy_get_color(&enemy)
 		
-		// Draw enemy body
-		raylib.DrawCircle(i32(x + cs / 2), i32(y + cs / 2), size, color)
+		// Shadow offset
+		so := max(2, cs * 0.08)
+		shadow_color := raylib.Color{40, 40, 40, 60}
+		
+		// Draw enemy border (darkened version of body color, 2px thick)
+		border_color := raylib.Color{
+			u8(f32(color.r) * 0.6),
+			u8(f32(color.g) * 0.6),
+			u8(f32(color.b) * 0.6),
+			color.a,
+		}
+		
+		if enemy.is_flying {
+			// Flying enemies are drawn as triangles (pointing up)
+			center_x := x + cs / 2
+			center_y := y + cs / 2
+			
+			// Triangle shadow (offset)
+			v1_shadow := raylib.Vector2{center_x + so, center_y - size - 2 + so}  // Top
+			v2_shadow := raylib.Vector2{center_x - size - 2 + so, center_y + size + 2 + so}  // Bottom left
+			v3_shadow := raylib.Vector2{center_x + size + 2 + so, center_y + size + 2 + so}  // Bottom right
+			raylib.DrawTriangle(v1_shadow, v2_shadow, v3_shadow, shadow_color)
+			
+			// Triangle vertices (pointing up)
+			v1 := raylib.Vector2{center_x, center_y - size - 2}  // Top
+			v2 := raylib.Vector2{center_x - size - ENEMY_STROKE_WIDTH, center_y + size + ENEMY_STROKE_WIDTH}  // Bottom left
+			v3 := raylib.Vector2{center_x + size + ENEMY_STROKE_WIDTH, center_y + size + ENEMY_STROKE_WIDTH}  // Bottom right
+			
+			raylib.DrawTriangle(v1, v2, v3, border_color)
+			
+			// Inner triangle (body)
+			v1_body := raylib.Vector2{center_x, center_y - size}  // Top
+			v2_body := raylib.Vector2{center_x - size, center_y + size}  // Bottom left
+			v3_body := raylib.Vector2{center_x + size, center_y + size}  // Bottom right
+			
+			raylib.DrawTriangle(v1_body, v2_body, v3_body, color)
+		} else {
+			// Ground enemies are drawn as circles
+			center_x := x + cs / 2
+			center_y := y + cs / 2
+			
+			// Circle shadow (offset)
+			raylib.DrawCircle(i32(center_x + so), i32(center_y + so), size + ENEMY_STROKE_WIDTH, shadow_color)
+			
+			raylib.DrawCircle(i32(center_x), i32(center_y), size + ENEMY_STROKE_WIDTH, border_color)
+			raylib.DrawCircle(i32(center_x), i32(center_y), size, color)
+		}
 		
 		// Health bar - positioned higher up and slightly taller
 		hp_percent := enemy.hp / enemy.max_hp
@@ -976,39 +1025,39 @@ draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, an
 	switch tower_type {
 	case .LASER:
 		fill = constants.TOWER_LASER_BASE
-		stroke = raylib.Color{80, 90, 100, 255}
+		stroke = constants.TOWER_LASER_STROKE
 	case .CANNON:
 		fill = constants.TOWER_CANNON_BASE
-		stroke = raylib.Color{90, 100, 110, 255}
+		stroke = constants.TOWER_CANNON_STROKE
 	case .MISSILE:
 		fill = constants.TOWER_MISSILE_BASE
-		stroke = raylib.Color{100, 90, 80, 255}
+		stroke = constants.TOWER_MISSILE_STROKE
 	case .SNIPER:
-		fill = raylib.Color{100, 110, 120, 255}
-		stroke = raylib.Color{70, 80, 90, 255}
+		fill = constants.TOWER_SNIPER_BASE
+		stroke = constants.TOWER_SNIPER_STROKE
 	case .ARCHER:
-		fill = raylib.Color{120, 100, 80, 255}
-		stroke = raylib.Color{90, 70, 50, 255}
+		fill = constants.TOWER_ARCHER_BASE
+		stroke = constants.TOWER_ARCHER_STROKE
 	}
 	
 	// Draw shadow (hard shadow offset to bottom-right like JS)
 	if !is_ghost {
 		raylib.DrawRectangleRounded(
 			raylib.Rectangle{f32(bx + shadow_offset), f32(by + shadow_offset), f32(base_w), f32(base_h)},
-			0.15, 6, constants.TOWER_SHADOW,
+			constants.TOWER_ROUNDED_CORNER, constants.TOWER_CORNER_SEGMENTS, constants.TOWER_SHADOW,
 		)
 	}
 	
 	// Draw base
 	raylib.DrawRectangleRounded(
 		raylib.Rectangle{f32(bx), f32(by), f32(base_w), f32(base_h)},
-		0.15, 6, fill,
+		constants.TOWER_ROUNDED_CORNER, constants.TOWER_CORNER_SEGMENTS, fill,
 	)
 	
 	// Draw stroke
 	raylib.DrawRectangleRoundedLines(
 		raylib.Rectangle{f32(bx), f32(by), f32(base_w), f32(base_h)},
-		0.15, 6, 2, stroke,
+		constants.TOWER_ROUNDED_CORNER, constants.TOWER_CORNER_SEGMENTS, 2, stroke,
 	)
 	
 	// Draw tower-specific components
@@ -1018,181 +1067,159 @@ draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, an
 	// Rotate for barrel orientation (pointing up by default like JS: angle + PI/2)
 	rotation := angle + math.PI / 2
 	
-	// Draw shadow pass for components (offset like JS)
+	// Draw tower components with shadows immediately after each component
 	switch tower_type {
 	case .LASER:
-		// Barrel shadow
-		raylib.DrawRectangleRounded(
-			raylib.Rectangle{
-				f32(cx + so - cs*0.1*math.cos(rotation) - cs*0.35*math.sin(rotation)),
-				f32(cy + so - cs*0.1*math.sin(rotation) + cs*0.35*math.cos(rotation)),
-				cs * 0.2, cs * 0.3,
-			},
-			0.05, 4, constants.TOWER_SHADOW,
-		)
+		// Barrel shadow - rotated using DrawRectanglePro with pivot at tower center
+		barrel_w := cs * 0.2
+		barrel_h := cs * 0.5
+		barrel_rect := raylib.Rectangle{
+			x = f32(cx + so),
+			y = f32(cy + so),
+			width = f32(barrel_w),
+			height = f32(barrel_h),
+		}
+		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}  // Pivot at bottom of barrel (tower center)
+		laser_rotation := (rotation - math.PI/2) * 180.0 / math.PI
+		raylib.DrawRectangleRounded(barrel_rect, 0.05, 4, constants.TOWER_SHADOW)
+		
+		// Barrel - rotated using DrawRectanglePro with pivot at tower center
+		barrel_rect = raylib.Rectangle{
+			x = f32(cx),
+			y = f32(cy),
+			width = f32(barrel_w),
+			height = f32(barrel_h),
+		}
+		raylib.DrawRectangleRounded(barrel_rect, 0.05, 4, constants.TOWER_BARREL)
+		
 		// Circle shadow
 		raylib.DrawCircle(i32(cx + so), i32(cy + so), r, constants.TOWER_SHADOW)
-		
-	case .CANNON, .SNIPER:
-		// Barrel shadow
-		barrel_w := cs * 0.08 if tower_type == .SNIPER else cs * 0.1
-		barrel_h := cs * 0.45 if tower_type == .SNIPER else cs * 0.4
-		raylib.DrawRectangleRounded(
-			raylib.Rectangle{
-				f32(cx + so - barrel_w/2),
-				f32(cy + so - barrel_h),
-				barrel_w, barrel_h,
-			},
-			0.04, 4, constants.TOWER_SHADOW,
-		)
-		// Circle shadow
-		raylib.DrawCircle(i32(cx + so), i32(cy + so), r * 0.8, constants.TOWER_SHADOW)
-		
-	case .MISSILE:
-		pod_w := r * 0.8
-		pod_h := r * 1.6
-		pod_rad := pod_w * 0.3
-		// Left pod shadow
-		raylib.DrawRectangleRounded(
-			raylib.Rectangle{f32(cx + so - r*1.4), f32(cy + so - r*0.8), pod_w, pod_h},
-			pod_rad, 4, constants.TOWER_SHADOW,
-		)
-		// Right pod shadow
-		raylib.DrawRectangleRounded(
-			raylib.Rectangle{f32(cx + so + r*0.6), f32(cy + so - r*0.8), pod_w, pod_h},
-			pod_rad, 4, constants.TOWER_SHADOW,
-		)
-		
-	case .ARCHER:
-		// Bow shadow
-		bow_r := r * 1.2
-		raylib.DrawCircle(i32(cx + so - bow_r), i32(cy + so), r * 0.15, constants.TOWER_SHADOW)
-		raylib.DrawCircle(i32(cx + so), i32(cy + so - bow_r*0.3), r * 0.15, constants.TOWER_SHADOW)
-		raylib.DrawCircle(i32(cx + so + bow_r), i32(cy + so), r * 0.15, constants.TOWER_SHADOW)
-	}
-	
-	// Draw normal pass (rotated components)
-	switch tower_type {
-	case .LASER:
-		// Barrel (rounded rectangle pointing up)
-		barrel_x := cx - cs*0.1*math.cos(rotation) - cs*0.35*math.sin(rotation)
-		barrel_y := cy - cs*0.1*math.sin(rotation) + cs*0.35*math.cos(rotation)
-		raylib.DrawRectangleRounded(
-			raylib.Rectangle{f32(barrel_x), f32(barrel_y), cs * 0.2, cs * 0.3},
-			0.05, 4, constants.TOWER_BARREL,
-		)
 		// Circle body
 		raylib.DrawCircle(i32(cx), i32(cy), r, constants.TOWER_LASER_CORE)
 		// Inner white glow
 		raylib.DrawCircle(i32(cx), i32(cy), r * 0.4, raylib.Color{255, 255, 255, 180})
 		
 	case .CANNON:
-		// Barrel - rotated using DrawRectanglePro with pivot at bottom (connection to tower center)
+		// Barrel shadow - rotated using DrawRectanglePro with pivot at tower center
 		barrel_w := cs * 0.16
 		barrel_h := cs * 0.4
-		// Position barrel so bottom is at tower center
 		barrel_rect := raylib.Rectangle{
-			x = f32(cx - barrel_w/2),
-			y = f32(cy - barrel_h),
+			x = f32(cx + so),
+			y = f32(cy + so),
 			width = f32(barrel_w),
 			height = f32(barrel_h),
 		}
-		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}  // Pivot at bottom of barrel (tower center)
-		raylib.DrawRectanglePro(barrel_rect, origin, rotation * 180.0 / math.PI, constants.TOWER_BARREL)
+		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}
+		cannon_rotation := (rotation - math.PI/2) * 180.0 / math.PI
+		raylib.DrawRectanglePro(barrel_rect, origin, cannon_rotation, constants.TOWER_SHADOW)
+		
+		// Barrel - rotated using DrawRectanglePro with pivot at tower center
+		barrel_rect = raylib.Rectangle{
+			x = f32(cx),
+			y = f32(cy),
+			width = f32(barrel_w),
+			height = f32(barrel_h),
+		}
+		raylib.DrawRectanglePro(barrel_rect, origin, cannon_rotation, constants.TOWER_BARREL)
+		
+		// Circle shadow
+		raylib.DrawCircle(i32(cx + so), i32(cy + so), r * 0.8, constants.TOWER_SHADOW)
 		// Circle body at center
 		raylib.DrawCircle(i32(cx), i32(cy), r * 0.8, stroke)
 
 	case .SNIPER:
-		// Thin barrel - rotated using DrawRectanglePro with pivot at bottom (connection to tower center)
+		// Thin barrel shadow - rotated using DrawRectanglePro with pivot at tower center
 		barrel_w := cs * 0.16
 		barrel_h := cs * 0.45
-		// Position barrel so bottom is at tower center
 		barrel_rect := raylib.Rectangle{
-			x = f32(cx - barrel_w/2),
-			y = f32(cy - barrel_h/4),
+			x = f32(cx + so),
+			y = f32(cy + so),
 			width = f32(barrel_w),
 			height = f32(barrel_h),
 		}
-		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}  // Pivot at bottom of barrel (tower center)
-		raylib.DrawRectanglePro(barrel_rect, origin, rotation * 180.0 / math.PI, constants.TOWER_BARREL)
+		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}
+		sniper_rotation := (rotation - math.PI/2) * 180.0 / math.PI
+		raylib.DrawRectanglePro(barrel_rect, origin, sniper_rotation, constants.TOWER_SHADOW)
+		
+		// Thin barrel - rotated using DrawRectanglePro with pivot at tower center
+		barrel_rect = raylib.Rectangle{
+			x = f32(cx),
+			y = f32(cy),
+			width = f32(barrel_w),
+			height = f32(barrel_h),
+		}
+		raylib.DrawRectanglePro(barrel_rect, origin, sniper_rotation, constants.TOWER_BARREL)
+		
+		// Circle shadow
+		raylib.DrawCircle(i32(cx + so), i32(cy + so), r * 0.8, constants.TOWER_SHADOW)
 		// Circle body
 		raylib.DrawCircle(i32(cx), i32(cy), r * 0.8, stroke)
 		
 	case .MISSILE:
 		pod_w := r * 0.8
 		pod_h := r * 1.6
-		pod_rad := pod_w * 0.3
+		pod_rad := r * 0.0075
 		pod_color := constants.TOWER_MISSILE_POD
 		
-		// Left pod - position relative to center, then rotate around tower center
-		left_pod_offset_x := -r*1.4
-		left_pod_offset_y := -r*0.8
-		// Rotate offset around center
-		rot_left_offset_x := left_pod_offset_x*math.cos(rotation) - left_pod_offset_y*math.sin(rotation)
-		rot_left_offset_y := left_pod_offset_x*math.sin(rotation) + left_pod_offset_y*math.cos(rotation)
-		left_pod_x := cx + rot_left_offset_x
-		left_pod_y := cy + rot_left_offset_y
+		// Calculate pod positions in rotated coordinate space (like JS)
+		// Left pod at (-r * 1.4, -r * 0.8), Right pod at (r * 0.6, -r * 0.8)
 		
-		left_pod_rect := raylib.Rectangle{
-			x = f32(left_pod_x - pod_w/2),
-			y = f32(left_pod_y - pod_h/2),
-			width = f32(pod_w),
-			height = f32(pod_h),
-		}
-		left_origin := raylib.Vector2{f32(pod_w/2), f32(pod_h/2)}  // Pivot at center of pod
-		raylib.DrawRectanglePro(left_pod_rect, left_origin, rotation * 180.0 / math.PI, pod_color)
+		// Left pod shadow
+		left_pod_shadow_x := cx + so + (-r*1.4)*math.cos(rotation) - (-r*0.8)*math.sin(rotation)
+		left_pod_shadow_y := cy + so + (-r*1.4)*math.sin(rotation) + (-r*0.8)*math.cos(rotation)
+		raylib.DrawRectangleRounded(
+			raylib.Rectangle{f32(left_pod_shadow_x - pod_w/2), f32(left_pod_shadow_y - pod_h/2), pod_w, pod_h},
+			pod_rad, 4, constants.TOWER_SHADOW,
+		)
 		
-		// Right pod - position relative to center, then rotate around tower center
-		right_pod_offset_x := r*0.6
-		right_pod_offset_y := -r*0.8
-		// Rotate offset around center
-		rot_right_offset_x := right_pod_offset_x*math.cos(rotation) - right_pod_offset_y*math.sin(rotation)
-		rot_right_offset_y := right_pod_offset_x*math.sin(rotation) + right_pod_offset_y*math.cos(rotation)
-		right_pod_x := cx + rot_right_offset_x
-		right_pod_y := cy + rot_right_offset_y
+		// Right pod shadow
+		right_pod_shadow_x := cx + so + (r*0.6)*math.cos(rotation) - (-r*0.8)*math.sin(rotation)
+		right_pod_shadow_y := cy + so + (r*0.6)*math.sin(rotation) + (-r*0.8)*math.cos(rotation)
+		raylib.DrawRectangleRounded(
+			raylib.Rectangle{f32(right_pod_shadow_x - pod_w/2), f32(right_pod_shadow_y - pod_h/2), pod_w, pod_h},
+			pod_rad, 4, constants.TOWER_SHADOW,
+		)
 		
-		right_pod_rect := raylib.Rectangle{
-			x = f32(right_pod_x - pod_w/2),
-			y = f32(right_pod_y - pod_h/2),
-			width = f32(pod_w),
-			height = f32(pod_h),
-		}
-		right_origin := raylib.Vector2{f32(pod_w/2), f32(pod_h/2)}  // Pivot at center of pod
-		raylib.DrawRectanglePro(right_pod_rect, right_origin, rotation * 180.0 / math.PI, pod_color)
+		// Left pod
+		left_pod_x := cx + (-r*1.4)*math.cos(rotation) - (-r*0.8)*math.sin(rotation)
+		left_pod_y := cy + (-r*1.4)*math.sin(rotation) + (-r*0.8)*math.cos(rotation)
+		raylib.DrawRectangleRounded(
+			raylib.Rectangle{f32(left_pod_x - pod_w/2), f32(left_pod_y - pod_h/2), pod_w, pod_h},
+			pod_rad, 4, pod_color,
+		)
 		
-		// Draw missiles inside pods (rotated positions)
-		missile_r := pod_w * 0.35
-		missile_left_x := cx - r*math.cos(rotation) - r*0.3*math.sin(rotation)
-		missile_left_y := cy - r*math.sin(rotation) + r*0.3*math.cos(rotation)
-		missile_right_x := cx + r*math.cos(rotation) - r*0.3*math.sin(rotation)
-		missile_right_y := cy + r*math.sin(rotation) + r*0.3*math.cos(rotation)
-		
-		raylib.DrawCircle(i32(missile_left_x), i32(missile_left_y), missile_r, constants.TOWER_MISSILE_WARHEAD)
-		raylib.DrawCircle(i32(missile_right_x), i32(missile_right_y), missile_r, constants.TOWER_MISSILE_WARHEAD)
+		// Right pod
+		right_pod_x := cx + (r*0.6)*math.cos(rotation) - (-r*0.8)*math.sin(rotation)
+		right_pod_y := cy + (r*0.6)*math.sin(rotation) + (-r*0.8)*math.cos(rotation)
+		raylib.DrawRectangleRounded(
+			raylib.Rectangle{f32(right_pod_x - pod_w/2), f32(right_pod_y - pod_h/2), pod_w, pod_h},
+			pod_rad, 4, pod_color,
+		)
 		
 	case .ARCHER:
-		// Draw bow (wood arc) - rotated to face target
-		bow_r := r * 1.2
-		for i := -2; i <= 2; i += 1 {
-			a := f32(i) * 0.3
-			// Original position relative to center
-			orig_x := bow_r * a
-			orig_y := -r * 0.3 + bow_r * (a * a) * 0.5
-			// Rotate position
-			bx_ := cx + orig_x*math.cos(rotation) - orig_y*math.sin(rotation)
-			by_ := cy + orig_x*math.sin(rotation) + orig_y*math.cos(rotation)
-			raylib.DrawCircle(i32(bx_), i32(by_), cs * 0.04, constants.TOWER_ARCHER_WOOD)
+		// Crossbow-style barrel - rotated using DrawRectanglePro with pivot at tower center
+		barrel_w := cs * 0.12
+		barrel_h := cs * 0.4
+		
+		// Barrel shadow - positioned at tower center + offset, origin at bottom center
+		barrel_rect := raylib.Rectangle{
+			x = f32(cx + so),
+			y = f32(cy + so),
+			width = f32(barrel_w),
+			height = f32(barrel_h),
 		}
-		// Bow string (rotated)
-		string_left_x := cx - bow_r*math.cos(rotation) - (r*0.2)*math.sin(rotation)
-		string_left_y := cy - bow_r*math.sin(rotation) + (r*0.2)*math.cos(rotation)
-		string_right_x := cx + bow_r*math.cos(rotation) - (r*0.2)*math.sin(rotation)
-		string_right_y := cy + bow_r*math.sin(rotation) + (r*0.2)*math.cos(rotation)
-		raylib.DrawLine(
-			i32(string_left_x), i32(string_left_y),
-			i32(string_right_x), i32(string_right_y),
-			constants.TOWER_ARCHER_STRING,
-		)
+		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}  // Pivot at bottom of barrel (tower center)
+		archer_rotation := (rotation + math.PI/2) * 180.0 / math.PI
+		raylib.DrawRectanglePro(barrel_rect, origin, archer_rotation, constants.TOWER_SHADOW)
+		
+		// Barrel (main body) - positioned at tower center, origin at bottom center
+		barrel_rect = raylib.Rectangle{
+			x = f32(cx),
+			y = f32(cy),
+			width = f32(barrel_w),
+			height = f32(barrel_h),
+		}
+		raylib.DrawRectanglePro(barrel_rect, origin, archer_rotation, constants.TOWER_ARCHER_WOOD)
 	}
 }
 

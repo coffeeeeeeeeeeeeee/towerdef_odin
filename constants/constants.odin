@@ -217,7 +217,7 @@ COLOR_ENEMY :: raylib.Color{220, 60, 60, 255}
 COLOR_ENEMY_GREEN :: raylib.Color{60, 180, 60, 255}
 COLOR_ENEMY_BLUE :: raylib.Color{60, 100, 220, 255}
 COLOR_ENEMY_BOSS :: raylib.Color{220, 200, 60, 255}
-COLOR_ENEMY_FLYING :: raylib.Color{180, 120, 220, 255}
+COLOR_ENEMY_FLYING :: raylib.Color{255, 220, 60, 255}  // Yellow flying enemy
 
 COLOR_GRID_LINE :: raylib.Color{150, 150, 150, 100}
 COLOR_PATH :: raylib.Color{210, 180, 140, 255}
@@ -228,6 +228,20 @@ COLOR_TREE_LEAVES :: raylib.Color{34, 139, 34, 255}
 COLOR_BLOCK :: raylib.Color{128, 128, 128, 255}
 COLOR_OBSTACLE :: raylib.Color{160, 82, 45, 255}
 COLOR_LASER_BEAM :: raylib.Color{255, 68, 68, 255}
+
+// Enemy colors
+ENEMY_GREEN :: raylib.Color{0, 255, 0, 255}
+ENEMY_BLUE :: raylib.Color{0, 0, 255, 255}
+ENEMY_FLYING :: raylib.Color{255, 220, 60, 255}  // Yellow flying enemy
+
+// Tower stroke colors (for rendering)
+TOWER_LASER_STROKE :: raylib.Color{80, 90, 100, 255}
+TOWER_CANNON_STROKE :: raylib.Color{90, 100, 110, 255}
+TOWER_MISSILE_STROKE :: raylib.Color{100, 90, 80, 255}
+TOWER_SNIPER_BASE :: raylib.Color{100, 110, 120, 255}
+TOWER_SNIPER_STROKE :: raylib.Color{70, 80, 90, 255}
+TOWER_ARCHER_BASE :: raylib.Color{120, 100, 80, 255}
+TOWER_ARCHER_STROKE :: raylib.Color{90, 70, 50, 255}
 
 // UI Size Constants (raygui minimum sizes)
 UI_BUTTON_WIDTH :: 80
@@ -260,7 +274,7 @@ TOWER_BORDER_THICKNESS :: 3            // Border thickness in pixels
 TOWER_BORDER_COLOR :: raylib.BLACK
 TOWER_INNER_COLOR :: raylib.DARKGRAY   // Center dot color
 TOWER_INNER_SIZE_RATIO :: 0.25         // Inner dot size as ratio of tower size
-TOWER_CORNER_ROUNDNESS :: 0.2          // Rectangle rounded corners (0.0 to 1.0)
+TOWER_ROUNDED_CORNER :: 0.3            // Rectangle rounded corners (0.0 to 1.0)
 TOWER_CORNER_SEGMENTS :: 8             // Number of segments for rounded corners
 
 // Tower Color Constants
@@ -295,3 +309,5 @@ ENEMY_SPEED_GREEN :: 1.8               // Fast green enemies (50% faster)
 ENEMY_SPEED_BLUE :: 1.1                // Medium blue enemies
 ENEMY_SPEED_BOSS :: 0.5                // Slow bosses
 ENEMY_SPEED_FLYING :: 1.3              // Flying enemies
+
+ENEMY_STROKE_WIDTH :: 4

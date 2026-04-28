@@ -360,7 +360,12 @@ find_target :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> ^entiti
 		dist := math.sqrt_f32(dx*dx + dy*dy)
 		
 		if dist <= tower.range {
-			append(&eligible, enemy)
+			// CANNON and SNIPER cannot target flying enemies
+			// Only ARCHER, MISSILE, and LASER can target flying enemies
+			can_target_flying := tower.type == .ARCHER || tower.type == .MISSILE || tower.type == .LASER
+			if !enemy.is_flying || can_target_flying {
+				append(&eligible, enemy)
+			}
 		}
 	}
 	

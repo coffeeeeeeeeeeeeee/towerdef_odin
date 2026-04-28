@@ -372,6 +372,14 @@ input_handle_camera :: proc(app: ^entities.App_State) {
 		mouse_x := raylib.GetMouseX()
 		mouse_y := raylib.GetMouseY()
 		
+		// Get grid cell under mouse before zoom using screen_to_grid
+		grid_col, grid_row := screen_to_grid(app, mouse_x, mouse_y)
+		
+		// Calculate exact position within the cell (fractional part)
+		cs_old := f32(app.settings.cell_size) * app.zoom
+		cell_offset_x := (f32(mouse_x) - f32(app.camera_offset_x)) / cs_old - f32(grid_col)
+		cell_offset_y := (f32(mouse_y) - f32(app.camera_offset_y)) / cs_old - f32(grid_row)
+		
 		// Update target zoom with continuous value
 		app.target_zoom += wheel_movement * constants.ZOOM_SPEED
 		
@@ -383,16 +391,14 @@ input_handle_camera :: proc(app: ^entities.App_State) {
 			app.target_zoom = constants.ZOOM_MAX
 		}
 		
-		// Use current zoom for calculation (not target, to avoid jumping)
-		old_zoom := app.zoom
+		// Calculate new cell size with target zoom
+		cs_new := f32(app.settings.cell_size) * app.target_zoom
 		
-		// Calculate zoom ratio (inverted for correct direction)
-		zoom_ratio := old_zoom / app.target_zoom
-		
-		// Calculate offset adjustment to keep mouse position stable
-		// new_offset = mouse - (mouse - old_offset) * zoom_ratio
-		app.camera_offset_x = i32(f32(mouse_x) - (f32(mouse_x) - f32(app.camera_offset_x)) * zoom_ratio)
-		app.camera_offset_y = i32(f32(mouse_y) - (f32(mouse_y) - f32(app.camera_offset_y)) * zoom_ratio)
+		// Calculate target camera offset to keep the same grid cell + offset under mouse
+		// mouse = offset + (grid + cell_offset) * cs_new
+		// offset = mouse - (grid + cell_offset) * cs_new
+		app.target_camera_offset_x = i32(f32(mouse_x) - (f32(grid_col) + cell_offset_x) * cs_new)
+		app.target_camera_offset_y = i32(f32(mouse_y) - (f32(grid_row) + cell_offset_y) * cs_new)
 	}
 	
 	// Pan with middle mouse button
@@ -400,5 +406,8 @@ input_handle_camera :: proc(app: ^entities.App_State) {
 		mouse_delta := raylib.GetMouseDelta()
 		app.camera_offset_x += i32(mouse_delta.x)
 		app.camera_offset_y += i32(mouse_delta.y)
+		// Also update target offsets so they stay in sync during panning
+		app.target_camera_offset_x = app.camera_offset_x
+		app.target_camera_offset_y = app.camera_offset_y
 	}
 }

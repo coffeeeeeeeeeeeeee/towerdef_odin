@@ -21,6 +21,9 @@ Projectile :: struct {
 	type: constants.Tower_Type,
 	aoe: f32,
 	critical_level: i32,
+	
+	// Rotation
+	angle: f32,  // Direction of movement in radians
 }
 
 // Initialize a projectile

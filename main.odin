@@ -39,8 +39,11 @@ main :: proc() {
 		// Handle input
 		systems.input_handle(&app)
 		
-		// Smooth zoom interpolation with easing (slow start, fast end)
-		if app.zoom != app.target_zoom {
+		// Smooth zoom and camera offset interpolation
+		zoom_needs_update := app.zoom != app.target_zoom
+		camera_needs_update := app.camera_offset_x != app.target_camera_offset_x || app.camera_offset_y != app.target_camera_offset_y
+		
+		if zoom_needs_update || camera_needs_update {
 			// Calculate progress based on zoom difference
 			total_diff := app.target_zoom - app.zoom
 			if total_diff < 0 {
@@ -62,27 +65,44 @@ main :: proc() {
 			
 			// Apply easing to speed
 			eased_speed := speed * constants.ease_zoom(progress)
+			if eased_speed > 1.0 {
+				eased_speed = 1.0
+			}
 			
-			// Apply zoom change
-			if app.target_zoom > app.zoom {
-				app.zoom += eased_speed * total_diff
-				if app.zoom > app.target_zoom {
-					app.zoom = app.target_zoom
+			// Smooth zoom
+			if zoom_needs_update {
+				app.zoom = app.zoom + (app.target_zoom - app.zoom) * eased_speed
+				// Snap to target when very close
+				diff := app.zoom - app.target_zoom
+				if diff < 0 {
+					diff = -diff
 				}
-			} else {
-				app.zoom -= eased_speed * total_diff
-				if app.zoom < app.target_zoom {
+				if diff < 0.001 {
 					app.zoom = app.target_zoom
 				}
 			}
 			
-			// Snap to target when very close
-			diff := app.zoom - app.target_zoom
-			if diff < 0 {
-				diff = -diff
-			}
-			if diff < 0.001 {
-				app.zoom = app.target_zoom
+			// Smooth camera offset (same easing as zoom)
+			if camera_needs_update {
+				offset_x_diff := f32(app.target_camera_offset_x - app.camera_offset_x)
+				offset_y_diff := f32(app.target_camera_offset_y - app.camera_offset_y)
+				
+				app.camera_offset_x = app.camera_offset_x + i32(offset_x_diff * eased_speed)
+				app.camera_offset_y = app.camera_offset_y + i32(offset_y_diff * eased_speed)
+				
+				// Snap to target when very close
+				x_diff := app.camera_offset_x - app.target_camera_offset_x
+				y_diff := app.camera_offset_y - app.target_camera_offset_y
+				if x_diff < 0 {
+					x_diff = -x_diff
+				}
+				if y_diff < 0 {
+					y_diff = -y_diff
+				}
+				if x_diff < 1 && y_diff < 1 {
+					app.camera_offset_x = app.target_camera_offset_x
+					app.camera_offset_y = app.target_camera_offset_y
+				}
 			}
 		}
 		
@@ -146,6 +166,8 @@ app_init :: proc() {
 		target_zoom = 1.0,
 		camera_offset_x = camera_offset_x,
 		camera_offset_y = camera_offset_y,
+		target_camera_offset_x = camera_offset_x,
+		target_camera_offset_y = camera_offset_y,
 		selected_cell = {row = 0, col = 0, valid = false},
 	}
 	

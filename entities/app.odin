@@ -88,6 +88,8 @@ App_State :: struct {
 	// Camera/View
 	camera_offset_x: i32,
 	camera_offset_y: i32,
+	target_camera_offset_x: i32,  // For smooth zoom animation
+	target_camera_offset_y: i32,  // For smooth zoom animation
 	zoom: f32,
 	target_zoom: f32,  // For smooth zoom interpolation
 	

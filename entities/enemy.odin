@@ -182,11 +182,11 @@ enemy_get_color :: proc(e: ^Enemy) -> raylib.Color {
 	case e.is_boss:
 		return e.boss_color
 	case e.is_green:
-		return raylib.Color{0, 255, 0, 255}
+		return constants.ENEMY_GREEN
 	case e.is_blue:
-		return raylib.Color{0, 0, 255, 255}
+		return constants.ENEMY_BLUE
 	case e.is_flying:
-		return raylib.Color{255, 0, 0, 255}
+		return constants.ENEMY_FLYING
 	case:
 		return constants.COLOR_ENEMY
 	}
