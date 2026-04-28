@@ -310,4 +310,12 @@ ENEMY_SPEED_BLUE :: 1.1                // Medium blue enemies
 ENEMY_SPEED_BOSS :: 0.5                // Slow bosses
 ENEMY_SPEED_FLYING :: 1.3              // Flying enemies
 
+// Enemy Size Constants (as ratio of cell size)
+ENEMY_SIZE_BOSS :: 0.40                // Boss enemies (large)
+ENEMY_SIZE_FLYING :: 0.25              // Flying enemies (small)
+ENEMY_SIZE_BLUE :: 0.30                // Blue enemies (medium)
+ENEMY_SIZE_GREEN :: 0.20               // Green enemies (tiny)
+ENEMY_SIZE_DEFAULT :: 0.30             // Normal enemies (medium)
+
 ENEMY_STROKE_WIDTH :: 4
+ENEMY_SHADOW_COLOR :: raylib.Color{40, 40, 40, 40}

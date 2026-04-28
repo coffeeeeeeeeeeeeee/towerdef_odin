@@ -26,12 +26,19 @@ main :: proc() {
 	// Initialize random seed
 	rand.reset(u64(raylib.GetTime() * 1000))
 	
+	// Initialize translations
+	constants.init_translations()
+	
+	// Initialize fonts
+	constants.load_fonts()
+	defer constants.unload_fonts()
+	
 	// Initialize game
 	app_init()
 	defer app_destroy()
 	
 	// Main game loop
-	for !raylib.WindowShouldClose() {
+	for !raylib.WindowShouldClose() && !app.should_quit {
 		// Calculate delta time
 		dt := raylib.GetFrameTime()
 		app.delta_time = dt

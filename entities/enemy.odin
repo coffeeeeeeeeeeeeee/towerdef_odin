@@ -196,14 +196,14 @@ enemy_get_color :: proc(e: ^Enemy) -> raylib.Color {
 enemy_get_size :: proc(e: ^Enemy) -> f32 {
 	switch {
 	case e.is_boss:
-		return 0.60
+		return constants.ENEMY_SIZE_BOSS
 	case e.is_flying:
-		return 0.25
+		return constants.ENEMY_SIZE_FLYING
 	case e.is_blue:
-		return 0.30
+		return constants.ENEMY_SIZE_BLUE
 	case e.is_green:
-		return 0.17
+		return constants.ENEMY_SIZE_GREEN
 	case:
-		return 0.30
+		return constants.ENEMY_SIZE_DEFAULT
 	}
 }

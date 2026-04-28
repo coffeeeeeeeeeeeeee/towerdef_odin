@@ -94,6 +94,13 @@ render_map :: proc(app: ^entities.App_State) {
 		sy := f32(app.selected_cell.row) * cs + f32(app.camera_offset_y)
 		render_reticle(sx, sy, cs, constants.TOWER_RETICLE_COLOR)
 	}
+	
+	// Draw reticle for selected tower in PLAYING/PAUSED modes
+	if app.selected_tower != nil && (app.state == .PLAYING || app.state == .PAUSED) {
+		sx := f32(app.selected_tower.c) * cs + f32(app.camera_offset_x)
+		sy := f32(app.selected_tower.r) * cs + f32(app.camera_offset_y)
+		render_reticle(sx, sy, cs, constants.TOWER_RETICLE_COLOR)
+	}
 }
 
 // Render paths
@@ -474,7 +481,7 @@ render_enemies :: proc(app: ^entities.App_State, cs: f32) {
 		
 		// Shadow offset
 		so := max(2, cs * 0.08)
-		shadow_color := raylib.Color{40, 40, 40, 60}
+		shadow_color := constants.ENEMY_SHADOW_COLOR
 		
 		// Draw enemy border (darkened version of body color, 2px thick)
 		border_color := raylib.Color{
@@ -495,29 +502,29 @@ render_enemies :: proc(app: ^entities.App_State, cs: f32) {
 			v3_shadow := raylib.Vector2{center_x + size + 2 + so, center_y + size + 2 + so}  // Bottom right
 			raylib.DrawTriangle(v1_shadow, v2_shadow, v3_shadow, shadow_color)
 			
-			// Triangle vertices (pointing up)
-			v1 := raylib.Vector2{center_x, center_y - size - 2}  // Top
-			v2 := raylib.Vector2{center_x - size - ENEMY_STROKE_WIDTH, center_y + size + ENEMY_STROKE_WIDTH}  // Bottom left
-			v3 := raylib.Vector2{center_x + size + ENEMY_STROKE_WIDTH, center_y + size + ENEMY_STROKE_WIDTH}  // Bottom right
-			
-			raylib.DrawTriangle(v1, v2, v3, border_color)
-			
 			// Inner triangle (body)
 			v1_body := raylib.Vector2{center_x, center_y - size}  // Top
 			v2_body := raylib.Vector2{center_x - size, center_y + size}  // Bottom left
 			v3_body := raylib.Vector2{center_x + size, center_y + size}  // Bottom right
-			
 			raylib.DrawTriangle(v1_body, v2_body, v3_body, color)
+			
+			// Triangle outline using DrawLine
+			raylib.DrawLine(i32(v1_body.x), i32(v1_body.y), i32(v2_body.x), i32(v2_body.y), border_color)
+			raylib.DrawLine(i32(v2_body.x), i32(v2_body.y), i32(v3_body.x), i32(v3_body.y), border_color)
+			raylib.DrawLine(i32(v3_body.x), i32(v3_body.y), i32(v1_body.x), i32(v1_body.y), border_color)
 		} else {
 			// Ground enemies are drawn as circles
 			center_x := x + cs / 2
 			center_y := y + cs / 2
 			
 			// Circle shadow (offset)
-			raylib.DrawCircle(i32(center_x + so), i32(center_y + so), size + ENEMY_STROKE_WIDTH, shadow_color)
+			raylib.DrawCircle(i32(center_x + so), i32(center_y + so), size, shadow_color)
 			
-			raylib.DrawCircle(i32(center_x), i32(center_y), size + ENEMY_STROKE_WIDTH, border_color)
+			// Circle body
 			raylib.DrawCircle(i32(center_x), i32(center_y), size, color)
+			
+			// Circle outline using DrawCircleLines
+			raylib.DrawCircleLines(i32(center_x), i32(center_y), size, border_color)
 		}
 		
 		// Health bar - positioned higher up and slightly taller
@@ -683,6 +690,8 @@ render_ui :: proc(app: ^entities.App_State) {
 		render_menu_ui(app)
 	case .PLAYING, .PAUSED:
 		render_game_ui(app)
+		// Render tower control panel when a tower is selected
+		render_tower_control_panel(app)
 	case .EDITOR:
 		render_editor_ui(app)
 	case .GAME_OVER:
@@ -1008,6 +1017,24 @@ gray :: proc(value: u8) -> raylib.Color {
 	return raylib.Color{value, value, value, 255}
 }
 
+// Check if mouse is over tower control panel (to prevent grid clicks)
+is_mouse_over_tower_panel :: proc(app: ^entities.App_State) -> bool {
+	if app.selected_tower == nil {
+		return false
+	}
+	
+	panel_width: i32 = 200
+	panel_height: i32 = 255
+	panel_x := raylib.GetScreenWidth() - panel_width - 10
+	panel_y := i32(150)
+	
+	mouse_x := raylib.GetMouseX()
+	mouse_y := raylib.GetMouseY()
+	
+	return mouse_x >= panel_x && mouse_x <= panel_x + panel_width &&
+	       mouse_y >= panel_y && mouse_y <= panel_y + panel_height
+}
+
 // Unified tower drawing function (JS style) - works for both editor and simulation
 // This is the main function that should be used everywhere
 draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, angle: f32 = 0, is_ghost: bool = false) {
@@ -1274,4 +1301,119 @@ render_reticle :: proc(x, y, cs: f32, color: raylib.Color) {
 	// Bottom-right corner
 	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size - reticle_len)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)}, f32(corner_thickness), color)
 	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size - reticle_len), f32(ry + reticle_size)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)}, f32(corner_thickness), color)
+}
+
+// Tower control panel state
+tower_panel_active: bool = false
+tower_panel_strategy_active: i32 = 0  // 0 = FIRST, 1 = LAST, 2 = MAX_HP, 3 = MIN_HP
+
+// Render tower control panel
+render_tower_control_panel :: proc(app: ^entities.App_State) {
+	// Only show if a tower is selected
+	if app.selected_tower == nil {
+		tower_panel_active = false
+		return
+	}
+	
+	tower := app.selected_tower
+	
+	// Panel dimensions
+	panel_width: i32 = 200
+	button_width := panel_width - 20
+	button_height: i32 = 30
+	spacing: i32 = 5
+	section_spacing: i32 = 15
+	
+	// Calculate panel height dynamically (without title):
+	// Tower info (25) + 3 upgrade buttons with spacing + section spacing + dropdown (40) + section spacing + sell button + padding
+	// sell_y calculation: start_y(40) + 3*35 + 15 + 40 + 15 = 40 + 105 + 70 = 210, then +30 for button + 15 padding = 255
+	panel_height: i32 = 255
+	
+	panel_x := raylib.GetScreenWidth() - panel_width - 10
+	panel_y := i32(150)
+	
+	// Draw panel background
+	raylib.DrawRectangle(panel_x, panel_y, panel_width, panel_height, raylib.RAYWHITE)
+	
+	// Tower info (at top, no title)
+	type_name := ""
+	switch tower.type {
+	case .ARCHER: type_name = "Archer"
+	case .CANNON: type_name = "Cannon"
+	case .SNIPER: type_name = "Sniper"
+	case .MISSILE: type_name = "Missile"
+	case .LASER: type_name = "Laser"
+	}
+	
+	info_text := fmt.tprintf("%s (Lvl %d)", type_name, tower.level)
+	info_cstr := strings.clone_to_cstring(info_text)
+	raylib.DrawText(info_cstr, panel_x + 10, panel_y + 10, 14, raylib.LIGHTGRAY)
+	
+	// Button position calculations
+	button_x := panel_x + 10
+	start_y := panel_y + 40
+	
+	// Upgrade Damage button (position 0)
+	damage_cost := constants.UPGRADE_COST_BASE + (tower.damage_level - 1) * constants.UPGRADE_COST_INCREMENTVEL
+	damage_text := fmt.tprintf("Damage ($%d)", damage_cost)
+	can_afford_damage := app.sim.money >= damage_cost
+	
+	if render_button(app, damage_text, button_x, start_y, button_width, button_height) && can_afford_damage {
+		entities.tower_upgrade_damage(tower)
+		app.sim.money -= damage_cost
+	}
+	
+	// Upgrade Speed button (position 1)
+	speed_cost := constants.UPGRADE_COST_BASE + (tower.rate_level - 1) * constants.UPGRADE_COST_INCREMENTVEL
+	speed_text := fmt.tprintf("Speed ($%d)", speed_cost)
+	can_afford_speed := app.sim.money >= speed_cost
+	
+	if render_button(app, speed_text, button_x, start_y + button_height + spacing, button_width, button_height) && can_afford_speed {
+		entities.tower_upgrade_rate(tower)
+		app.sim.money -= speed_cost
+	}
+	
+	// Upgrade Critical button (position 2)
+	crit_cost := constants.UPGRADE_COST_BASE + (tower.critical_level - 1) * constants.UPGRADE_COST_INCREMENTVEL
+	crit_text := fmt.tprintf("Critical ($%d)", crit_cost)
+	can_afford_crit := app.sim.money >= crit_cost
+	
+	if render_button(app, crit_text, button_x, start_y + (button_height + spacing) * 2, button_width, button_height) && can_afford_crit {
+		entities.tower_upgrade_critical(tower)
+		app.sim.money -= crit_cost
+	}
+	
+	// Exit button
+	if render_button(app, "Exit", button_x, start_y + (button_height + spacing) * 3, button_width, button_height) {
+		app.should_quit = true
+	}
+	
+	// Strategy section with GuiComboBox (position 3)
+	strategy_y := start_y + (button_height + spacing) * 4 + section_spacing
+	
+	// Strategy dropdown using raygui
+	strategy_text := "First;Last;Strong;Weak"
+	strategy_dropdown_bounds := raylib.Rectangle{
+		f32(button_x),
+		f32(strategy_y),
+		f32(button_width),
+		f32(30),
+	}
+	
+	// Convert strategy enum to i32 index
+	strategy_index := i32(tower.target_strategy)
+	
+	if raylib.GuiComboBox(strategy_dropdown_bounds, strings.clone_to_cstring(strategy_text), &strategy_index) != -1 {
+		tower.target_strategy = constants.Target_Strategy(strategy_index)
+	}
+	
+	// Delete/Sell button at the bottom (position 4, with extra spacing)
+	refund := entities.tower_get_sell_refund(tower)
+	delete_text := fmt.tprintf("Sell ($%d)", refund)
+	sell_y := strategy_y + 40 + section_spacing
+	
+	if render_button(app, delete_text, button_x, sell_y, button_width, button_height) {
+		simulation_remove_tower_at(app, tower.r, tower.c)
+		return  // Tower removed, exit panel
+	}
 }

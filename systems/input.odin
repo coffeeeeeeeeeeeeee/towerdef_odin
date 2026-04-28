@@ -52,6 +52,11 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 	
 	// Left click to place tower
 	if raylib.IsMouseButtonPressed(.LEFT) {
+		// Don't process grid clicks if mouse is over tower control panel
+		if is_mouse_over_tower_panel(app) {
+			return
+		}
+		
 		if is_valid_grid_pos(grid_x, grid_y) {
 			// Check if clicking on a tower
 			tile := app.editor.game_map.grid[grid_y][grid_x]
@@ -62,6 +67,9 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 				// Select tower for upgrade
 				select_tower_at(app, grid_y, grid_x)
 			case .EMPTY:
+				// Close tower panel if clicking on empty terrain
+				app.selected_tower = nil
+				
 				// Place selected tower if one is selected
 				if app.sim.selected_build_tower != .EMPTY {
 					// Get tower spec for cost

@@ -373,25 +373,52 @@ find_target :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> ^entiti
 		return nil
 	}
 	
-	// Find enemy closest to tower
+	// Sort based on target strategy
 	best_enemy := eligible[0]
-	best_dist := f32(i32(len(best_enemy.path)) - best_enemy.path_idx)
 	
-	// Calculate distance from tower to this enemy
-	dx := (best_enemy.x + 0.5) - (f32(tower.c) + 0.5)
-	dy := (best_enemy.y + 0.5) - (f32(tower.r) + 0.5)
-	best_dist = math.sqrt_f32(dx*dx + dy*dy)
-	
-	for i in 1..<len(eligible) {
-		enemy := eligible[i]
-		// Calculate distance from tower to this enemy
-		dx := (enemy.x + 0.5) - (f32(tower.c) + 0.5)
-		dy := (enemy.y + 0.5) - (f32(tower.r) + 0.5)
-		dist := math.sqrt_f32(dx*dx + dy*dy)
+	switch tower.target_strategy {
+	case .FIRST:
+		// Enemy closest to goal (furthest along path)
+		best_progress := best_enemy.path_idx
+		for i in 1..<len(eligible) {
+			enemy := eligible[i]
+			if enemy.path_idx > best_progress {
+				best_progress = enemy.path_idx
+				best_enemy = enemy
+			}
+		}
 		
-		if dist < best_dist {
-			best_dist = dist
-			best_enemy = enemy
+	case .LAST:
+		// Enemy furthest from goal (least along path)
+		best_progress := best_enemy.path_idx
+		for i in 1..<len(eligible) {
+			enemy := eligible[i]
+			if enemy.path_idx < best_progress {
+				best_progress = enemy.path_idx
+				best_enemy = enemy
+			}
+		}
+		
+	case .MAX_HP:
+		// Enemy with most HP
+		best_hp := best_enemy.hp
+		for i in 1..<len(eligible) {
+			enemy := eligible[i]
+			if enemy.hp > best_hp {
+				best_hp = enemy.hp
+				best_enemy = enemy
+			}
+		}
+		
+	case .MIN_HP:
+		// Enemy with least HP
+		best_hp := best_enemy.hp
+		for i in 1..<len(eligible) {
+			enemy := eligible[i]
+			if enemy.hp < best_hp {
+				best_hp = enemy.hp
+				best_enemy = enemy
+			}
 		}
 	}
 	
@@ -503,6 +530,30 @@ spawn_damage_number :: proc(app: ^entities.App_State, x, y, value: f32, is_criti
 // Toggle pause
 simulation_toggle_pause :: proc(app: ^entities.App_State) {
 	app.sim.paused = !app.sim.paused
+}
+
+// Remove tower at position and refund money
+simulation_remove_tower_at :: proc(app: ^entities.App_State, row, col: i32) -> bool {
+	for i := 0; i < len(app.sim.towers); i += 1 {
+		tower := &app.sim.towers[i]
+		if tower.r == row && tower.c == col {
+			// Calculate refund
+			refund := entities.tower_get_sell_refund(tower)
+			app.sim.money += refund
+			
+			// Remove from grid
+			app.editor.game_map.grid[row][col] = .EMPTY
+			
+			// Remove from towers array
+			ordered_remove(&app.sim.towers, i)
+			
+			// Deselect tower
+			app.selected_tower = nil
+			
+			return true
+		}
+	}
+	return false
 }
 
 // Cleanup simulation

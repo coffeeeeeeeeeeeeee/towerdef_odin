@@ -70,6 +70,7 @@ Settings :: struct {
 	cell_size: i32,
 	show_grid: bool,
 	show_fps: bool,
+	language: constants.Language,
 }
 
 // Spawn_Point and Path_Node are defined in map.odin and enemy.odin
@@ -108,6 +109,9 @@ App_State :: struct {
 	// Time
 	last_frame_time: f64,
 	delta_time: f32,
+	
+	// Quit flag
+	should_quit: bool,
 }
 
 // Set game state
