@@ -674,12 +674,12 @@ render_damage_numbers :: proc(app: ^entities.App_State, cs: f32) {
 		color.a = alpha
 		
 		damage_text := fmt.tprintf("%.0f", dn.value)
-		font_size := i32(cs * 0.4)
+		font_size := cs * 0.4
 		if dn.is_critical {
-			font_size = i32(cs * 0.5)
+			font_size = cs * 0.5
 		}
 		
-		raylib.DrawText(strings.clone_to_cstring(damage_text), i32(x), i32(y), font_size, color)
+		raylib.DrawTextEx(constants.game_fonts.bold, strings.clone_to_cstring(damage_text), {x, y}, font_size, 0, color)
 	}
 }
 
@@ -696,6 +696,8 @@ render_ui :: proc(app: ^entities.App_State) {
 		render_editor_ui(app)
 	case .GAME_OVER:
 		render_game_over_ui(app)
+	case .SETTINGS:
+		render_settings_menu(app)
 	}
 	
 	// FPS counter
@@ -713,28 +715,40 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	// Black background
 	raylib.DrawRectangle(0, 0, screen_width, screen_height, raylib.BLACK)
 	
-	// Title
-	title := "Tower Defense"
-	title_size := 60
-	title_cstr := strings.clone_to_cstring(title)
-	title_x := screen_width / 2 - raylib.MeasureText(title_cstr, i32(title_size)) / 2
-	raylib.DrawText(title_cstr, title_x, screen_height / 4, i32(title_size), raylib.WHITE)
+	// Title (using bold font)
+	title_text := constants.get_text(.MENU_TITLE)
+	title_size := f32(screen_height) * 0.08
+	title_width := f32(raylib.MeasureTextEx(constants.game_fonts.bold, strings.clone_to_cstring(title_text), title_size, 0).x)
+	title_x := f32(screen_width) / 2 - title_width / 2
+	raylib.DrawTextEx(constants.game_fonts.bold, strings.clone_to_cstring(title_text), {title_x, f32(screen_height) / 4}, title_size, 0, raylib.WHITE)
 	
 	// Buttons (using UI constants)
 	menu_button_width := i32(constants.UI_BUTTON_WIDTH)
 	menu_button_height := i32(constants.UI_BUTTON_HEIGHT)
 	menu_button_x := screen_width / 2 - menu_button_width / 2
 	
+	// Play button
+	play_button_y := screen_height / 2
+	if render_button(app, constants.get_text(.MENU_BUTTON_PLAY), menu_button_x, play_button_y, menu_button_width, menu_button_height) {
+		entities.app_set_state(app, .PLAYING)
+	}
+	
 	// Editor button
-	editor_button_y := screen_height / 2
-	if render_button(app, "Editor", menu_button_x, editor_button_y, menu_button_width, menu_button_height) {
+	editor_button_y := play_button_y + menu_button_height + 10
+	if render_button(app, constants.get_text(.MENU_BUTTON_EDITOR), menu_button_x, editor_button_y, menu_button_width, menu_button_height) {
 		entities.app_set_state(app, .EDITOR)
 	}
 	
+	// Settings button
+	settings_button_y := editor_button_y + menu_button_height + 10
+	if render_button(app, constants.get_text(.MENU_BUTTON_SETTINGS), menu_button_x, settings_button_y, menu_button_width, menu_button_height) {
+		entities.app_set_state(app, .SETTINGS)
+	}
+	
 	// Exit button
-	exit_button_y := editor_button_y + menu_button_height + 10
-	if render_button(app, "Exit", menu_button_x, exit_button_y, menu_button_width, menu_button_height) {
-		// Signal to quit
+	exit_button_y := settings_button_y + menu_button_height + 10
+	if render_button(app, constants.get_text(.MENU_BUTTON_EXIT), menu_button_x, exit_button_y, menu_button_width, menu_button_height) {
+		app.should_quit = true
 	}
 }
 
@@ -979,6 +993,145 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 	}
 }
 
+// Render settings menu
+render_settings_menu :: proc(app: ^entities.App_State) {
+	screen_width := raylib.GetScreenWidth()
+	screen_height := raylib.GetScreenHeight()
+	
+	// Background
+	raylib.DrawRectangle(0, 0, i32(screen_width), i32(screen_height), raylib.Color{20, 20, 30, 255})
+	
+	// Title
+	title_text := "Settings"
+	title_size := i32(30)
+	title_width := raylib.MeasureText(strings.clone_to_cstring(title_text), title_size)
+	raylib.DrawText(strings.clone_to_cstring(title_text), (i32(screen_width) - title_width) / 2, 50, title_size, raylib.WHITE)
+	
+	// Settings panel
+	panel_x := i32(screen_width) / 2 - 200
+	panel_y := i32(100)
+	panel_width := i32(400)
+	panel_height := i32(400)
+	
+	raylib.DrawRectangle(panel_x, panel_y, panel_width, panel_height, raylib.Color{40, 40, 50, 255})
+	raylib.DrawRectangleLines(panel_x, panel_y, panel_width, panel_height, raylib.GRAY)
+	
+	// Setting items
+	item_y := panel_y + 20
+	item_height := i32(35)
+	label_width := i32(150)
+	
+	// Master Volume
+	raylib.DrawText(strings.clone_to_cstring("Volume:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
+	volume_value := i32(app.settings.master_volume * 100)
+	volume_text := fmt.tprintf("%d%%", volume_value)
+	raylib.DrawText(strings.clone_to_cstring(volume_text), panel_x + panel_width - 80, item_y + 8, 20, raylib.WHITE)
+	
+	// Volume minus button
+	if render_button(app, "-", panel_x + label_width, item_y, 30, item_height) {
+		if app.settings.master_volume > 0.0 {
+			app.settings.master_volume -= 0.1
+			if app.settings.master_volume < 0.0 {
+				app.settings.master_volume = 0.0
+			}
+		}
+	}
+	
+	// Volume plus button
+	if render_button(app, "+", panel_x + label_width + 35, item_y, 30, item_height) {
+		if app.settings.master_volume < 1.0 {
+			app.settings.master_volume += 0.1
+			if app.settings.master_volume > 1.0 {
+				app.settings.master_volume = 1.0
+			}
+		}
+	}
+	
+	item_y += item_height + 15
+	
+	// Language selector
+	raylib.DrawText(strings.clone_to_cstring("Language:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
+	lang_text := "English"
+	#partial switch app.settings.language {
+	case .SPANISH: lang_text = "Spanish"
+	case .PORTUGUESE: lang_text = "Portuguese"
+	}
+	raylib.DrawText(strings.clone_to_cstring(lang_text), panel_x + panel_width - 120, item_y + 8, 20, raylib.WHITE)
+	
+	// Language prev button
+	if render_button(app, "<", panel_x + label_width, item_y, 40, item_height) {
+		switch app.settings.language {
+		case .ENGLISH: app.settings.language = .PORTUGUESE
+		case .SPANISH: app.settings.language = .ENGLISH
+		case .PORTUGUESE: app.settings.language = .SPANISH
+		}
+		constants.set_language(app.settings.language)
+	}
+	
+	// Language next button
+	if render_button(app, ">", panel_x + label_width + 45, item_y, 40, item_height) {
+		switch app.settings.language {
+		case .ENGLISH: app.settings.language = .SPANISH
+		case .SPANISH: app.settings.language = .PORTUGUESE
+		case .PORTUGUESE: app.settings.language = .ENGLISH
+		}
+		constants.set_language(app.settings.language)
+	}
+	
+	item_y += item_height + 15
+	
+	// Show Grid Toggle
+	raylib.DrawText(strings.clone_to_cstring("Show Grid:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
+	grid_text := "ON" if app.settings.show_grid else "OFF"
+	if render_button(app, grid_text, panel_x + panel_width - 100, item_y, 80, item_height) {
+		app.settings.show_grid = !app.settings.show_grid
+	}
+	
+	item_y += item_height + 15
+	
+	// Show Damage Numbers Toggle
+	raylib.DrawText(strings.clone_to_cstring("Damage Numbers:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
+	dmg_text := "ON" if app.settings.show_damage_numbers else "OFF"
+	if render_button(app, dmg_text, panel_x + panel_width - 100, item_y, 80, item_height) {
+		app.settings.show_damage_numbers = !app.settings.show_damage_numbers
+	}
+	
+	item_y += item_height + 15
+	
+	// Show Tower Range Toggle
+	raylib.DrawText(strings.clone_to_cstring("Tower Range:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
+	range_text := "ON" if app.settings.show_tower_range else "OFF"
+	if render_button(app, range_text, panel_x + panel_width - 100, item_y, 80, item_height) {
+		app.settings.show_tower_range = !app.settings.show_tower_range
+	}
+	
+	item_y += item_height + 15
+	
+	// Show FPS Toggle
+	raylib.DrawText(strings.clone_to_cstring("Show FPS:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
+	fps_text := "ON" if app.settings.show_fps else "OFF"
+	if render_button(app, fps_text, panel_x + panel_width - 100, item_y, 80, item_height) {
+		app.settings.show_fps = !app.settings.show_fps
+	}
+	
+	item_y += item_height + 15
+	
+	// Auto Start Wave Toggle
+	raylib.DrawText(strings.clone_to_cstring("Auto Wave:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
+	auto_text := "ON" if app.settings.auto_start_wave else "OFF"
+	if render_button(app, auto_text, panel_x + panel_width - 100, item_y, 80, item_height) {
+		app.settings.auto_start_wave = !app.settings.auto_start_wave
+	}
+	
+	// Back button
+	back_y := panel_y + panel_height + 20
+	back_width := i32(150)
+	back_x := (i32(screen_width) - back_width) / 2
+	if render_button(app, "Back to Menu", back_x, back_y, back_width, 40) {
+		entities.app_set_state(app, .MENU)
+	}
+}
+
 // Helper to render a button
 render_button :: proc(app: ^entities.App_State, text: string, x, y, width, height: i32) -> bool {
 	mouse_x := raylib.GetMouseX()
@@ -987,22 +1140,24 @@ render_button :: proc(app: ^entities.App_State, text: string, x, y, width, heigh
 	hovered := mouse_x >= x && mouse_x <= x + width &&
 	           mouse_y >= y && mouse_y <= y + height
 	
-	color := raylib.LIGHTGRAY
+	color := constants.UI_BUTTON_COLOR
 	if hovered {
-		color = raylib.GRAY
+		color = constants.UI_BUTTON_HOVER_COLOR
 		if raylib.IsMouseButtonDown(.LEFT) {
-			color = raylib.DARKGRAY
+			color = constants.UI_BUTTON_PRESSED_COLOR
 		}
 	}
 	
+	raylib.DrawRectangle(x + constants.UI_BUTTON_SHADOW_OFFSET, y + constants.UI_BUTTON_SHADOW_OFFSET, width, height, constants.UI_BUTTON_SHADOW_COLOR)
 	raylib.DrawRectangle(x, y, width, height, color)
-	raylib.DrawRectangleLines(x, y, width, height, raylib.WHITE)
 	
-	// Text (centered) - using UI font size
-	text_width := raylib.MeasureText(strings.clone_to_cstring(text), constants.UI_BUTTON_FONT_SIZE)
-	text_x := x + width / 2 - text_width / 2
-	text_y := y + height / 2 - constants.UI_BUTTON_FONT_SIZE / 2
-	raylib.DrawText(strings.clone_to_cstring(text), text_x, text_y, constants.UI_BUTTON_FONT_SIZE, raylib.WHITE)
+	// Text (centered) - using UI font with regular font (larger size)
+	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
+	text_width := f32(raylib.MeasureTextEx(constants.game_fonts.regular, strings.clone_to_cstring(text), font_size, 0).x)
+	text_x := f32(x) + f32(width) / 2 - text_width / 2
+	text_y := f32(y) + f32(height) / 2 - font_size / 2
+	dark_gray := raylib.Color{40, 40, 40, 255}
+	raylib.DrawTextEx(constants.game_fonts.bold, strings.clone_to_cstring(text), {text_x, text_y}, font_size, 0, dark_gray)
 	
 	// Click check
 	if hovered && raylib.IsMouseButtonPressed(.LEFT) {

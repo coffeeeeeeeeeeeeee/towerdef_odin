@@ -21,6 +21,11 @@ input_handle :: proc(app: ^entities.App_State) {
 		input_handle_editor(app)
 	case .GAME_OVER:
 		input_handle_game_over(app)
+	case .SETTINGS:
+		// Settings menu input is handled via render_button in render_settings_menu
+		if raylib.IsKeyPressed(.ESCAPE) {
+			entities.app_set_state(app, .MENU)
+		}
 	}
 }
 

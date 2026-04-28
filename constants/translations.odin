@@ -17,7 +17,9 @@ Language :: enum {
 TranslationKey :: enum {
 	// Menu
 	MENU_TITLE,
+	MENU_BUTTON_PLAY,
 	MENU_BUTTON_EDITOR,
+	MENU_BUTTON_SETTINGS,
 	MENU_BUTTON_EXIT,
 	
 	// Game UI
@@ -81,7 +83,9 @@ TranslationKey :: enum {
 // Map for key string to enum conversion
 KEY_STRING_MAP: map[string]TranslationKey = {
 	"MENU_TITLE" = .MENU_TITLE,
+	"MENU_BUTTON_PLAY" = .MENU_BUTTON_PLAY,
 	"MENU_BUTTON_EDITOR" = .MENU_BUTTON_EDITOR,
+	"MENU_BUTTON_SETTINGS" = .MENU_BUTTON_SETTINGS,
 	"MENU_BUTTON_EXIT" = .MENU_BUTTON_EXIT,
 	"UI_MONEY" = .UI_MONEY,
 	"UI_HEALTH" = .UI_HEALTH,
@@ -138,7 +142,9 @@ DEFAULT_TRANSLATIONS: map[Language]map[TranslationKey]string = {
 	.ENGLISH = {
 		// Menu
 		.MENU_TITLE = "First Impact",
+		.MENU_BUTTON_PLAY = "Play",
 		.MENU_BUTTON_EDITOR = "Editor",
+		.MENU_BUTTON_SETTINGS = "Settings",
 		.MENU_BUTTON_EXIT = "Exit",
 		
 		// Game UI

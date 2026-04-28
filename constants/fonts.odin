@@ -15,7 +15,7 @@ game_fonts: Fonts
 // Font paths
 FONT_REGULAR_PATH :: "fonts/Inter_18pt-Regular.ttf"
 FONT_LIGHT_PATH :: "fonts/Inter_18pt-Light.ttf"
-FONT_BOLD_PATH :: "fonts/Inter_18pt-Bold.ttf"
+FONT_BOLD_PATH :: "fonts/Inter_24pt-Bold.ttf"
 
 // Load all fonts
 load_fonts :: proc() {

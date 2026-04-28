@@ -71,6 +71,18 @@ Settings :: struct {
 	show_grid: bool,
 	show_fps: bool,
 	language: constants.Language,
+	
+	// Audio
+	master_volume: f32,
+	
+	// Display
+	fullscreen: bool,
+	vsync: bool,
+	
+	// Gameplay
+	show_damage_numbers: bool,
+	show_tower_range: bool,
+	auto_start_wave: bool,
 }
 
 // Spawn_Point and Path_Node are defined in map.odin and enemy.odin

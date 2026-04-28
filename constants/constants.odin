@@ -9,6 +9,7 @@ Game_State :: enum {
 	PAUSED,
 	EDITOR,
 	GAME_OVER,
+	SETTINGS,
 }
 
 UPGRADE_COST_BASE :: 50
@@ -246,7 +247,15 @@ TOWER_ARCHER_STROKE :: raylib.Color{90, 70, 50, 255}
 // UI Size Constants (raygui minimum sizes)
 UI_BUTTON_WIDTH :: 80
 UI_BUTTON_HEIGHT :: 24
-UI_BUTTON_FONT_SIZE :: 10
+UI_BUTTON_FONT_SIZE :: 16
+UI_BUTTON_SHADOW_OFFSET :: 3
+
+// UI Color Constants
+UI_BUTTON_COLOR :: raylib.Color{255, 255, 255, 255}
+UI_BUTTON_HOVER_COLOR :: raylib.Color{220, 220, 220, 255}
+UI_BUTTON_PRESSED_COLOR :: raylib.Color{255, 255, 0, 255}
+
+UI_BUTTON_SHADOW_COLOR :: raylib.Color{0, 0, 0, 20}
 
 UI_DROPDOWN_WIDTH :: 80
 UI_DROPDOWN_HEIGHT :: 24
@@ -292,7 +301,7 @@ TOWER_CANNON_BASE :: raylib.Color{122, 138, 154, 255}       // Cannon base (JS: 
 TOWER_MISSILE_BASE :: raylib.Color{138, 122, 106, 255}      // Missile base (JS: #8a7a6a)
 TOWER_MISSILE_POD :: raylib.Color{106, 90, 74, 255}         // Missile pods (JS: #6a5a4a)
 TOWER_MISSILE_WARHEAD :: raylib.Color{255, 85, 85, 255}     // Missile warhead (JS: #ff5555)
-TOWER_SHADOW :: raylib.Color{40, 40, 40, 40}                // Shadow color
+TOWER_SHADOW :: raylib.Color{0, 0, 0, 20}                // Shadow color
 TOWER_ARCHER_WOOD :: raylib.Color{139, 90, 43, 255}         // Archer bow wood
 TOWER_ARCHER_STRING :: raylib.Color{200, 200, 200, 255}     // Archer bow string
 TOWER_RANGE_OUTLINE :: raylib.Color{255, 255, 255, 60}      // Tower range area outline (semi-transparent white)
@@ -318,4 +327,4 @@ ENEMY_SIZE_GREEN :: 0.20               // Green enemies (tiny)
 ENEMY_SIZE_DEFAULT :: 0.30             // Normal enemies (medium)
 
 ENEMY_STROKE_WIDTH :: 4
-ENEMY_SHADOW_COLOR :: raylib.Color{40, 40, 40, 40}
+ENEMY_SHADOW_COLOR :: raylib.Color{0, 0, 0, 20}
