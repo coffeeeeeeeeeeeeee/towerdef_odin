@@ -78,6 +78,7 @@ Settings :: struct {
 	// Display
 	fullscreen: bool,
 	vsync: bool,
+	antialiasing: i32,
 	
 	// Gameplay
 	show_damage_numbers: bool,

@@ -185,6 +185,6 @@ tower_is_aligned :: proc(t: ^Tower, target_angle: f32) -> bool {
 tower_get_cannon_tip :: proc(t: ^Tower, cs: f32) -> (x, y: f32) {
 	center_x := f32(t.c) * cs + cs / 2
 	center_y := f32(t.r) * cs + cs / 2
-	cannon_length := cs * 0.45
+	cannon_length := cs * 0.55  // Increased to match visual cannon length
 	return center_x + math.cos(t.angle) * cannon_length, center_y + math.sin(t.angle) * cannon_length
 }

@@ -22,6 +22,23 @@ TranslationKey :: enum {
 	MENU_BUTTON_SETTINGS,
 	MENU_BUTTON_EXIT,
 	
+	// Settings Menu
+	SETTINGS_TITLE,
+	SETTINGS_VOLUME,
+	SETTINGS_LANGUAGE,
+	SETTINGS_LANGUAGE_ENGLISH,
+	SETTINGS_LANGUAGE_SPANISH,
+	SETTINGS_LANGUAGE_PORTUGUESE,
+	SETTINGS_SHOW_GRID,
+	SETTINGS_SHOW_DAMAGE_NUMBERS,
+	SETTINGS_SHOW_TOWER_RANGE,
+	SETTINGS_SHOW_FPS,
+	SETTINGS_AUTO_WAVE,
+	SETTINGS_ANTIALIASING,
+	SETTINGS_BACK_TO_MENU,
+	UI_ON,
+	UI_OFF,
+	
 	// Game UI
 	UI_MONEY,
 	UI_HEALTH,
@@ -87,6 +104,23 @@ KEY_STRING_MAP: map[string]TranslationKey = {
 	"MENU_BUTTON_EDITOR" = .MENU_BUTTON_EDITOR,
 	"MENU_BUTTON_SETTINGS" = .MENU_BUTTON_SETTINGS,
 	"MENU_BUTTON_EXIT" = .MENU_BUTTON_EXIT,
+	
+	// Settings Menu
+	"SETTINGS_TITLE" = .SETTINGS_TITLE,
+	"SETTINGS_VOLUME" = .SETTINGS_VOLUME,
+	"SETTINGS_LANGUAGE" = .SETTINGS_LANGUAGE,
+	"SETTINGS_LANGUAGE_ENGLISH" = .SETTINGS_LANGUAGE_ENGLISH,
+	"SETTINGS_LANGUAGE_SPANISH" = .SETTINGS_LANGUAGE_SPANISH,
+	"SETTINGS_LANGUAGE_PORTUGUESE" = .SETTINGS_LANGUAGE_PORTUGUESE,
+	"SETTINGS_SHOW_GRID" = .SETTINGS_SHOW_GRID,
+	"SETTINGS_SHOW_DAMAGE_NUMBERS" = .SETTINGS_SHOW_DAMAGE_NUMBERS,
+	"SETTINGS_SHOW_TOWER_RANGE" = .SETTINGS_SHOW_TOWER_RANGE,
+	"SETTINGS_SHOW_FPS" = .SETTINGS_SHOW_FPS,
+	"SETTINGS_AUTO_WAVE" = .SETTINGS_AUTO_WAVE,
+	"SETTINGS_ANTIALIASING" = .SETTINGS_ANTIALIASING,
+	"SETTINGS_BACK_TO_MENU" = .SETTINGS_BACK_TO_MENU,
+	"UI_ON" = .UI_ON,
+	"UI_OFF" = .UI_OFF,
 	"UI_MONEY" = .UI_MONEY,
 	"UI_HEALTH" = .UI_HEALTH,
 	"UI_WAVE" = .UI_WAVE,
@@ -147,6 +181,23 @@ DEFAULT_TRANSLATIONS: map[Language]map[TranslationKey]string = {
 		.MENU_BUTTON_SETTINGS = "Settings",
 		.MENU_BUTTON_EXIT = "Exit",
 		
+		// Settings Menu
+		.SETTINGS_TITLE = "Settings",
+		.SETTINGS_VOLUME = "Volume:",
+		.SETTINGS_LANGUAGE = "Language:",
+		.SETTINGS_LANGUAGE_ENGLISH = "English",
+		.SETTINGS_LANGUAGE_SPANISH = "Spanish",
+		.SETTINGS_LANGUAGE_PORTUGUESE = "Portuguese",
+		.SETTINGS_SHOW_GRID = "Show Grid:",
+		.SETTINGS_SHOW_DAMAGE_NUMBERS = "Damage Numbers:",
+		.SETTINGS_SHOW_TOWER_RANGE = "Tower Range:",
+		.SETTINGS_SHOW_FPS = "Show FPS:",
+		.SETTINGS_AUTO_WAVE = "Auto Wave:",
+		.SETTINGS_ANTIALIASING = "Antialiasing:",
+		.SETTINGS_BACK_TO_MENU = "Back to Menu",
+		.UI_ON = "ON",
+		.UI_OFF = "OFF",
+		
 		// Game UI
 		.UI_MONEY = "Money",
 		.UI_HEALTH = "Health",
@@ -203,7 +254,7 @@ DEFAULT_TRANSLATIONS: map[Language]map[TranslationKey]string = {
 		.BIOME_FOREST = "Forest",
 		.BIOME_DESERT = "Desert",
 		.BIOME_MOUNTAIN = "Mountain",
-	},
+	}
 }
 
 // Current language (default to English)
@@ -216,17 +267,27 @@ set_language :: proc(lang: Language) {
 
 // Get translation for a key
 get_text :: proc(key: TranslationKey) -> string {
+	// Try current language
 	if translations, ok := TRANSLATIONS[current_language]; ok {
 		if text, ok2 := translations[key]; ok2 {
 			return text
 		}
 	}
-	// Fallback to English
+	
+	// Fallback to loaded English
 	if translations, ok := TRANSLATIONS[.ENGLISH]; ok {
 		if text, ok2 := translations[key]; ok2 {
 			return text
 		}
 	}
+	
+	// Final fallback to hardcoded defaults
+	if english_map, ok := DEFAULT_TRANSLATIONS[.ENGLISH]; ok {
+		if text, ok2 := english_map[key]; ok2 {
+			return text
+		}
+	}
+	
 	return "MISSING"
 }
 
@@ -236,70 +297,103 @@ get_text_f :: proc(key: TranslationKey, args: ..any) -> string {
 	return fmt.tprintf(base_text, ..args)
 }
 
+// Map language string to Language enum
+language_from_string :: proc(s: string) -> (Language, bool) {
+	switch s {
+	case "ENGLISH": return .ENGLISH, true
+	case "SPANISH": return .SPANISH, true
+	case "PORTUGUESE": return .PORTUGUESE, true
+	}
+	return .ENGLISH, false
+}
+
 // Initialize translations - call this at game start
 init_translations :: proc() {
-	// Copy defaults to TRANSLATIONS
+	// Create the TRANSLATIONS map
 	TRANSLATIONS = make(map[Language]map[TranslationKey]string)
 	
-	// Copy English defaults first
+	// Copy English defaults as fallback base
 	if english_map, ok := DEFAULT_TRANSLATIONS[.ENGLISH]; ok {
 		TRANSLATIONS[.ENGLISH] = make(map[TranslationKey]string)
 		english_ref := &TRANSLATIONS[.ENGLISH]
 		for key, value in english_map {
 			english_ref[key] = value
 		}
+	} else {
+		fmt.println("ERROR: No default English translations found!")
 	}
 	
-	// Try to load from file
-	data, success := os.read_entire_file("translations.txt")
-	if !success {
-		fmt.println("translations.txt not found, using defaults")
+	// Read translations.txt file
+	data, read_ok := os.read_entire_file("translations.txt")
+	if !read_ok {
+		fmt.println("WARNING: Could not read translations.txt, using hardcoded defaults only")
 		return
 	}
 	defer delete(data)
 	
 	content := string(data)
-	lines := strings.split(content, "\n")
-	for line in lines {
-		line_clean := strings.trim_space(line)
-		if len(line_clean) == 0 || strings.has_prefix(line_clean, "#") {
+	loaded_count := 0
+	
+	// Parse line by line
+	remaining := content
+	for len(remaining) > 0 {
+		// Find end of line
+		line_end := strings.index(remaining, "\n")
+		line: string
+		if line_end == -1 {
+			line = remaining
+			remaining = ""
+		} else {
+			line = remaining[:line_end]
+			remaining = remaining[line_end + 1:]
+		}
+		
+		// Trim carriage return (Windows line endings)
+		line = strings.trim_right(line, "\r")
+		// Trim whitespace
+		line = strings.trim_space(line)
+		
+		// Skip empty lines and comments
+		if len(line) == 0 || line[0] == '#' {
 			continue
 		}
 		
-		// Parse: KEY|LANGUAGE|VALUE
-		parts := strings.split(line_clean, "|")
-		if len(parts) != 3 {
+		// Parse KEY|LANGUAGE|VALUE
+		first_sep := strings.index(line, "|")
+		if first_sep == -1 {
 			continue
 		}
 		
-		key_str := strings.trim_space(parts[0])
-		lang_str := strings.trim_space(parts[1])
-		value := strings.trim_space(parts[2])
-		
-		// Convert language string to enum
-		lang: Language
-		switch lang_str {
-		case "ENGLISH": lang = .ENGLISH
-		case "SPANISH": lang = .SPANISH
-		case "PORTUGUESE": lang = .PORTUGUESE
-		case: continue
+		rest := line[first_sep + 1:]
+		second_sep := strings.index(rest, "|")
+		if second_sep == -1 {
+			continue
 		}
 		
-		// Create language map if not exists
-		if _, exists := TRANSLATIONS[lang]; !exists {
+		key_str := line[:first_sep]
+		lang_str := rest[:second_sep]
+		value_str := rest[second_sep + 1:]
+		
+		// Map language string to enum
+		lang, lang_ok := language_from_string(lang_str)
+		if !lang_ok {
+			continue
+		}
+		
+		// Map key string to enum
+		trans_key, key_ok := KEY_STRING_MAP[key_str]
+		if !key_ok {
+			continue
+		}
+		
+		// Ensure language map exists
+		if lang not_in TRANSLATIONS {
 			TRANSLATIONS[lang] = make(map[TranslationKey]string)
 		}
 		
-		// Convert key string to enum using map
-		key, ok := KEY_STRING_MAP[key_str]
-		if !ok {
-			continue
-		}
-		
-		// Store translation using pointer reference
-		lang_ref := &TRANSLATIONS[lang]
-		lang_ref[key] = value
+		// Clone the value string so it persists after file data is freed
+		lang_map_ref := &TRANSLATIONS[lang]
+		lang_map_ref[trans_key] = strings.clone(value_str)
+		loaded_count += 1
 	}
-	
-	fmt.println("Translations loaded from translations.txt")
 }

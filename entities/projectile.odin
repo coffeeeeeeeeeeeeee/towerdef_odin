@@ -66,6 +66,9 @@ projectile_move :: proc(p: ^Projectile, dt: f32) -> bool {
 	dy := target_y - p.y
 	dist := math.sqrt(dx * dx + dy * dy)
 	
+	// Update angle based on movement direction
+	p.angle = math.atan2(dy, dx)
+	
 	if dist < 0.01 {
 		return true // Reached target
 	}

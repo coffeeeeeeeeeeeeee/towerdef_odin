@@ -172,6 +172,7 @@ app_init :: proc() {
 			master_volume = 1.0,
 			fullscreen = false,
 			vsync = true,
+			antialiasing = 2, // 4x default
 			show_damage_numbers = true,
 			show_tower_range = true,
 			auto_start_wave = false,

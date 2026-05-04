@@ -285,11 +285,14 @@ update_laser_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, dt:
 	}
 	
 	if beam_active && tower.target != nil {
-		// Add laser beam for rendering
-		cs := f32(app.settings.cell_size)
-		start_x, start_y := entities.tower_get_cannon_tip(tower, cs)
-		end_x := tower.target.x * cs + cs / 2
-		end_y := tower.target.y * cs + cs / 2
+		// Add laser beam for rendering (in grid coordinates)
+		// Cannon tip in grid units
+		cannon_length : f32 = 0.45  // Same as tower_get_cannon_tip but in grid units
+		start_x := f32(tower.c) + 0.5 + math.cos(tower.angle) * cannon_length
+		start_y := f32(tower.r) + 0.5 + math.sin(tower.angle) * cannon_length
+		// Target center in grid units
+		end_x := tower.target.x + 0.5
+		end_y := tower.target.y + 0.5
 		
 		beam := entities.laser_beam_init(start_x, start_y, end_x, end_y)
 		append(&app.sim.laser_beams, beam)

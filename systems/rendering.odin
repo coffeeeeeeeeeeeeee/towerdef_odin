@@ -203,30 +203,54 @@ render_grid_lines :: proc(app: ^entities.App_State, cs: f32, gs: i32) {
 	}
 }
 
-// Render tower upgrades (small dots)
+// Render tower upgrades (small dots) - arranged in rows of 5 above the tower
 render_tower_upgrades :: proc(tower: ^entities.Tower, x, y, cs: f32) {
 	dot_radius := cs * 0.08
-	dot_offset := cs * 0.15
+	dot_spacing := cs * 0.15  // Horizontal spacing between dots
+	row_spacing := cs * 0.12  // Vertical spacing between rows
+	pips_per_row := 5
 	
-	// Damage upgrades (red dots on top)
+	// Calculate total number of pips
+	total_pips := (tower.damage_level - 1) + (tower.rate_level - 1) + (tower.critical_level - 1)
+	if total_pips <= 0 {
+		return
+	}
+	
+	// Start position - centered above the tower
+	row_width := f32(pips_per_row) * dot_spacing
+	start_x := x + cs / 2 - row_width / 2
+	start_y := y - cs * 0.15  // Slightly above the tower
+	
+	pip_index := 0
+	
+	// Damage upgrades (red pips) - first
 	for i in 0..<tower.damage_level - 1 {
-		dot_x := x + cs * 0.2 + f32(i) * dot_offset
-		dot_y := y + cs * 0.15
+		row := pip_index / pips_per_row
+		col := pip_index % pips_per_row
+		dot_x := start_x + f32(col) * dot_spacing
+		dot_y := start_y - f32(row) * row_spacing
 		raylib.DrawCircle(i32(dot_x), i32(dot_y), dot_radius, raylib.RED)
+		pip_index += 1
 	}
 	
-	// Rate upgrades (yellow dots on bottom)
+	// Rate upgrades (yellow pips) - second
 	for i in 0..<tower.rate_level - 1 {
-		dot_x := x + cs * 0.2 + f32(i) * dot_offset
-		dot_y := y + cs * 0.85
+		row := pip_index / pips_per_row
+		col := pip_index % pips_per_row
+		dot_x := start_x + f32(col) * dot_spacing
+		dot_y := start_y - f32(row) * row_spacing
 		raylib.DrawCircle(i32(dot_x), i32(dot_y), dot_radius, raylib.YELLOW)
+		pip_index += 1
 	}
 	
-	// Critical upgrades (blue dots on left)
+	// Critical upgrades (blue pips) - third
 	for i in 0..<tower.critical_level - 1 {
-		dot_x := x + cs * 0.15
-		dot_y := y + cs * 0.2 + f32(i) * dot_offset
+		row := pip_index / pips_per_row
+		col := pip_index % pips_per_row
+		dot_x := start_x + f32(col) * dot_spacing
+		dot_y := start_y - f32(row) * row_spacing
 		raylib.DrawCircle(i32(dot_x), i32(dot_y), dot_radius, raylib.BLUE)
+		pip_index += 1
 	}
 }
 
@@ -434,9 +458,15 @@ render_laser_beams :: proc(app: ^entities.App_State, cs: f32) {
 			u8(255 * alpha),
 		}
 		
+		// Convert from grid coordinates to screen pixels
+		start_screen_x := beam.start_x * cs + f32(app.camera_offset_x)
+		start_screen_y := beam.start_y * cs + f32(app.camera_offset_y)
+		end_screen_x := beam.end_x * cs + f32(app.camera_offset_x)
+		end_screen_y := beam.end_y * cs + f32(app.camera_offset_y)
+		
 		raylib.DrawLineEx(
-			raylib.Vector2{beam.start_x + f32(app.camera_offset_x), beam.start_y + f32(app.camera_offset_y)},
-			raylib.Vector2{beam.end_x + f32(app.camera_offset_x), beam.end_y + f32(app.camera_offset_y)},
+			raylib.Vector2{start_screen_x, start_screen_y},
+			raylib.Vector2{end_screen_x, end_screen_y},
 			3.0,
 			color,
 		)
@@ -625,22 +655,54 @@ render_projectiles :: proc(app: ^entities.App_State, cs: f32) {
 		
 		switch proj.type {
 		case .ARCHER:
-			// Arrow
+			// Arrow - small circle
 			raylib.DrawCircle(i32(x + cs / 2), i32(y + cs / 2), cs * 0.1, raylib.BROWN)
 		case .CANNON:
-			// Cannonball
+			// Cannonball - circle
 			raylib.DrawCircle(i32(x + cs / 2), i32(y + cs / 2), cs * 0.15, raylib.BLACK)
 		case .SNIPER:
-			// Bullet
+			// Bullet - small circle
 			raylib.DrawCircle(i32(x + cs / 2), i32(y + cs / 2), cs * 0.08, raylib.GREEN)
 		case .MISSILE:
-			// Missile
-			raylib.DrawRectangle(
-				i32(x + cs / 2 - cs * 0.08),
-				i32(y + cs / 2 - cs * 0.2),
-				i32(cs * 0.16),
-				i32(cs * 0.4),
-				raylib.ORANGE,
+			// Missile - rotated body + pointed tip (matching JS)
+			px := x + cs / 2
+			py := y + cs / 2
+			missile_len := cs * 0.3
+			missile_thick := cs * 0.12
+			angle := proj.angle
+			
+			// Body rectangle - rotated along trajectory
+			cos_a := math.cos(angle)
+			sin_a := math.sin(angle)
+			
+			body_rect := raylib.Rectangle{
+				x = px,
+				y = py,
+				width = missile_len * 0.7,
+				height = missile_thick,
+			}
+			body_origin := raylib.Vector2{missile_len * 0.7 / 2, missile_thick / 2}
+			rotation_deg := angle * 180.0 / math.PI
+			raylib.DrawRectanglePro(body_rect, body_origin, rotation_deg, constants.TOWER_MISSILE_POD)
+			
+			// Pointed tip triangle
+			tip_dist := missile_len * 0.2
+			tip_x := px + cos_a * tip_dist
+			tip_y := py + sin_a * tip_dist
+			
+			// Triangle tip pointing in direction of movement
+			tip_end_x := px + cos_a * (missile_len * 0.5)
+			tip_end_y := py + sin_a * (missile_len * 0.5)
+			
+			// Perpendicular offset for triangle base
+			perp_x := -sin_a * (missile_thick * 0.5)
+			perp_y := cos_a * (missile_thick * 0.5)
+			
+			raylib.DrawTriangle(
+				{tip_x + perp_x, tip_y + perp_y},
+				{tip_end_x, tip_end_y},
+				{tip_x - perp_x, tip_y - perp_y},
+				raylib.Color{255, 59, 59, 255},  // MISSILE_WARHEAD red
 			)
 		case .LASER:
 			// No projectile for laser
@@ -795,9 +857,16 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	tower_names := []string{"Archer", "Cannon", "Sniper", "Missile", "Laser"}
 	tower_costs := []i32{20, 40, 60, 50, 80}
 	
+	// Calculate total toolbar width to center it
+	total_width := i32(len(tower_types)) * constants.UI_BUTTON_WIDTH + i32(len(tower_types) - 1) * 5
+	start_x := (screen_width - total_width) / 2
+	
+	// Increased bottom margin because buttons are now taller (2 lines of text)
+	bottom_margin := i32(40)
+	
 	for i := 0; i < len(tower_types); i += 1 {
-		x := i32(10 + i * (constants.UI_BUTTON_WIDTH + 5))
-		y := i32(screen_height - constants.UI_BUTTON_HEIGHT - 10)
+		x := start_x + i32(i) * (constants.UI_BUTTON_WIDTH + 5)
+		y := i32(screen_height - constants.UI_BUTTON_HEIGHT - bottom_margin)
 		
 		// Highlight selected tower
 		is_selected := app.sim.selected_build_tower == tower_types[i]
@@ -812,24 +881,11 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			button_color = raylib.DARKGRAY
 		}
 		
-		// Draw button manually for color control
-		raylib.DrawRectangle(x, y, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT, button_color)
-		raylib.DrawRectangleLines(x, y, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT, raylib.WHITE)
+		// Format button text with name and cost
+		button_text := fmt.tprintf("%s\n$%d", tower_names[i], tower_costs[i])
 		
-		// Text
-		name_cstr := strings.clone_to_cstring(tower_names[i])
-		text_width := raylib.MeasureText(name_cstr, constants.UI_BUTTON_FONT_SIZE)
-		text_x := x + constants.UI_BUTTON_WIDTH / 2 - text_width / 2
-		text_y := y + constants.UI_BUTTON_HEIGHT / 2 - constants.UI_BUTTON_FONT_SIZE / 2
-		raylib.DrawText(name_cstr, text_x, text_y, constants.UI_BUTTON_FONT_SIZE, raylib.WHITE)
-		
-		// Click check
-		mouse_x := raylib.GetMouseX()
-		mouse_y := raylib.GetMouseY()
-		hovered := mouse_x >= x && mouse_x <= x + constants.UI_BUTTON_WIDTH &&
-		           mouse_y >= y && mouse_y <= y + constants.UI_BUTTON_HEIGHT
-		
-		if hovered && raylib.IsMouseButtonPressed(.LEFT) && can_afford {
+		// Use render_button_with_color for consistent UI (2 lines: name and cost)
+		if render_button_with_color(app, button_text, x, y, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT, button_color, 2) && can_afford {
 			if is_selected {
 				app.sim.selected_build_tower = .EMPTY  // Deselect
 			} else {
@@ -906,57 +962,64 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 	// Bottom toolbar
 	raylib.DrawRectangle(0, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT, screen_width, constants.UI_TOOLBAR_HEIGHT, raylib.Color{50, 50, 50, 200})
 	
-	// Biome selector using raygui
-	biome_text := "Plain;Forest;Desert;Mountain"
-	biome_dropdown_bounds := raylib.Rectangle{f32(10), f32(raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4), constants.UI_DROPDOWN_WIDTH, constants.UI_DROPDOWN_HEIGHT}
-	
-	// Convert biome enum to i32 index for dropdown
+	// Biome selector using render_select
+	biome_names := []string{"Plain", "Forest", "Desert", "Mountain"}
 	biome_index := i32(app.editor.current_biome)
 	
-	if raylib.GuiComboBox(biome_dropdown_bounds, strings.clone_to_cstring(biome_text), &biome_index) != -1 {
+	if render_select(app, "biome", "Biome: ", biome_names, &biome_index, 10, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4, i32(constants.UI_DROPDOWN_WIDTH), i32(constants.UI_DROPDOWN_HEIGHT), true) {
 		app.editor.current_biome = constants.Biome(biome_index)
 		app.editor.game_map.biome = constants.Biome(biome_index)
 	}
 	
-	// Show Paths toggle button
-	paths_button_text := app.editor.show_paths ? "Hide Paths" : "Show Paths"
-	if render_button(app, paths_button_text, screen_width - 510, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
-		app.editor.show_paths = !app.editor.show_paths
+	// Right-side buttons - laid out from right to left with consistent gap
+	y_pos := raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4
+	gap := i32(10)
+	
+	// Helper to calculate actual button width
+	btn_w :: proc(text: string) -> i32 {
+		text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text), f32(constants.UI_BUTTON_FONT_SIZE), 0).x)
+		min_w := text_width + 20
+		return min_w > constants.UI_BUTTON_WIDTH ? min_w : constants.UI_BUTTON_WIDTH
 	}
 	
-	// Save button
-	if render_button(app, "Save Map", screen_width - 420, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
-		// Save with timestamp AND as last_saved.map for quick loading
-		filename := fmt.tprintf("map_%d.map", i32(raylib.GetTime()))
-		_ = entities.map_save(&app.editor.game_map, filename)
-		_ = entities.map_save(&app.editor.game_map, "last_saved.map")
-	}
+	current_x := screen_width - 10 // right margin
 	
-	// Load button - loads last_saved.map
-	load_bounds := raylib.Rectangle{f32(screen_width - 330), f32(raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4), constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT}
-	if raylib.GuiButton(load_bounds, "Load Map") {
-		if entities.map_load(&app.editor.game_map, "last_saved.map") {
-			app.editor.current_biome = app.editor.game_map.biome
-		}
-	}
-	
-	// Quick load last map button
-	quick_load_bounds := raylib.Rectangle{f32(screen_width - 240), f32(raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4), constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT}
-	if raylib.GuiButton(quick_load_bounds, "Quick Load") {
-		// Try to load the most recently saved map
-		_ = entities.map_load(&app.editor.game_map, "last_saved.map")
+	// Menu button (rightmost)
+	w_menu := btn_w("Menu")
+	current_x -= w_menu
+	if render_button(app, "Menu", current_x, y_pos, w_menu, constants.UI_BUTTON_HEIGHT) {
+		entities.app_set_state(app, .MENU)
 	}
 	
 	// Test button
-	if render_button(app, "Test Map", screen_width - 150, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
+	current_x -= gap
+	w_test := btn_w("Test Map")
+	current_x -= w_test
+	if render_button(app, "Test Map", current_x, y_pos, w_test, constants.UI_BUTTON_HEIGHT) {
 		if simulation_init_from_editor(app) {
 			entities.app_set_state(app, .PLAYING)
 		}
 	}
 	
-	// Menu button
-	if render_button(app, "Menu", screen_width - 60, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
-		entities.app_set_state(app, .MENU)
+	// Quick Load button
+	current_x -= gap
+	w_load := btn_w("Quick Load")
+	current_x -= w_load
+	if render_button(app, "Quick Load", current_x, y_pos, w_load, constants.UI_BUTTON_HEIGHT) {
+		if entities.map_load(&app.editor.game_map, "last_saved.map") {
+			app.editor.current_biome = app.editor.game_map.biome
+		}
+	}
+	
+	// Save button
+	current_x -= gap
+	w_save := btn_w("Save Map")
+	current_x -= w_save
+	if render_button(app, "Save Map", current_x, y_pos, w_save, constants.UI_BUTTON_HEIGHT) {
+		// Save with timestamp AND as last_saved.map for quick loading
+		filename := fmt.tprintf("map_%d.map", i32(raylib.GetTime()))
+		_ = entities.map_save(&app.editor.game_map, filename)
+		_ = entities.map_save(&app.editor.game_map, "last_saved.map")
 	}
 }
 
@@ -1002,16 +1065,17 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	raylib.DrawRectangle(0, 0, i32(screen_width), i32(screen_height), raylib.Color{20, 20, 30, 255})
 	
 	// Title
-	title_text := "Settings"
-	title_size := i32(30)
-	title_width := raylib.MeasureText(strings.clone_to_cstring(title_text), title_size)
-	raylib.DrawText(strings.clone_to_cstring(title_text), (i32(screen_width) - title_width) / 2, 50, title_size, raylib.WHITE)
+	title_text := constants.get_text(.SETTINGS_TITLE)
+	title_size := f32(30)
+	title_width := raylib.MeasureTextEx(constants.game_fonts.bold, strings.clone_to_cstring(title_text), title_size, 0)
+	title_x := (f32(screen_width) - title_width.x) / 2
+	raylib.DrawTextEx(constants.game_fonts.bold, strings.clone_to_cstring(title_text), {title_x, 50}, title_size, 0, raylib.WHITE)
 	
 	// Settings panel
 	panel_x := i32(screen_width) / 2 - 200
 	panel_y := i32(100)
 	panel_width := i32(400)
-	panel_height := i32(400)
+	panel_height := i32(450)
 	
 	raylib.DrawRectangle(panel_x, panel_y, panel_width, panel_height, raylib.Color{40, 40, 50, 255})
 	raylib.DrawRectangleLines(panel_x, panel_y, panel_width, panel_height, raylib.GRAY)
@@ -1022,10 +1086,10 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	label_width := i32(150)
 	
 	// Master Volume
-	raylib.DrawText(strings.clone_to_cstring("Volume:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_VOLUME)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
 	volume_value := i32(app.settings.master_volume * 100)
 	volume_text := fmt.tprintf("%d%%", volume_value)
-	raylib.DrawText(strings.clone_to_cstring(volume_text), panel_x + panel_width - 80, item_y + 8, 20, raylib.WHITE)
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(volume_text), {f32(panel_x + panel_width - 80), f32(item_y + 8)}, 20, 0, raylib.WHITE)
 	
 	// Volume minus button
 	if render_button(app, "-", panel_x + label_width, item_y, 30, item_height) {
@@ -1050,13 +1114,13 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	item_y += item_height + 15
 	
 	// Language selector
-	raylib.DrawText(strings.clone_to_cstring("Language:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
-	lang_text := "English"
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_LANGUAGE)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
+	lang_text := constants.get_text(.SETTINGS_LANGUAGE_ENGLISH)
 	#partial switch app.settings.language {
-	case .SPANISH: lang_text = "Spanish"
-	case .PORTUGUESE: lang_text = "Portuguese"
+	case .SPANISH: lang_text = constants.get_text(.SETTINGS_LANGUAGE_SPANISH)
+	case .PORTUGUESE: lang_text = constants.get_text(.SETTINGS_LANGUAGE_PORTUGUESE)
 	}
-	raylib.DrawText(strings.clone_to_cstring(lang_text), panel_x + panel_width - 120, item_y + 8, 20, raylib.WHITE)
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(lang_text), {f32(panel_x + panel_width - 120), f32(item_y + 8)}, 20, 0, raylib.WHITE)
 	
 	// Language prev button
 	if render_button(app, "<", panel_x + label_width, item_y, 40, item_height) {
@@ -1080,9 +1144,17 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	
 	item_y += item_height + 15
 	
+	// Anti-aliasing using render_select
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_ANTIALIASING)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
+	
+	aa_options := []string{"Off", "2x", "4x", "8x"}
+	_ = render_select(app, "antialiasing", "", aa_options, &app.settings.antialiasing, panel_x + panel_width - 120, item_y, 100, item_height, true)
+	
+	item_y += item_height + 15
+	
 	// Show Grid Toggle
-	raylib.DrawText(strings.clone_to_cstring("Show Grid:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
-	grid_text := "ON" if app.settings.show_grid else "OFF"
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_SHOW_GRID)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
+	grid_text := constants.get_text(.UI_ON) if app.settings.show_grid else constants.get_text(.UI_OFF)
 	if render_button(app, grid_text, panel_x + panel_width - 100, item_y, 80, item_height) {
 		app.settings.show_grid = !app.settings.show_grid
 	}
@@ -1090,8 +1162,8 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	item_y += item_height + 15
 	
 	// Show Damage Numbers Toggle
-	raylib.DrawText(strings.clone_to_cstring("Damage Numbers:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
-	dmg_text := "ON" if app.settings.show_damage_numbers else "OFF"
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_SHOW_DAMAGE_NUMBERS)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
+	dmg_text := constants.get_text(.UI_ON) if app.settings.show_damage_numbers else constants.get_text(.UI_OFF)
 	if render_button(app, dmg_text, panel_x + panel_width - 100, item_y, 80, item_height) {
 		app.settings.show_damage_numbers = !app.settings.show_damage_numbers
 	}
@@ -1099,8 +1171,8 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	item_y += item_height + 15
 	
 	// Show Tower Range Toggle
-	raylib.DrawText(strings.clone_to_cstring("Tower Range:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
-	range_text := "ON" if app.settings.show_tower_range else "OFF"
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_SHOW_TOWER_RANGE)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
+	range_text := constants.get_text(.UI_ON) if app.settings.show_tower_range else constants.get_text(.UI_OFF)
 	if render_button(app, range_text, panel_x + panel_width - 100, item_y, 80, item_height) {
 		app.settings.show_tower_range = !app.settings.show_tower_range
 	}
@@ -1108,8 +1180,8 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	item_y += item_height + 15
 	
 	// Show FPS Toggle
-	raylib.DrawText(strings.clone_to_cstring("Show FPS:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
-	fps_text := "ON" if app.settings.show_fps else "OFF"
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_SHOW_FPS)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
+	fps_text := constants.get_text(.UI_ON) if app.settings.show_fps else constants.get_text(.UI_OFF)
 	if render_button(app, fps_text, panel_x + panel_width - 100, item_y, 80, item_height) {
 		app.settings.show_fps = !app.settings.show_fps
 	}
@@ -1117,8 +1189,8 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	item_y += item_height + 15
 	
 	// Auto Start Wave Toggle
-	raylib.DrawText(strings.clone_to_cstring("Auto Wave:"), panel_x + 20, item_y + 8, 20, raylib.WHITE)
-	auto_text := "ON" if app.settings.auto_start_wave else "OFF"
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_AUTO_WAVE)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
+	auto_text := constants.get_text(.UI_ON) if app.settings.auto_start_wave else constants.get_text(.UI_OFF)
 	if render_button(app, auto_text, panel_x + panel_width - 100, item_y, 80, item_height) {
 		app.settings.auto_start_wave = !app.settings.auto_start_wave
 	}
@@ -1127,18 +1199,213 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	back_y := panel_y + panel_height + 20
 	back_width := i32(150)
 	back_x := (i32(screen_width) - back_width) / 2
-	if render_button(app, "Back to Menu", back_x, back_y, back_width, 40) {
+	if render_button(app, constants.get_text(.SETTINGS_BACK_TO_MENU), back_x, back_y, back_width, 40) {
 		entities.app_set_state(app, .MENU)
 	}
 }
 
-// Helper to render a button
-render_button :: proc(app: ^entities.App_State, text: string, x, y, width, height: i32) -> bool {
+// Global UI state
+ui_active_dropdown_id: string = ""
+
+// Render a select dropdown (or dropup)
+// Returns true if a new option was selected
+render_select :: proc(app: ^entities.App_State, id: string, prefix: string, options: []string, selected_index: ^i32, x, y, width, height: i32, dropup: bool = false) -> bool {
+	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
+	
+	// Find max width among all options to keep width stable
+	max_text_width: f32 = 0
+	for opt in options {
+		t := fmt.tprintf("%s%s", prefix, opt)
+		w := f32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(t), font_size, 0).x)
+		if w > max_text_width {
+			max_text_width = w
+		}
+	}
+	
+	actual_width := width
+	min_width := i32(max_text_width) + 40 // padding + space for arrow
+	if actual_width < min_width {
+		actual_width = min_width
+	}
+
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
 	
-	hovered := mouse_x >= x && mouse_x <= x + width &&
+	is_open := ui_active_dropdown_id == id
+	
+	hovered_main := mouse_x >= x && mouse_x <= x + actual_width &&
+	                mouse_y >= y && mouse_y <= y + height
+	
+	color := constants.UI_BUTTON_COLOR
+	if hovered_main || is_open {
+		color = constants.UI_BUTTON_HOVER_COLOR
+	}
+	
+	raylib.DrawRectangle(x + constants.UI_BUTTON_SHADOW_OFFSET, y + constants.UI_BUTTON_SHADOW_OFFSET, actual_width, height, constants.UI_BUTTON_SHADOW_COLOR)
+	raylib.DrawRectangle(x, y, actual_width, height, color)
+	
+	// Text
+	text := fmt.tprintf("%s%s", prefix, options[selected_index^])
+	text_width := f32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text), font_size, 0).x)
+	text_x := f32(x) + f32(actual_width) / 2 - text_width / 2
+	text_y := f32(y) + f32(height) / 2 - font_size / 2
+	raylib.DrawTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text), {text_x, text_y}, font_size, 0, constants.UI_TEXT_COLOR)
+	
+	// Draw arrow indicator
+	arrow_x := f32(x + actual_width - 15)
+	arrow_y := f32(y + height / 2)
+	if is_open {
+		if dropup {
+			raylib.DrawTriangle({arrow_x - 5, arrow_y - 2}, {arrow_x + 5, arrow_y - 2}, {arrow_x, arrow_y + 3}, constants.UI_TEXT_COLOR)
+		} else {
+			raylib.DrawTriangle({arrow_x, arrow_y - 3}, {arrow_x + 5, arrow_y + 2}, {arrow_x - 5, arrow_y + 2}, constants.UI_TEXT_COLOR)
+		}
+	} else {
+		if dropup {
+			raylib.DrawTriangle({arrow_x, arrow_y - 3}, {arrow_x + 5, arrow_y + 2}, {arrow_x - 5, arrow_y + 2}, constants.UI_TEXT_COLOR)
+		} else {
+			raylib.DrawTriangle({arrow_x - 5, arrow_y - 2}, {arrow_x + 5, arrow_y - 2}, {arrow_x, arrow_y + 3}, constants.UI_TEXT_COLOR)
+		}
+	}
+	
+	changed := false
+	
+	if is_open {
+		list_height := i32(len(options)) * height
+		list_y := dropup ? y - list_height : y + height
+		
+		// Draw list background shadow
+		raylib.DrawRectangle(x + constants.UI_BUTTON_SHADOW_OFFSET, list_y + constants.UI_BUTTON_SHADOW_OFFSET, actual_width, list_height, constants.UI_BUTTON_SHADOW_COLOR)
+		
+		for i := 0; i < len(options); i += 1 {
+			item_y := dropup ? y - list_height + i32(i) * height : y + height + i32(i) * height
+			
+			hovered_item := mouse_x >= x && mouse_x <= x + actual_width && mouse_y >= item_y && mouse_y <= item_y + height
+			
+			item_color := constants.UI_BUTTON_COLOR
+			if hovered_item {
+				item_color = constants.UI_BUTTON_HOVER_COLOR
+				if raylib.IsMouseButtonPressed(.LEFT) {
+					selected_index^ = i32(i)
+					changed = true
+					ui_active_dropdown_id = "" // Close after selection
+				}
+			}
+			
+			// Highlight current selection
+			if i32(i) == selected_index^ && !hovered_item {
+				item_color = raylib.Color{60, 60, 60, 255}
+			}
+			
+			raylib.DrawRectangle(x, item_y, actual_width, height, item_color)
+			raylib.DrawRectangleLines(x, item_y, actual_width, height, constants.UI_BUTTON_SHADOW_COLOR)
+			
+			item_text := options[i]
+			item_text_width := f32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(item_text), font_size, 0).x)
+			item_text_x := f32(x) + f32(actual_width) / 2 - item_text_width / 2
+			item_text_y := f32(item_y) + f32(height) / 2 - font_size / 2
+			raylib.DrawTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(item_text), {item_text_x, item_text_y}, font_size, 0, constants.UI_TEXT_COLOR)
+		}
+		
+		// Click outside to close
+		if raylib.IsMouseButtonPressed(.LEFT) && !hovered_main {
+			hovered_list := mouse_x >= x && mouse_x <= x + actual_width && mouse_y >= list_y && mouse_y <= list_y + list_height
+			if !hovered_list {
+				ui_active_dropdown_id = ""
+			}
+		}
+	}
+	
+	// Click main button to toggle
+	if hovered_main && raylib.IsMouseButtonPressed(.LEFT) {
+		if is_open {
+			ui_active_dropdown_id = ""
+		} else {
+			ui_active_dropdown_id = id
+		}
+	}
+	
+	return changed
+}
+
+// Render UI button
+render_button_with_color :: proc(app: ^entities.App_State, text: string, x, y, width, height: i32, base_color: raylib.Color, text_lines: i32 = 1) -> bool {
+	actual_width := width
+	actual_height := height
+	
+	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
+	line_spacing := font_size * 1.2
+	
+	// Calculate minimum height needed for the text (with padding)
+	min_text_height := i32(f32(text_lines) * line_spacing + 16)  // 8px padding top/bottom
+	if min_text_height > height {
+		actual_height = min_text_height
+	}
+	
+	text_width := raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text), font_size, 0).x
+	if int(text_width) + 20 > int(width) {
+		actual_width = i32(text_width) + 20
+	}
+	
+	// Check hover
+	mouse_pos := raylib.GetMousePosition()
+	hovered := raylib.CheckCollisionPointRec(mouse_pos, {f32(x), f32(y), f32(actual_width), f32(actual_height)})
+	
+	// Determine button color based on hover state
+	color := base_color
+	if hovered {
+		// Darken on hover
+		color = raylib.Color{u8(f32(base_color.r) * 0.9), u8(f32(base_color.g) * 0.9), u8(f32(base_color.b) * 0.9), base_color.a}
+		if raylib.IsMouseButtonDown(.LEFT) {
+			color = raylib.Color{u8(f32(base_color.r) * 0.8), u8(f32(base_color.g) * 0.8), u8(f32(base_color.b) * 0.8), base_color.a}
+		}
+	}
+	
+	raylib.DrawRectangle(x + constants.UI_BUTTON_SHADOW_OFFSET, y + constants.UI_BUTTON_SHADOW_OFFSET, actual_width, actual_height, constants.UI_BUTTON_SHADOW_COLOR)
+	raylib.DrawRectangle(x, y, actual_width, actual_height, color)
+	
+	// Text (centered) - calculate vertical position based on number of lines
+	total_text_height := f32(text_lines) * line_spacing
+	start_y := f32(y) + f32(actual_height) / 2 - total_text_height / 2
+	
+	// Split text by newlines and render each line centered
+	lines := strings.split(text, "\n")
+	defer delete(lines)
+	
+	for line, i in lines {
+		line_width := raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(line), font_size, 0).x
+		line_x := f32(x) + f32(actual_width) / 2 - line_width / 2
+		line_y := start_y + f32(i) * line_spacing
+		raylib.DrawTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(line), {line_x, line_y}, font_size, 0, constants.UI_TEXT_COLOR)
+	}
+	
+	// Click check
+	if hovered && raylib.IsMouseButtonPressed(.LEFT) {
+		return true
+	}
+	
+	return false
+}
+
+render_button :: proc(app: ^entities.App_State, text: string, x, y, width, height: i32, text_lines: i32 = 1) -> bool {
+	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
+	text_width := f32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text), font_size, 0).x)
+	
+	actual_width := width
+	min_width := i32(text_width) + 20 // 10px padding on each side
+	if actual_width < min_width {
+		actual_width = min_width
+	}
+
+	mouse_x := raylib.GetMouseX()
+	mouse_y := raylib.GetMouseY()
+	
+	hovered := mouse_x >= x && mouse_x <= x + actual_width &&
 	           mouse_y >= y && mouse_y <= y + height
+	
+	if ui_active_dropdown_id != "" {
+		hovered = false
+	}
 	
 	color := constants.UI_BUTTON_COLOR
 	if hovered {
@@ -1148,16 +1415,24 @@ render_button :: proc(app: ^entities.App_State, text: string, x, y, width, heigh
 		}
 	}
 	
-	raylib.DrawRectangle(x + constants.UI_BUTTON_SHADOW_OFFSET, y + constants.UI_BUTTON_SHADOW_OFFSET, width, height, constants.UI_BUTTON_SHADOW_COLOR)
-	raylib.DrawRectangle(x, y, width, height, color)
+	raylib.DrawRectangle(x + constants.UI_BUTTON_SHADOW_OFFSET, y + constants.UI_BUTTON_SHADOW_OFFSET, actual_width, height, constants.UI_BUTTON_SHADOW_COLOR)
+	raylib.DrawRectangle(x, y, actual_width, height, color)
 	
-	// Text (centered) - using UI font with regular font (larger size)
-	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
-	text_width := f32(raylib.MeasureTextEx(constants.game_fonts.regular, strings.clone_to_cstring(text), font_size, 0).x)
-	text_x := f32(x) + f32(width) / 2 - text_width / 2
-	text_y := f32(y) + f32(height) / 2 - font_size / 2
-	dark_gray := raylib.Color{40, 40, 40, 255}
-	raylib.DrawTextEx(constants.game_fonts.bold, strings.clone_to_cstring(text), {text_x, text_y}, font_size, 0, dark_gray)
+	// Text (centered) - handle multi-line text properly
+	line_spacing := font_size * 1.2  // Approximate line spacing for multi-line text
+	total_text_height := f32(text_lines) * line_spacing
+	start_y := f32(y) + f32(height) / 2 - total_text_height / 2
+	
+	// Split text by newlines and render each line centered
+	lines := strings.split(text, "\n")
+	defer delete(lines)
+	
+	for line, i in lines {
+		line_width := raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(line), font_size, 0).x
+		line_x := f32(x) + f32(actual_width) / 2 - line_width / 2
+		line_y := start_y + f32(i) * line_spacing
+		raylib.DrawTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(line), {line_x, line_y}, font_size, 0, constants.UI_TEXT_COLOR)
+	}
 	
 	// Click check
 	if hovered && raylib.IsMouseButtonPressed(.LEFT) {
@@ -1178,8 +1453,8 @@ is_mouse_over_tower_panel :: proc(app: ^entities.App_State) -> bool {
 		return false
 	}
 	
-	panel_width: i32 = 200
-	panel_height: i32 = 255
+	panel_width: i32 = constants.UI_PANEL_WIDTH
+	panel_height: i32 = constants.UI_PANEL_HEIGHT
 	panel_x := raylib.GetScreenWidth() - panel_width - 10
 	panel_y := i32(150)
 	
@@ -1252,18 +1527,20 @@ draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, an
 	// Draw tower components with shadows immediately after each component
 	switch tower_type {
 	case .LASER:
-		// Barrel shadow - rotated using DrawRectanglePro with pivot at tower center
+		// Barrel dimensions (matching JS: -cs*0.1, -cs*0.35, cs*0.2, cs*0.3)
 		barrel_w := cs * 0.2
-		barrel_h := cs * 0.5
+		barrel_h := cs * 0.3
+		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}  // Pivot at bottom of barrel (tower center)
+		laser_rotation := rotation * 180.0 / math.PI
+		
+		// Barrel shadow - rotated using DrawRectanglePro with pivot at tower center
 		barrel_rect := raylib.Rectangle{
 			x = f32(cx + so),
 			y = f32(cy + so),
 			width = f32(barrel_w),
 			height = f32(barrel_h),
 		}
-		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}  // Pivot at bottom of barrel (tower center)
-		laser_rotation := (rotation - math.PI/2) * 180.0 / math.PI
-		raylib.DrawRectangleRounded(barrel_rect, 0.05, 4, constants.TOWER_SHADOW)
+		raylib.DrawRectanglePro(barrel_rect, origin, laser_rotation, constants.TOWER_SHADOW)
 		
 		// Barrel - rotated using DrawRectanglePro with pivot at tower center
 		barrel_rect = raylib.Rectangle{
@@ -1272,7 +1549,7 @@ draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, an
 			width = f32(barrel_w),
 			height = f32(barrel_h),
 		}
-		raylib.DrawRectangleRounded(barrel_rect, 0.05, 4, constants.TOWER_BARREL)
+		raylib.DrawRectanglePro(barrel_rect, origin, laser_rotation, constants.TOWER_BARREL)
 		
 		// Circle shadow
 		raylib.DrawCircle(i32(cx + so), i32(cy + so), r, constants.TOWER_SHADOW)
@@ -1292,7 +1569,7 @@ draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, an
 			height = f32(barrel_h),
 		}
 		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}
-		cannon_rotation := (rotation - math.PI/2) * 180.0 / math.PI
+		cannon_rotation := rotation * 180.0 / math.PI
 		raylib.DrawRectanglePro(barrel_rect, origin, cannon_rotation, constants.TOWER_SHADOW)
 		
 		// Barrel - rotated using DrawRectanglePro with pivot at tower center
@@ -1320,7 +1597,7 @@ draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, an
 			height = f32(barrel_h),
 		}
 		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}
-		sniper_rotation := (rotation - math.PI/2) * 180.0 / math.PI
+		sniper_rotation := rotation * 180.0 / math.PI
 		raylib.DrawRectanglePro(barrel_rect, origin, sniper_rotation, constants.TOWER_SHADOW)
 		
 		// Thin barrel - rotated using DrawRectanglePro with pivot at tower center
@@ -1340,42 +1617,52 @@ draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, an
 	case .MISSILE:
 		pod_w := r * 0.8
 		pod_h := r * 1.6
-		pod_rad := r * 0.0075
 		pod_color := constants.TOWER_MISSILE_POD
 		
-		// Calculate pod positions in rotated coordinate space (like JS)
-		// Left pod at (-r * 1.4, -r * 0.8), Right pod at (r * 0.6, -r * 0.8)
+		// Rotation in degrees for DrawRectanglePro (matching JS: angle + PI/2)
+		missile_rotation_deg := rotation * 180.0 / math.PI
+		
+		// In JS, pods are drawn at (-r*1.4, -r*0.8) and (r*0.6, -r*0.8) in rotated space
+		// We need to transform these local offsets to world positions using rotation
+		
+		// Left pod local offset: (-r*1.4, -r*0.8) relative to center, in rotated space
+		left_local_x := -r * 1.4
+		left_local_y := -r * 0.8
+		// Right pod local offset: (r*0.6, -r*0.8) relative to center, in rotated space  
+		right_local_x := r * 0.6
+		right_local_y := -r * 0.8
+		
+		// Transform to world coordinates (rotate local offsets by the tower rotation)
+		left_world_x := cx + left_local_x * math.cos(rotation) - left_local_y * math.sin(rotation)
+		left_world_y := cy + left_local_x * math.sin(rotation) + left_local_y * math.cos(rotation)
+		right_world_x := cx + right_local_x * math.cos(rotation) - right_local_y * math.sin(rotation)
+		right_world_y := cy + right_local_x * math.sin(rotation) + right_local_y * math.cos(rotation)
+		
+		// Pod origin at top-left corner (0,0) since we position the rect at its world position
+		pod_origin := raylib.Vector2{0, 0}
 		
 		// Left pod shadow
-		left_pod_shadow_x := cx + so + (-r*1.4)*math.cos(rotation) - (-r*0.8)*math.sin(rotation)
-		left_pod_shadow_y := cy + so + (-r*1.4)*math.sin(rotation) + (-r*0.8)*math.cos(rotation)
-		raylib.DrawRectangleRounded(
-			raylib.Rectangle{f32(left_pod_shadow_x - pod_w/2), f32(left_pod_shadow_y - pod_h/2), pod_w, pod_h},
-			pod_rad, 4, constants.TOWER_SHADOW,
+		raylib.DrawRectanglePro(
+			raylib.Rectangle{f32(left_world_x + so), f32(left_world_y + so), pod_w, pod_h},
+			pod_origin, missile_rotation_deg, constants.TOWER_SHADOW,
 		)
 		
 		// Right pod shadow
-		right_pod_shadow_x := cx + so + (r*0.6)*math.cos(rotation) - (-r*0.8)*math.sin(rotation)
-		right_pod_shadow_y := cy + so + (r*0.6)*math.sin(rotation) + (-r*0.8)*math.cos(rotation)
-		raylib.DrawRectangleRounded(
-			raylib.Rectangle{f32(right_pod_shadow_x - pod_w/2), f32(right_pod_shadow_y - pod_h/2), pod_w, pod_h},
-			pod_rad, 4, constants.TOWER_SHADOW,
+		raylib.DrawRectanglePro(
+			raylib.Rectangle{f32(right_world_x + so), f32(right_world_y + so), pod_w, pod_h},
+			pod_origin, missile_rotation_deg, constants.TOWER_SHADOW,
 		)
 		
 		// Left pod
-		left_pod_x := cx + (-r*1.4)*math.cos(rotation) - (-r*0.8)*math.sin(rotation)
-		left_pod_y := cy + (-r*1.4)*math.sin(rotation) + (-r*0.8)*math.cos(rotation)
-		raylib.DrawRectangleRounded(
-			raylib.Rectangle{f32(left_pod_x - pod_w/2), f32(left_pod_y - pod_h/2), pod_w, pod_h},
-			pod_rad, 4, pod_color,
+		raylib.DrawRectanglePro(
+			raylib.Rectangle{f32(left_world_x), f32(left_world_y), pod_w, pod_h},
+			pod_origin, missile_rotation_deg, pod_color,
 		)
 		
 		// Right pod
-		right_pod_x := cx + (r*0.6)*math.cos(rotation) - (-r*0.8)*math.sin(rotation)
-		right_pod_y := cy + (r*0.6)*math.sin(rotation) + (-r*0.8)*math.cos(rotation)
-		raylib.DrawRectangleRounded(
-			raylib.Rectangle{f32(right_pod_x - pod_w/2), f32(right_pod_y - pod_h/2), pod_w, pod_h},
-			pod_rad, 4, pod_color,
+		raylib.DrawRectanglePro(
+			raylib.Rectangle{f32(right_world_x), f32(right_world_y), pod_w, pod_h},
+			pod_origin, missile_rotation_deg, pod_color,
 		)
 		
 	case .ARCHER:
@@ -1391,7 +1678,7 @@ draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, an
 			height = f32(barrel_h),
 		}
 		origin := raylib.Vector2{f32(barrel_w/2), f32(barrel_h)}  // Pivot at bottom of barrel (tower center)
-		archer_rotation := (rotation + math.PI/2) * 180.0 / math.PI
+		archer_rotation := rotation * 180.0 / math.PI
 		raylib.DrawRectanglePro(barrel_rect, origin, archer_rotation, constants.TOWER_SHADOW)
 		
 		// Barrel (main body) - positioned at tower center, origin at bottom center
@@ -1473,16 +1760,16 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	tower := app.selected_tower
 	
 	// Panel dimensions
-	panel_width: i32 = 200
+	panel_width: i32 = constants.UI_PANEL_WIDTH
 	button_width := panel_width - 20
 	button_height: i32 = 30
 	spacing: i32 = 5
 	section_spacing: i32 = 15
 	
 	// Calculate panel height dynamically (without title):
-	// Tower info (25) + 3 upgrade buttons with spacing + section spacing + dropdown (40) + section spacing + sell button + padding
-	// sell_y calculation: start_y(40) + 3*35 + 15 + 40 + 15 = 40 + 105 + 70 = 210, then +30 for button + 15 padding = 255
-	panel_height: i32 = 255
+	// Tower info (25) + 3 upgrade buttons with spacing + exit button + section spacing + dropdown (40) + section spacing + sell button + padding
+	// sell_y calculation: start_y(40) + 4*35 + 15 + 40 + 15 = 40 + 140 + 70 = 250, then +30 for button + 15 padding = constants.UI_PANEL_HEIGHT
+	panel_height: i32 = constants.UI_PANEL_HEIGHT
 	
 	panel_x := raylib.GetScreenWidth() - panel_width - 10
 	panel_y := i32(150)
@@ -1546,19 +1833,11 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	// Strategy section with GuiComboBox (position 3)
 	strategy_y := start_y + (button_height + spacing) * 4 + section_spacing
 	
-	// Strategy dropdown using raygui
-	strategy_text := "First;Last;Strong;Weak"
-	strategy_dropdown_bounds := raylib.Rectangle{
-		f32(button_x),
-		f32(strategy_y),
-		f32(button_width),
-		f32(30),
-	}
-	
-	// Convert strategy enum to i32 index
+	// Strategy selector using render_select
+	strategy_names := []string{"First", "Last", "Strong", "Weak"}
 	strategy_index := i32(tower.target_strategy)
 	
-	if raylib.GuiComboBox(strategy_dropdown_bounds, strings.clone_to_cstring(strategy_text), &strategy_index) != -1 {
+	if render_select(app, "strategy", "Target: ", strategy_names, &strategy_index, button_x, i32(strategy_y), button_width, 30, true) {
 		tower.target_strategy = constants.Target_Strategy(strategy_index)
 	}
 	
