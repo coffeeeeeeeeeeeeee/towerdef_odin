@@ -93,6 +93,13 @@ render_map :: proc(app: ^entities.App_State) {
 		sx := f32(app.selected_cell.col) * cs + f32(app.camera_offset_x)
 		sy := f32(app.selected_cell.row) * cs + f32(app.camera_offset_y)
 		render_reticle(sx, sy, cs, constants.TOWER_RETICLE_COLOR)
+		
+		// Draw tower ghost if a tower type is selected for building
+		if app.sim.selected_build_tower != .EMPTY {
+			// Convert tile to tower type
+			tower_type := tile_to_tower_type(app.sim.selected_build_tower)
+			render_tower_preview(sx, sy, cs, tower_type, true) // is_ghost = true
+		}
 	}
 	
 	// Draw reticle for selected tower in PLAYING/PAUSED modes
@@ -101,12 +108,22 @@ render_map :: proc(app: ^entities.App_State) {
 		sy := f32(app.selected_tower.r) * cs + f32(app.camera_offset_y)
 		render_reticle(sx, sy, cs, constants.TOWER_RETICLE_COLOR)
 	}
+	
+	// Draw tower ghost in PLAYING/PAUSED modes when building
+	if app.selected_cell.valid && (app.state == .PLAYING || app.state == .PAUSED) {
+		if app.sim.selected_build_tower != .EMPTY {
+			sx := f32(app.selected_cell.col) * cs + f32(app.camera_offset_x)
+			sy := f32(app.selected_cell.row) * cs + f32(app.camera_offset_y)
+			tower_type := tile_to_tower_type(app.sim.selected_build_tower)
+			render_tower_preview(sx, sy, cs, tower_type, true) // is_ghost = true
+		}
+	}
 }
 
 // Render paths
 render_paths :: proc(app: ^entities.App_State, cs: f32, gs: i32) {
 	m := &app.editor.game_map
-	path_width := cs * 0.6
+	path_width := cs * constants.PATH_WIDTH_RATIO
 	path_color := constants.BIOME_COLORS[m.biome].path
 	
 	is_path_like :: proc(m: ^entities.Map, row, col: i32) -> bool {
@@ -206,8 +223,8 @@ render_grid_lines :: proc(app: ^entities.App_State, cs: f32, gs: i32) {
 // Render tower upgrades (small dots) - arranged in rows of 5 above the tower
 render_tower_upgrades :: proc(tower: ^entities.Tower, x, y, cs: f32) {
 	dot_radius := cs * 0.08
-	dot_spacing := cs * 0.15  // Horizontal spacing between dots
-	row_spacing := cs * 0.12  // Vertical spacing between rows
+	dot_spacing := cs * 0.20  // Horizontal spacing between dots (increased)
+	row_spacing := cs * 0.18  // Vertical spacing between rows (increased)
 	pips_per_row := 5
 	
 	// Calculate total number of pips
@@ -352,13 +369,46 @@ render_tree :: proc(x, y: f32, cs: f32, biome: constants.Biome, row: i32 = 0, co
 		// No trunk visible from top view in hexagon pine style
 		
 	case .DESERT:
-		// Palm tree (desert) - top view: oval fronds
-		leaf_radius_x := cs * 0.35
-		leaf_radius_y := cs * 0.25
+		// Palm tree (desert) - top view: multiple stretched oval fronds radiating from center
+		frond_count := 8
+		inner_radius := cs * 0.15
+		outer_radius := cs * 0.40
+		frond_width := cs * 0.12
 		
-		// Palm fronds (ovals)
-		raylib.DrawEllipse(i32(center_x), i32(center_y), f32(leaf_radius_x), f32(leaf_radius_y), raylib.Color{34, 139, 34, 255})
-		raylib.DrawEllipse(i32(center_x), i32(center_y), f32(leaf_radius_x * 0.7), f32(leaf_radius_y * 0.7), raylib.Color{0, 100, 0, 255})
+		// Draw radiating oval fronds
+		for i in 0..<frond_count {
+			angle := f32(i) * math.PI * 2.0 / f32(frond_count)
+			
+			// Calculate frond center position (between inner and outer radius)
+			frond_center_dist := (inner_radius + outer_radius) * 0.5
+			frond_cx := center_x + math.cos(angle) * frond_center_dist
+			frond_cy := center_y + math.sin(angle) * frond_center_dist
+			
+			// Draw elongated oval frond
+			raylib.DrawEllipse(
+				i32(frond_cx), 
+				i32(frond_cy), 
+				f32(outer_radius - inner_radius) * 0.5,  // long axis
+				f32(frond_width),  // short axis
+				raylib.Color{34, 139, 34, 255}
+			)
+		}
+		
+		// Draw smaller inner fronds (darker green)
+		for i in 0..<frond_count {
+			angle := f32(i) * math.PI * 2.0 / f32(frond_count) + math.PI / f32(frond_count)
+			frond_center_dist := inner_radius * 1.5
+			frond_cx := center_x + math.cos(angle) * frond_center_dist
+			frond_cy := center_y + math.sin(angle) * frond_center_dist
+			
+			raylib.DrawEllipse(
+				i32(frond_cx), 
+				i32(frond_cy), 
+				f32(cs * 0.15),
+				f32(cs * 0.08),
+				raylib.Color{0, 100, 0, 255}
+			)
+		}
 		
 	case .MOUNTAIN:
 		// Dead bush (mountain) - top view: branches radiating from center
@@ -750,10 +800,11 @@ render_ui :: proc(app: ^entities.App_State) {
 	switch app.state {
 	case .MENU:
 		render_menu_ui(app)
-	case .PLAYING, .PAUSED:
+	case .PLAYING:
 		render_game_ui(app)
-		// Render tower control panel when a tower is selected
 		render_tower_control_panel(app)
+	case .PAUSED:
+		render_pause_menu(app)
 	case .EDITOR:
 		render_editor_ui(app)
 	case .GAME_OVER:
@@ -791,25 +842,25 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	
 	// Play button
 	play_button_y := screen_height / 2
-	if render_button(app, constants.get_text(.MENU_BUTTON_PLAY), menu_button_x, play_button_y, menu_button_width, menu_button_height) {
+	if render_button(constants.get_text(.MENU_BUTTON_PLAY), {f32(menu_button_x), f32(play_button_y), f32(menu_button_width), f32(menu_button_height)}) {
 		entities.app_set_state(app, .PLAYING)
 	}
 	
 	// Editor button
 	editor_button_y := play_button_y + menu_button_height + 10
-	if render_button(app, constants.get_text(.MENU_BUTTON_EDITOR), menu_button_x, editor_button_y, menu_button_width, menu_button_height) {
+	if render_button(constants.get_text(.MENU_BUTTON_EDITOR), {f32(menu_button_x), f32(editor_button_y), f32(menu_button_width), f32(menu_button_height)}) {
 		entities.app_set_state(app, .EDITOR)
 	}
 	
 	// Settings button
 	settings_button_y := editor_button_y + menu_button_height + 10
-	if render_button(app, constants.get_text(.MENU_BUTTON_SETTINGS), menu_button_x, settings_button_y, menu_button_width, menu_button_height) {
+	if render_button(constants.get_text(.MENU_BUTTON_SETTINGS), {f32(menu_button_x), f32(settings_button_y), f32(menu_button_width), f32(menu_button_height)}) {
 		entities.app_set_state(app, .SETTINGS)
 	}
 	
 	// Exit button
 	exit_button_y := settings_button_y + menu_button_height + 10
-	if render_button(app, constants.get_text(.MENU_BUTTON_EXIT), menu_button_x, exit_button_y, menu_button_width, menu_button_height) {
+	if render_button(constants.get_text(.MENU_BUTTON_EXIT), {f32(menu_button_x), f32(exit_button_y), f32(menu_button_width), f32(menu_button_height)}) {
 		app.should_quit = true
 	}
 }
@@ -820,35 +871,66 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	screen_height := raylib.GetScreenHeight()
 	
 	// Money
-	money_text := fmt.tprintf("Money: $%d", app.sim.money)
-	raylib.DrawText(strings.clone_to_cstring(money_text), 10, 40, 20, raylib.GOLD)
+	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
+	money_label := constants.get_text(.UI_MONEY)
+	money_text := fmt.tprintf("%s: %d", money_label, app.sim.money)
+	money_width := raylib.MeasureTextEx(constants.game_fonts.regular, strings.clone_to_cstring(money_text), font_size, 0).x
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(money_text), {f32(10), f32(40)}, font_size, 0, raylib.GOLD)
 	
 	// Health
-	health_text := fmt.tprintf("Health: %d", app.sim.health)
-	raylib.DrawText(strings.clone_to_cstring(health_text), 10, 70, 20, raylib.RED)
+	health_label := constants.get_text(.UI_HEALTH)
+	health_text := fmt.tprintf("%s: %d", health_label, app.sim.health)
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(health_text), {f32(10), f32(70)}, font_size, 0, raylib.GREEN)
 	
 	// Wave
-	wave_text := fmt.tprintf("Wave: %d", app.sim.wave_number)
-	raylib.DrawText(strings.clone_to_cstring(wave_text), 10, 100, 20, raylib.WHITE)
+	wave_label := constants.get_text(.UI_WAVE)
+	wave_text := fmt.tprintf("%s: %d", wave_label, app.sim.wave_number)
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(wave_text), {f32(10), f32(100)}, font_size, 0, raylib.BLUE)
 	
-	// Enemies remaining
-	enemies_text := fmt.tprintf("Enemies: %d", len(app.sim.enemies))
-	raylib.DrawText(strings.clone_to_cstring(enemies_text), 10, 130, 20, raylib.WHITE)
+	// Enemies
+	enemies_label := constants.get_text(.UI_ENEMIES)
+	enemies_text := fmt.tprintf("%s: %d", enemies_label, len(app.sim.enemies))
+	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(enemies_text), {f32(10), f32(130)}, font_size, 0, raylib.RED)
+	
+	// Calculate button widths based on text
+	button_y := i32(10)
+	padding := i32(20)
+	gap := i32(10)
+	
+	// Pause button text and width
+	pause_text := constants.get_text(.UI_BUTTON_PAUSE)
+	if app.sim.paused {
+		pause_text = constants.get_text(.UI_BUTTON_RESUME)
+	}
+	pause_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(pause_text), font_size, 0).x)
+	pause_width := pause_text_width + padding
+	
+	// 1x button width
+	speed1_text := "1x"
+	speed1_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(speed1_text), font_size, 0).x)
+	speed1_width := speed1_text_width + padding
+	
+	// 2x button width
+	speed2_text := "2x"
+	speed2_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(speed2_text), font_size, 0).x)
+	speed2_width := speed2_text_width + padding
+	
+	// Calculate positions from right to left
+	total_buttons_width := pause_width + speed1_width + speed2_width + gap * 2
+	pause_x := screen_width - total_buttons_width
+	speed1_x := pause_x + pause_width + gap
+	speed2_x := speed1_x + speed1_width + gap
 	
 	// Pause button
-	pause_text := "PAUSE"
-	if app.sim.paused {
-		pause_text = "RESUME"
-	}
-	if render_button(app, pause_text, screen_width - constants.UI_BUTTON_WIDTH - 10, 10, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
+	if render_button(pause_text, {f32(pause_x), f32(button_y), f32(pause_width), f32(constants.UI_BUTTON_HEIGHT)}) {
 		simulation_toggle_pause(app)
 	}
 	
 	// Speed buttons
-	if render_button(app, "1x", screen_width - constants.UI_BUTTON_WIDTH * 2 - 20, 10, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
+	if render_button(speed1_text, {f32(speed1_x), f32(button_y), f32(speed1_width), f32(constants.UI_BUTTON_HEIGHT)}) {
 		simulation_set_speed(app, 1.0)
 	}
-	if render_button(app, "2x", screen_width - constants.UI_BUTTON_WIDTH - 10, 10, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT) {
+	if render_button(speed2_text, {f32(speed2_x), f32(button_y), f32(speed2_width), f32(constants.UI_BUTTON_HEIGHT)}) {
 		simulation_set_speed(app, 2.0)
 	}
 	
@@ -987,7 +1069,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 	// Menu button (rightmost)
 	w_menu := btn_w("Menu")
 	current_x -= w_menu
-	if render_button(app, "Menu", current_x, y_pos, w_menu, constants.UI_BUTTON_HEIGHT) {
+	if render_button("Menu", {f32(current_x), f32(y_pos), f32(w_menu), f32(constants.UI_BUTTON_HEIGHT)}) {
 		entities.app_set_state(app, .MENU)
 	}
 	
@@ -995,7 +1077,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 	current_x -= gap
 	w_test := btn_w("Test Map")
 	current_x -= w_test
-	if render_button(app, "Test Map", current_x, y_pos, w_test, constants.UI_BUTTON_HEIGHT) {
+	if render_button("Test Map", {f32(current_x), f32(y_pos), f32(w_test), f32(constants.UI_BUTTON_HEIGHT)}) {
 		if simulation_init_from_editor(app) {
 			entities.app_set_state(app, .PLAYING)
 		}
@@ -1005,7 +1087,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 	current_x -= gap
 	w_load := btn_w("Quick Load")
 	current_x -= w_load
-	if render_button(app, "Quick Load", current_x, y_pos, w_load, constants.UI_BUTTON_HEIGHT) {
+	if render_button("Quick Load", {f32(current_x), f32(y_pos), f32(w_load), f32(constants.UI_BUTTON_HEIGHT)}) {
 		if entities.map_load(&app.editor.game_map, "last_saved.map") {
 			app.editor.current_biome = app.editor.game_map.biome
 		}
@@ -1015,11 +1097,54 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 	current_x -= gap
 	w_save := btn_w("Save Map")
 	current_x -= w_save
-	if render_button(app, "Save Map", current_x, y_pos, w_save, constants.UI_BUTTON_HEIGHT) {
+	if render_button("Save Map", {f32(current_x), f32(y_pos), f32(w_save), f32(constants.UI_BUTTON_HEIGHT)}) {
 		// Save with timestamp AND as last_saved.map for quick loading
 		filename := fmt.tprintf("map_%d.map", i32(raylib.GetTime()))
 		_ = entities.map_save(&app.editor.game_map, filename)
 		_ = entities.map_save(&app.editor.game_map, "last_saved.map")
+	}
+}
+
+// Render pause menu overlay
+render_pause_menu :: proc(app: ^entities.App_State) {
+	screen_width := raylib.GetScreenWidth()
+	screen_height := raylib.GetScreenHeight()
+	
+	// Semi-transparent overlay
+	raylib.DrawRectangle(0, 0, screen_width, screen_height, constants.UI_OVERLAY_COLOR)
+	
+	// Pause title
+	title := constants.get_text(.PAUSE_TITLE)
+	title_cstr := strings.clone_to_cstring(title)
+	title_size := f32(40)
+	title_width := raylib.MeasureTextEx(constants.game_fonts.bold, title_cstr, title_size, 0).x
+	title_x := f32(screen_width) / 2 - title_width / 2
+	title_y := f32(screen_height) / 3
+	raylib.DrawTextEx(constants.game_fonts.bold, title_cstr, {title_x, title_y}, title_size, 0, raylib.WHITE)
+	
+	// Button dimensions
+	button_width := i32(constants.UI_BUTTON_WIDTH)
+	button_height := i32(constants.UI_BUTTON_HEIGHT)
+	button_x := screen_width / 2 - button_width / 2
+	
+	// Resume button
+	resume_y := screen_height / 2
+	if render_button(constants.get_text(.PAUSE_RESUME), {f32(button_x), f32(resume_y), f32(button_width), f32(button_height)}) {
+		simulation_set_pause(app, false)
+		entities.app_set_state(app, .PLAYING)
+	}
+	
+	// Settings button
+	settings_y := resume_y + button_height + 20
+	if render_button(constants.get_text(.MENU_BUTTON_SETTINGS), {f32(button_x), f32(settings_y), f32(button_width), f32(button_height)}) {
+		entities.app_set_state(app, .SETTINGS)
+	}
+	
+	// Main Menu button
+	menu_y := settings_y + button_height + 20
+	if render_button(constants.get_text(.PAUSE_MENU), {f32(button_x), f32(menu_y), f32(button_width), f32(button_height)}) {
+		simulation_set_pause(app, false)
+		entities.app_set_state(app, .MENU)
 	}
 }
 
@@ -1051,7 +1176,7 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 	button_x := screen_width / 2 - button_width / 2
 	button_y := screen_height * 2 / 3
 	
-	if render_button(app, "Main Menu", button_x, button_y, button_width, button_height) {
+	if render_button("Main Menu", {f32(button_x), f32(button_y), f32(button_width), f32(button_height)}) {
 		entities.app_set_state(app, .MENU)
 	}
 }
@@ -1092,7 +1217,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(volume_text), {f32(panel_x + panel_width - 80), f32(item_y + 8)}, 20, 0, raylib.WHITE)
 	
 	// Volume minus button
-	if render_button(app, "-", panel_x + label_width, item_y, 30, item_height) {
+	if render_button("-", {f32(panel_x + label_width), f32(item_y), 30, f32(item_height)}) {
 		if app.settings.master_volume > 0.0 {
 			app.settings.master_volume -= 0.1
 			if app.settings.master_volume < 0.0 {
@@ -1102,7 +1227,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	}
 	
 	// Volume plus button
-	if render_button(app, "+", panel_x + label_width + 35, item_y, 30, item_height) {
+	if render_button("+", {f32(panel_x + label_width + 35), f32(item_y), 30, f32(item_height)}) {
 		if app.settings.master_volume < 1.0 {
 			app.settings.master_volume += 0.1
 			if app.settings.master_volume > 1.0 {
@@ -1123,7 +1248,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(lang_text), {f32(panel_x + panel_width - 120), f32(item_y + 8)}, 20, 0, raylib.WHITE)
 	
 	// Language prev button
-	if render_button(app, "<", panel_x + label_width, item_y, 40, item_height) {
+	if render_button("<", {f32(panel_x + label_width), f32(item_y), 40, f32(item_height)}) {
 		switch app.settings.language {
 		case .ENGLISH: app.settings.language = .PORTUGUESE
 		case .SPANISH: app.settings.language = .ENGLISH
@@ -1133,7 +1258,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	}
 	
 	// Language next button
-	if render_button(app, ">", panel_x + label_width + 45, item_y, 40, item_height) {
+	if render_button(">", {f32(panel_x + label_width + 45), f32(item_y), 40, f32(item_height)}) {
 		switch app.settings.language {
 		case .ENGLISH: app.settings.language = .SPANISH
 		case .SPANISH: app.settings.language = .PORTUGUESE
@@ -1155,7 +1280,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// Show Grid Toggle
 	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_SHOW_GRID)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
 	grid_text := constants.get_text(.UI_ON) if app.settings.show_grid else constants.get_text(.UI_OFF)
-	if render_button(app, grid_text, panel_x + panel_width - 100, item_y, 80, item_height) {
+	if render_button(grid_text, {f32(panel_x + panel_width - 100), f32(item_y), 80, f32(item_height)}) {
 		app.settings.show_grid = !app.settings.show_grid
 	}
 	
@@ -1164,7 +1289,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// Show Damage Numbers Toggle
 	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_SHOW_DAMAGE_NUMBERS)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
 	dmg_text := constants.get_text(.UI_ON) if app.settings.show_damage_numbers else constants.get_text(.UI_OFF)
-	if render_button(app, dmg_text, panel_x + panel_width - 100, item_y, 80, item_height) {
+	if render_button(dmg_text, {f32(panel_x + panel_width - 100), f32(item_y), 80, f32(item_height)}) {
 		app.settings.show_damage_numbers = !app.settings.show_damage_numbers
 	}
 	
@@ -1173,7 +1298,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// Show Tower Range Toggle
 	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_SHOW_TOWER_RANGE)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
 	range_text := constants.get_text(.UI_ON) if app.settings.show_tower_range else constants.get_text(.UI_OFF)
-	if render_button(app, range_text, panel_x + panel_width - 100, item_y, 80, item_height) {
+	if render_button(range_text, {f32(panel_x + panel_width - 100), f32(item_y), 80, f32(item_height)}) {
 		app.settings.show_tower_range = !app.settings.show_tower_range
 	}
 	
@@ -1182,7 +1307,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// Show FPS Toggle
 	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_SHOW_FPS)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
 	fps_text := constants.get_text(.UI_ON) if app.settings.show_fps else constants.get_text(.UI_OFF)
-	if render_button(app, fps_text, panel_x + panel_width - 100, item_y, 80, item_height) {
+	if render_button(fps_text, {f32(panel_x + panel_width - 100), f32(item_y), 80, f32(item_height)}) {
 		app.settings.show_fps = !app.settings.show_fps
 	}
 	
@@ -1191,7 +1316,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// Auto Start Wave Toggle
 	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_AUTO_WAVE)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
 	auto_text := constants.get_text(.UI_ON) if app.settings.auto_start_wave else constants.get_text(.UI_OFF)
-	if render_button(app, auto_text, panel_x + panel_width - 100, item_y, 80, item_height) {
+	if render_button(auto_text, {f32(panel_x + panel_width - 100), f32(item_y), 80, f32(item_height)}) {
 		app.settings.auto_start_wave = !app.settings.auto_start_wave
 	}
 	
@@ -1199,7 +1324,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	back_y := panel_y + panel_height + 20
 	back_width := i32(150)
 	back_x := (i32(screen_width) - back_width) / 2
-	if render_button(app, constants.get_text(.SETTINGS_BACK_TO_MENU), back_x, back_y, back_width, 40) {
+	if render_button(constants.get_text(.SETTINGS_BACK_TO_MENU), {f32(back_x), f32(back_y), f32(back_width), 40}) {
 		entities.app_set_state(app, .MENU)
 	}
 }
@@ -1387,9 +1512,14 @@ render_button_with_color :: proc(app: ^entities.App_State, text: string, x, y, w
 	return false
 }
 
-render_button :: proc(app: ^entities.App_State, text: string, x, y, width, height: i32, text_lines: i32 = 1) -> bool {
+render_button :: proc(text: string, rect: raylib.Rectangle, text_lines: i32 = 1) -> bool {
 	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
 	text_width := f32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text), font_size, 0).x)
+	
+	x := i32(rect.x)
+	y := i32(rect.y)
+	width := i32(rect.width)
+	height := i32(rect.height)
 	
 	actual_width := width
 	min_width := i32(text_width) + 20 // 10px padding on each side
@@ -1693,8 +1823,8 @@ draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, an
 }
 
 // Render tower preview for editor (calls unified function)
-render_tower_preview :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type) {
-	draw_tower_tile(x, y, cs, tower_type, 0, false)
+render_tower_preview :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, is_ghost: bool = false) {
+	draw_tower_tile(x, y, cs, tower_type, 0, is_ghost)
 }
 
 // Render tower for simulation (calls unified function with rotation)
@@ -1787,9 +1917,9 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	case .LASER: type_name = "Laser"
 	}
 	
-	info_text := fmt.tprintf("%s (Lvl %d)", type_name, tower.level)
+	info_text := fmt.tprintf("%s (%d)", type_name, tower.level)
 	info_cstr := strings.clone_to_cstring(info_text)
-	raylib.DrawText(info_cstr, panel_x + 10, panel_y + 10, 14, raylib.LIGHTGRAY)
+	raylib.DrawTextEx(constants.game_fonts.bold, info_cstr, {f32(panel_x + 10), f32(panel_y + 10)}, 22, 0, constants.PANEL_TEXT_COLOR)
 	
 	// Button position calculations
 	button_x := panel_x + 10
@@ -1800,7 +1930,7 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	damage_text := fmt.tprintf("Damage ($%d)", damage_cost)
 	can_afford_damage := app.sim.money >= damage_cost
 	
-	if render_button(app, damage_text, button_x, start_y, button_width, button_height) && can_afford_damage {
+	if render_button(damage_text, {f32(button_x), f32(start_y), f32(button_width), f32(button_height)}) && can_afford_damage {
 		entities.tower_upgrade_damage(tower)
 		app.sim.money -= damage_cost
 	}
@@ -1810,7 +1940,7 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	speed_text := fmt.tprintf("Speed ($%d)", speed_cost)
 	can_afford_speed := app.sim.money >= speed_cost
 	
-	if render_button(app, speed_text, button_x, start_y + button_height + spacing, button_width, button_height) && can_afford_speed {
+	if render_button(speed_text, {f32(button_x), f32(start_y + button_height + spacing), f32(button_width), f32(button_height)}) && can_afford_speed {
 		entities.tower_upgrade_rate(tower)
 		app.sim.money -= speed_cost
 	}
@@ -1820,13 +1950,13 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	crit_text := fmt.tprintf("Critical ($%d)", crit_cost)
 	can_afford_crit := app.sim.money >= crit_cost
 	
-	if render_button(app, crit_text, button_x, start_y + (button_height + spacing) * 2, button_width, button_height) && can_afford_crit {
+	if render_button(crit_text, {f32(button_x), f32(start_y + (button_height + spacing) * 2), f32(button_width), f32(button_height)}) && can_afford_crit {
 		entities.tower_upgrade_critical(tower)
 		app.sim.money -= crit_cost
 	}
 	
 	// Exit button
-	if render_button(app, "Exit", button_x, start_y + (button_height + spacing) * 3, button_width, button_height) {
+	if render_button("Exit", {f32(button_x), f32(start_y + (button_height + spacing) * 3), f32(button_width), f32(button_height)}) {
 		app.should_quit = true
 	}
 	
@@ -1846,7 +1976,7 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	delete_text := fmt.tprintf("Sell ($%d)", refund)
 	sell_y := strategy_y + 40 + section_spacing
 	
-	if render_button(app, delete_text, button_x, sell_y, button_width, button_height) {
+	if render_button(delete_text, {f32(button_x), f32(sell_y), f32(button_width), f32(button_height)}, 2) {
 		simulation_remove_tower_at(app, tower.r, tower.c)
 		return  // Tower removed, exit panel
 	}

@@ -105,6 +105,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 	
 	// Keyboard shortcuts
 	if raylib.IsKeyPressed(.ESCAPE) {
+		simulation_set_pause(app, true)
 		entities.app_set_state(app, .PAUSED)
 	}
 	

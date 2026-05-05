@@ -535,6 +535,11 @@ simulation_toggle_pause :: proc(app: ^entities.App_State) {
 	app.sim.paused = !app.sim.paused
 }
 
+// Set pause state explicitly
+simulation_set_pause :: proc(app: ^entities.App_State, paused: bool) {
+	app.sim.paused = paused
+}
+
 // Remove tower at position and refund money
 simulation_remove_tower_at :: proc(app: ^entities.App_State, row, col: i32) -> bool {
 	for i := 0; i < len(app.sim.towers); i += 1 {

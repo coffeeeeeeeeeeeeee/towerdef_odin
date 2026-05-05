@@ -147,22 +147,22 @@ BIOME_COLORS := [Biome]Biome_Colors{
 	.PLAIN = {
 		bg = raylib.Color{200, 220, 180, 255},
 		bg_grid = raylib.Color{190, 210, 170, 255},
-		path = raylib.Color{210, 180, 140, 255},
+		path = raylib.Color{175, 195, 155, 255},
 	},
 	.FOREST = {
 		bg = raylib.Color{150, 200, 150, 255},
 		bg_grid = raylib.Color{130, 180, 130, 255},
-		path = raylib.Color{160, 140, 100, 255},
+		path = raylib.Color{120, 160, 120, 255},
 	},
 	.DESERT = {
 		bg = raylib.Color{240, 220, 170, 255},
 		bg_grid = raylib.Color{230, 210, 160, 255},
-		path = raylib.Color{220, 180, 130, 255},
+		path = raylib.Color{200, 180, 130, 255},
 	},
 	.MOUNTAIN = {
 		bg = raylib.Color{180, 190, 200, 255},
 		bg_grid = raylib.Color{160, 170, 180, 255},
-		path = raylib.Color{140, 140, 140, 255},
+		path = raylib.Color{150, 155, 165, 255},
 	},
 }
 
@@ -257,6 +257,7 @@ UI_BUTTON_PRESSED_COLOR :: raylib.Color{255, 255, 0, 255}
 UI_BUTTON_SHADOW_COLOR :: raylib.Color{0, 0, 0, 20}
 
 UI_TEXT_COLOR :: raylib.Color{20, 20, 20, 255}
+UI_OVERLAY_COLOR :: raylib.Color{0, 0, 0, 200}
 
 UI_DROPDOWN_WIDTH :: 80
 UI_DROPDOWN_HEIGHT :: 24
@@ -267,6 +268,8 @@ UI_INPUT_HEIGHT :: 24
 UI_TOOLBAR_HEIGHT :: 34
 UI_PANEL_WIDTH :: 200
 UI_PANEL_HEIGHT :: 295
+
+PANEL_TEXT_COLOR :: raylib.GRAY
 
 // Zoom Constants
 ZOOM_MIN :: 0.5
@@ -331,3 +334,5 @@ ENEMY_SIZE_DEFAULT :: 0.30             // Normal enemies (medium)
 
 ENEMY_STROKE_WIDTH :: 4
 ENEMY_SHADOW_COLOR :: raylib.Color{0, 0, 0, 20}
+
+PATH_WIDTH_RATIO :: 0.4
