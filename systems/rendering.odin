@@ -35,7 +35,7 @@ render_map :: proc(app: ^entities.App_State) {
 	)
 	
 	// Draw paths
-	render_paths(app, cs, i32(gs))
+	render_paths(m, cs, i32(gs), app.camera_offset_x, app.camera_offset_y)
 	
 	// Draw gameplay tiles (towers, accessories)
 	for row in 0..<gs {
@@ -57,7 +57,7 @@ render_map :: proc(app: ^entities.App_State) {
 				} else {
 					// In editor, render tower directly from tile type
 					tower_type := tile_to_tower_type(tile)
-					render_tower_preview(x, y, cs, tower_type)
+					draw_tower_tile(x, y, cs, tower_type, 0, false)
 				}
 				
 			case .SPAWN:
@@ -76,7 +76,7 @@ render_map :: proc(app: ^entities.App_State) {
 	}
 	
 	// Draw obstacles
-	render_obstacles(app, cs, i32(gs))
+	render_obstacles(m, cs, i32(gs), app.camera_offset_x, app.camera_offset_y)
 	
 	// Draw laser beams (on top of everything)
 	if app.state == .PLAYING || (app.state == .PAUSED && app.previous_state == .PLAYING) {
@@ -98,7 +98,7 @@ render_map :: proc(app: ^entities.App_State) {
 		if app.sim.selected_build_tower != .EMPTY {
 			// Convert tile to tower type
 			tower_type := tile_to_tower_type(app.sim.selected_build_tower)
-			render_tower_preview(sx, sy, cs, tower_type, true) // is_ghost = true
+			draw_tower_tile(sx, sy, cs, tower_type, 0, true) // is_ghost = true
 		}
 	}
 	
@@ -115,14 +115,13 @@ render_map :: proc(app: ^entities.App_State) {
 			sx := f32(app.selected_cell.col) * cs + f32(app.camera_offset_x)
 			sy := f32(app.selected_cell.row) * cs + f32(app.camera_offset_y)
 			tower_type := tile_to_tower_type(app.sim.selected_build_tower)
-			render_tower_preview(sx, sy, cs, tower_type, true) // is_ghost = true
+			draw_tower_tile(sx, sy, cs, tower_type, 0, true) // is_ghost = true
 		}
 	}
 }
 
 // Render paths
-render_paths :: proc(app: ^entities.App_State, cs: f32, gs: i32) {
-	m := &app.editor.game_map
+render_paths :: proc(m: ^entities.Map, cs: f32, gs: i32, camera_offset_x, camera_offset_y: i32) {
 	path_width := cs * constants.PATH_WIDTH_RATIO
 	path_color := constants.BIOME_COLORS[m.biome].path
 	
@@ -141,8 +140,8 @@ render_paths :: proc(app: ^entities.App_State, cs: f32, gs: i32) {
 				continue
 			}
 			
-			x := f32(col) * cs + f32(app.camera_offset_x)
-			y := f32(row) * cs + f32(app.camera_offset_y)
+			x := f32(col) * cs + f32(camera_offset_x)
+			y := f32(row) * cs + f32(camera_offset_y)
 			cx := x + cs / 2
 			cy := y + cs / 2
 			
@@ -444,19 +443,18 @@ render_block :: proc(x, y, cs: f32) {
 		i32(y + cs * 0.25),
 		i32(cs * 0.5),
 		i32(cs * 0.5),
-		gray(150),
+		constants.UI_EDITOR_HIGHLIGHT_COLOR
 	)
 }
 
 // Render obstacles
-render_obstacles :: proc(app: ^entities.App_State, cs: f32, gs: i32) {
-	m := &app.editor.game_map
+render_obstacles :: proc(m: ^entities.Map, cs: f32, gs: i32, camera_offset_x, camera_offset_y: i32) {
 	
 	for row in 0..<gs {
 		for col in 0..<gs {
 			if m.obstacle_grid[row][col] == .OBSTACLE {
-				x := f32(col) * cs + f32(app.camera_offset_x)
-				y := f32(row) * cs + f32(app.camera_offset_y)
+				x := f32(col) * cs + f32(camera_offset_x)
+				y := f32(row) * cs + f32(camera_offset_y)
 				
 				// Draw spike/obstacle
 				center_x := x + cs / 2
@@ -967,7 +965,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		button_text := fmt.tprintf("%s\n$%d", tower_names[i], tower_costs[i])
 		
 		// Use render_button_with_color for consistent UI (2 lines: name and cost)
-		if render_button_with_color(app, button_text, x, y, constants.UI_BUTTON_WIDTH, constants.UI_BUTTON_HEIGHT, button_color, 2) && can_afford {
+		if render_button_with_color(button_text, {f32(x), f32(y), f32(constants.UI_BUTTON_WIDTH), f32(constants.UI_BUTTON_HEIGHT)}, button_color, 2) && can_afford {
 			if is_selected {
 				app.sim.selected_build_tower = .EMPTY  // Deselect
 			} else {
@@ -1048,7 +1046,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 	biome_names := []string{"Plain", "Forest", "Desert", "Mountain"}
 	biome_index := i32(app.editor.current_biome)
 	
-	if render_select(app, "biome", "Biome: ", biome_names, &biome_index, 10, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4, i32(constants.UI_DROPDOWN_WIDTH), i32(constants.UI_DROPDOWN_HEIGHT), true) {
+	if render_select("biome", "Biome: ", biome_names, &biome_index, 10, raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT + 4, i32(constants.UI_DROPDOWN_WIDTH), i32(constants.UI_DROPDOWN_HEIGHT), true) {
 		app.editor.current_biome = constants.Biome(biome_index)
 		app.editor.game_map.biome = constants.Biome(biome_index)
 	}
@@ -1273,7 +1271,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	raylib.DrawTextEx(constants.game_fonts.regular, strings.clone_to_cstring(constants.get_text(.SETTINGS_ANTIALIASING)), {f32(panel_x + 20), f32(item_y + 8)}, 20, 0, raylib.WHITE)
 	
 	aa_options := []string{"Off", "2x", "4x", "8x"}
-	_ = render_select(app, "antialiasing", "", aa_options, &app.settings.antialiasing, panel_x + panel_width - 120, item_y, 100, item_height, true)
+	_ = render_select("antialiasing", "", aa_options, &app.settings.antialiasing, panel_x + panel_width - 120, item_y, 100, item_height, true)
 	
 	item_y += item_height + 15
 	
@@ -1334,7 +1332,7 @@ ui_active_dropdown_id: string = ""
 
 // Render a select dropdown (or dropup)
 // Returns true if a new option was selected
-render_select :: proc(app: ^entities.App_State, id: string, prefix: string, options: []string, selected_index: ^i32, x, y, width, height: i32, dropup: bool = false) -> bool {
+render_select :: proc(id: string, prefix: string, options: []string, selected_index: ^i32, x, y, width, height: i32, dropup: bool = false) -> bool {
 	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
 	
 	// Find max width among all options to keep width stable
@@ -1366,8 +1364,8 @@ render_select :: proc(app: ^entities.App_State, id: string, prefix: string, opti
 		color = constants.UI_BUTTON_HOVER_COLOR
 	}
 	
-	raylib.DrawRectangle(x + constants.UI_BUTTON_SHADOW_OFFSET, y + constants.UI_BUTTON_SHADOW_OFFSET, actual_width, height, constants.UI_BUTTON_SHADOW_COLOR)
-	raylib.DrawRectangle(x, y, actual_width, height, color)
+	raylib.DrawRectangleRounded({f32(x + constants.UI_BUTTON_SHADOW_OFFSET), f32(y + constants.UI_BUTTON_SHADOW_OFFSET), f32(actual_width), f32(height)}, constants.UI_BUTTON_ROUNDNESS, 8, constants.UI_BUTTON_SHADOW_COLOR)
+	raylib.DrawRectangleRounded({f32(x), f32(y), f32(actual_width), f32(height)}, constants.UI_BUTTON_ROUNDNESS, 8, color)
 	
 	// Text
 	text := fmt.tprintf("%s%s", prefix, options[selected_index^])
@@ -1454,7 +1452,12 @@ render_select :: proc(app: ^entities.App_State, id: string, prefix: string, opti
 }
 
 // Render UI button
-render_button_with_color :: proc(app: ^entities.App_State, text: string, x, y, width, height: i32, base_color: raylib.Color, text_lines: i32 = 1) -> bool {
+render_button_with_color :: proc(text: string, rect: raylib.Rectangle, base_color: raylib.Color, text_lines: i32 = 1) -> bool {
+	x := i32(rect.x)
+	y := i32(rect.y)
+	width := i32(rect.width)
+	height := i32(rect.height)
+	
 	actual_width := width
 	actual_height := height
 	
@@ -1486,8 +1489,8 @@ render_button_with_color :: proc(app: ^entities.App_State, text: string, x, y, w
 		}
 	}
 	
-	raylib.DrawRectangle(x + constants.UI_BUTTON_SHADOW_OFFSET, y + constants.UI_BUTTON_SHADOW_OFFSET, actual_width, actual_height, constants.UI_BUTTON_SHADOW_COLOR)
-	raylib.DrawRectangle(x, y, actual_width, actual_height, color)
+	raylib.DrawRectangleRounded({f32(x + constants.UI_BUTTON_SHADOW_OFFSET), f32(y + constants.UI_BUTTON_SHADOW_OFFSET), f32(actual_width), f32(actual_height)}, constants.UI_BUTTON_ROUNDNESS, 8, constants.UI_BUTTON_SHADOW_COLOR)
+	raylib.DrawRectangleRounded({f32(x), f32(y), f32(actual_width), f32(actual_height)}, constants.UI_BUTTON_ROUNDNESS, 8, color)
 	
 	// Text (centered) - calculate vertical position based on number of lines
 	total_text_height := f32(text_lines) * line_spacing
@@ -1545,8 +1548,8 @@ render_button :: proc(text: string, rect: raylib.Rectangle, text_lines: i32 = 1)
 		}
 	}
 	
-	raylib.DrawRectangle(x + constants.UI_BUTTON_SHADOW_OFFSET, y + constants.UI_BUTTON_SHADOW_OFFSET, actual_width, height, constants.UI_BUTTON_SHADOW_COLOR)
-	raylib.DrawRectangle(x, y, actual_width, height, color)
+	raylib.DrawRectangleRounded({f32(x + constants.UI_BUTTON_SHADOW_OFFSET), f32(y + constants.UI_BUTTON_SHADOW_OFFSET), f32(actual_width), f32(height)}, constants.UI_BUTTON_ROUNDNESS, 8, constants.UI_BUTTON_SHADOW_COLOR)
+	raylib.DrawRectangleRounded({f32(x), f32(y), f32(actual_width), f32(height)}, constants.UI_BUTTON_ROUNDNESS, 8, color)
 	
 	// Text (centered) - handle multi-line text properly
 	line_spacing := font_size * 1.2  // Approximate line spacing for multi-line text
@@ -1572,9 +1575,11 @@ render_button :: proc(text: string, rect: raylib.Rectangle, text_lines: i32 = 1)
 	return false
 }
 
-// Helper for gray color
-gray :: proc(value: u8) -> raylib.Color {
-	return raylib.Color{value, value, value, 255}
+
+// Check if mouse is over a rectangle
+is_mouse_over_rect :: proc(rect: raylib.Rectangle) -> bool {
+	mouse_pos := raylib.GetMousePosition()
+	return raylib.CheckCollisionPointRec(mouse_pos, rect)
 }
 
 // Check if mouse is over tower control panel (to prevent grid clicks)
@@ -1583,16 +1588,14 @@ is_mouse_over_tower_panel :: proc(app: ^entities.App_State) -> bool {
 		return false
 	}
 	
-	panel_width: i32 = constants.UI_PANEL_WIDTH
-	panel_height: i32 = constants.UI_PANEL_HEIGHT
-	panel_x := raylib.GetScreenWidth() - panel_width - 10
-	panel_y := i32(150)
+	panel_rect := raylib.Rectangle{
+		x = f32(raylib.GetScreenWidth() - constants.UI_PANEL_WIDTH - constants.UI_PANEL_MARGIN),
+		y = f32(constants.UI_PANEL_Y_POSITION),
+		width = f32(constants.UI_PANEL_WIDTH),
+		height = f32(constants.UI_PANEL_HEIGHT),
+	}
 	
-	mouse_x := raylib.GetMouseX()
-	mouse_y := raylib.GetMouseY()
-	
-	return mouse_x >= panel_x && mouse_x <= panel_x + panel_width &&
-	       mouse_y >= panel_y && mouse_y <= panel_y + panel_height
+	return is_mouse_over_rect(panel_rect)
 }
 
 // Unified tower drawing function (JS style) - works for both editor and simulation
@@ -1822,11 +1825,6 @@ draw_tower_tile :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, an
 	}
 }
 
-// Render tower preview for editor (calls unified function)
-render_tower_preview :: proc(x, y: f32, cs: f32, tower_type: constants.Tower_Type, is_ghost: bool = false) {
-	draw_tower_tile(x, y, cs, tower_type, 0, is_ghost)
-}
-
 // Render tower for simulation (calls unified function with rotation)
 render_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, x, y, cs: f32) {
 	// Draw range outline first (so it appears behind the tower)
@@ -1967,7 +1965,7 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	strategy_names := []string{"First", "Last", "Strong", "Weak"}
 	strategy_index := i32(tower.target_strategy)
 	
-	if render_select(app, "strategy", "Target: ", strategy_names, &strategy_index, button_x, i32(strategy_y), button_width, 30, true) {
+	if render_select("strategy", "Target: ", strategy_names, &strategy_index, button_x, i32(strategy_y), button_width, 30, true) {
 		tower.target_strategy = constants.Target_Strategy(strategy_index)
 	}
 	

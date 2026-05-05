@@ -20,7 +20,7 @@ FONT_SEMIBOLD_PATH :: "fonts/Orbitron-Medium.ttf"
 FONT_BOLD_PATH :: "fonts/Orbitron-Bold.ttf"
 
 // Font base sizes (larger for better quality when scaling)
-FONT_BASE_SIZE :: 128
+FONT_BASE_SIZE :: 256
 
 // Latin-1 codepoints count for Spanish/Portuguese support
 LATIN1_CODEPOINT_COUNT :: 191

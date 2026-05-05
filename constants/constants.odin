@@ -249,6 +249,7 @@ UI_BUTTON_WIDTH :: 80
 UI_BUTTON_HEIGHT :: 24
 UI_BUTTON_FONT_SIZE :: 16
 UI_BUTTON_SHADOW_OFFSET :: 3
+UI_BUTTON_ROUNDNESS :: 0.15
 
 // UI Color Constants
 UI_BUTTON_COLOR :: raylib.Color{255, 255, 255, 255}
@@ -258,6 +259,7 @@ UI_BUTTON_SHADOW_COLOR :: raylib.Color{0, 0, 0, 20}
 
 UI_TEXT_COLOR :: raylib.Color{20, 20, 20, 255}
 UI_OVERLAY_COLOR :: raylib.Color{0, 0, 0, 200}
+UI_EDITOR_HIGHLIGHT_COLOR :: raylib.Color{150, 150, 150, 255}
 
 UI_DROPDOWN_WIDTH :: 80
 UI_DROPDOWN_HEIGHT :: 24
@@ -268,6 +270,8 @@ UI_INPUT_HEIGHT :: 24
 UI_TOOLBAR_HEIGHT :: 34
 UI_PANEL_WIDTH :: 200
 UI_PANEL_HEIGHT :: 295
+UI_PANEL_MARGIN :: 10
+UI_PANEL_Y_POSITION :: 150
 
 PANEL_TEXT_COLOR :: raylib.GRAY
 
@@ -311,7 +315,7 @@ TOWER_SHADOW :: raylib.Color{0, 0, 0, 20}                // Shadow color
 TOWER_ARCHER_WOOD :: raylib.Color{139, 90, 43, 255}         // Archer bow wood
 TOWER_ARCHER_STRING :: raylib.Color{200, 200, 200, 255}     // Archer bow string
 TOWER_RANGE_OUTLINE :: raylib.Color{255, 255, 255, 60}      // Tower range area outline (semi-transparent white)
-TOWER_RETICLE_COLOR :: raylib.Color{255, 255, 255, 160}      // Selected cell reticle color (white with 60% opacity)
+TOWER_RETICLE_COLOR :: raylib.Color{255, 255, 255, 255}      // Selected cell reticle color (white with 60% opacity)
 
 // Tower Component Size Constants
 TOWER_BARREL_WIDTH_RATIO :: 0.25       // Barrel width as ratio of tower size
