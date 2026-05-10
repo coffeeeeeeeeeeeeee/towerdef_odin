@@ -47,7 +47,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 	app.mouse_y = grid_y
 	
 	// Update selected cell for reticle display
-	if is_valid_grid_pos(grid_x, grid_y) {
+	if is_valid_grid_pos(app, grid_x, grid_y) {
 		app.selected_cell.row = grid_y
 		app.selected_cell.col = grid_x
 		app.selected_cell.valid = true
@@ -62,7 +62,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 			return
 		}
 		
-		if is_valid_grid_pos(grid_x, grid_y) {
+		if is_valid_grid_pos(app, grid_x, grid_y) {
 			// Check if clicking on a tower
 			tile := app.editor.game_map.grid[grid_y][grid_x]
 			_ = tile  // Use tile to avoid unused variable warning
@@ -141,7 +141,7 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 	app.mouse_y = grid_y
 	
 	// Update selected cell for reticle display
-	if is_valid_grid_pos(grid_x, grid_y) {
+	if is_valid_grid_pos(app, grid_x, grid_y) {
 		app.selected_cell.row = grid_y
 		app.selected_cell.col = grid_x
 		app.selected_cell.valid = true
@@ -149,32 +149,13 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 		app.selected_cell.valid = false
 	}
 	
-	// Sidebar toolbar click detection
-	button_width := i32(80)
-	button_height := i32(30)
-	margin := i32(5)
-	toolbar_width := button_width + margin * 2
-	toolbar_height := i32(12) * (button_height + margin) + margin * 2
-	toolbar_x := i32(20)
-	toolbar_y := (raylib.GetScreenHeight() - toolbar_height) / 2
-	
-	// Check if clicked on sidebar toolbar
-	if mouse_x >= toolbar_x && mouse_x <= toolbar_x + toolbar_width &&
-	   mouse_y >= toolbar_y && mouse_y <= toolbar_y + toolbar_height {
-		if raylib.IsMouseButtonPressed(.LEFT) {
-			input_handle_toolbar_click(app, mouse_x, mouse_y, toolbar_x, toolbar_y, button_width, button_height, margin)
-		}
-		return
-	}
-	
-	// Bottom toolbar
-	if mouse_y > raylib.GetScreenHeight() - constants.UI_TOOLBAR_HEIGHT {
-		// Clicked on bottom toolbar
+	// Bottom toolbars (build tools and menus)
+	if mouse_y > raylib.GetScreenHeight() - 70 {
 		return
 	}
 	
 	// Check if valid grid position
-	if !is_valid_grid_pos(grid_x, grid_y) {
+	if !is_valid_grid_pos(app, grid_x, grid_y) {
 		return
 	}
 	
@@ -254,35 +235,7 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 	}
 }
 
-// Handle toolbar click
-input_handle_toolbar_click :: proc(app: ^entities.App_State, mouse_x, mouse_y, toolbar_x, toolbar_y, button_width, button_height, margin: i32) {
-	tools := []constants.Tile{
-		.EMPTY,
-		.PATH,
-		.SPAWN,
-		.GOAL,
-		.TOWER_ARCHER,
-		.TOWER_CANNON,
-		.TOWER_SNIPER,
-		.TOWER_MISSILE,
-		.TOWER_LASER,
-		.OBSTACLE,
-		.ACCESSORY_TREE,
-		.ACCESSORY_BLOCK,
-	}
-	
-	for i in 0..<len(tools) {
-		button_x := toolbar_x + margin
-		button_y := toolbar_y + margin + i32(i) * (button_height + margin)
-		
-		// Check if clicked on this button
-		if mouse_x >= button_x && mouse_x <= button_x + button_width &&
-		   mouse_y >= button_y && mouse_y <= button_y + button_height {
-			app.editor.current_tool = tools[i]
-			return
-		}
-	}
-}
+
 
 // Editor erase cell
 editor_erase_cell :: proc(app: ^entities.App_State, row, col: i32) {
@@ -306,9 +259,9 @@ input_handle_game_over :: proc(app: ^entities.App_State) {
 	// Handled by render_button in rendering.odin
 }
 
-// Helper to check if grid position is valid
-is_valid_grid_pos :: proc(x, y: i32) -> bool {
-	return x >= 0 && x < constants.GRID_SIZE && y >= 0 && y < constants.GRID_SIZE
+// Helper to check if grid position is valid (uses actual map dimensions)
+is_valid_grid_pos :: proc(app: ^entities.App_State, x, y: i32) -> bool {
+	return x >= 0 && x < app.editor.game_map.width && y >= 0 && y < app.editor.game_map.height
 }
 
 // Convert screen coordinates to grid coordinates (accounts for camera offset and zoom)
@@ -338,7 +291,7 @@ input_get_hovered_cell :: proc(app: ^entities.App_State) -> (row, col: i32, vali
 	// Convert to grid coordinates using helper function
 	col, row = screen_to_grid(app, mouse_x, mouse_y)
 	
-	valid = is_valid_grid_pos(col, row)
+	valid = is_valid_grid_pos(app, col, row)
 	return
 }
 

@@ -42,6 +42,35 @@ Simulation :: struct {
 	is_wave_green: bool,
 	is_wave_flying: bool,
 	is_wave_blue: bool,
+	
+	// Stats
+	enemies_killed: i32,
+	money_earned: i32,
+	towers_built: i32,
+	upgrades_bought: i32,
+	play_time: f32,
+	
+	// Time-series for graph
+	graph_samples: [dynamic]Graph_Sample,
+	wave_marks: [dynamic]Wave_Mark,
+	_sample_timer: f32,
+}
+
+// Data point sampled periodically for the game-over graph
+Graph_Sample :: struct {
+	time: f32,
+	money: i32,
+	health: i32,
+}
+
+// Marks when a wave started, with its type for color/shape
+Wave_Mark :: struct {
+	time: f32,
+	wave: i32,
+	is_boss: bool,
+	is_green: bool,
+	is_blue: bool,
+	is_flying: bool,
 }
 
 // Editor state

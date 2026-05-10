@@ -1,0 +1,14 @@
+{
+	"grid_size": 20,
+	"cell_size": 32,
+	"show_grid": true,
+	"show_fps": true,
+	"language": 1,
+	"master_volume": 1.00000000,
+	"fullscreen": false,
+	"vsync": true,
+	"antialiasing": 3,
+	"show_damage_numbers": true,
+	"show_tower_range": false,
+	"auto_start_wave": true
+}

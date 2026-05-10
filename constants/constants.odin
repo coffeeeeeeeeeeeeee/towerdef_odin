@@ -29,17 +29,17 @@ MONEY_WAVE_CLEAR :: 100
 
 // Tile types
 Tile :: enum i32 {
-	EMPTY = 0,
-	PATH = 1,
-	SPAWN = 2,
-	GOAL = 3,
-	TOWER_ARCHER = 4,
-	TOWER_CANNON = 5,
-	TOWER_SNIPER = 6,
-	TOWER_MISSILE = 7,
-	TOWER_LASER = 8,
-	OBSTACLE = 9,
-	ACCESSORY_TREE = 10,
+	EMPTY           = 0,
+	PATH            = 1,
+	SPAWN           = 2,
+	GOAL            = 3,
+	TOWER_ARCHER    = 4,
+	TOWER_CANNON    = 5,
+	TOWER_SNIPER    = 6,
+	TOWER_MISSILE   = 7,
+	TOWER_LASER     = 8,
+	OBSTACLE        = 9,
+	ACCESSORY_TREE  = 10,
 	ACCESSORY_BLOCK = 11,
 }
 
@@ -70,13 +70,13 @@ Biome :: enum {
 
 // Tower Specifications
 Tower_Spec :: struct {
-	type: Tower_Type,
-	range: f32,
-	damage: f32,
+	type:     Tower_Type,
+	range:    f32,
+	damage:   f32,
 	cooldown: f32,
-	aoe: f32,
-	cost: i32,
-	color: raylib.Color,
+	aoe:      f32,
+	cost:     i32,
+	color:    raylib.Color,
 }
 
 // Tile data for extra properties
@@ -85,7 +85,7 @@ Tile_Data :: struct {
 }
 
 // Tower specs lookup
-TOWER_SPECS := [Tower_Type]Tower_Spec{
+TOWER_SPECS := [Tower_Type]Tower_Spec {
 	.ARCHER = {
 		type = .ARCHER,
 		range = 2.5,
@@ -135,15 +135,18 @@ TOWER_SPECS := [Tower_Type]Tower_Spec{
 
 // Enemy constants
 ENEMY_GROWTH_RATE :: 1.15
+ENEMY_BASE_HP :: 10.0
+ENEMY_GLOBAL_SPEED_MULTIPLIER :: 0.9 // Use this to scale all enemy speeds
+ENEMY_GLOBAL_HP_MULTIPLIER :: 1.1 // Use this to scale all enemy health
 
 // Biome colors
 Biome_Colors :: struct {
-	bg: raylib.Color,
+	bg:      raylib.Color,
 	bg_grid: raylib.Color,
-	path: raylib.Color,
+	path:    raylib.Color,
 }
 
-BIOME_COLORS := [Biome]Biome_Colors{
+BIOME_COLORS := [Biome]Biome_Colors {
 	.PLAIN = {
 		bg = raylib.Color{200, 220, 180, 255},
 		bg_grid = raylib.Color{190, 210, 170, 255},
@@ -168,14 +171,14 @@ BIOME_COLORS := [Biome]Biome_Colors{
 
 // Biome tree colors (pine/tree layers)
 Biome_Tree_Colors :: struct {
-	layer_dark: raylib.Color,
-	layer_mid: raylib.Color,
+	layer_dark:  raylib.Color,
+	layer_mid:   raylib.Color,
 	layer_light: raylib.Color,
-	layer_tip: raylib.Color,
-	trunk: raylib.Color,
+	layer_tip:   raylib.Color,
+	trunk:       raylib.Color,
 }
 
-BIOME_TREE_COLORS := [Biome]Biome_Tree_Colors{
+BIOME_TREE_COLORS := [Biome]Biome_Tree_Colors {
 	.PLAIN = {
 		layer_dark = raylib.Color{40, 130, 40, 255},
 		layer_mid = raylib.Color{50, 150, 50, 255},
@@ -184,11 +187,11 @@ BIOME_TREE_COLORS := [Biome]Biome_Tree_Colors{
 		trunk = raylib.Color{139, 69, 19, 255},
 	},
 	.FOREST = {
-		layer_dark = raylib.Color{10, 70, 30, 255},    // Pine dark
-		layer_mid = raylib.Color{20, 90, 40, 255},     // Pine mid
-		layer_light = raylib.Color{30, 110, 50, 255},  // Pine light
-		layer_tip = raylib.Color{40, 130, 60, 255},    // Pine tip
-		trunk = raylib.Color{80, 50, 30, 255},
+		layer_dark  = raylib.Color{10, 70, 30, 255}, // Pine dark
+		layer_mid   = raylib.Color{20, 90, 40, 255}, // Pine mid
+		layer_light = raylib.Color{30, 110, 50, 255}, // Pine light
+		layer_tip   = raylib.Color{40, 130, 60, 255}, // Pine tip
+		trunk       = raylib.Color{80, 50, 30, 255},
 	},
 	.DESERT = {
 		layer_dark = raylib.Color{20, 100, 20, 255},
@@ -218,7 +221,7 @@ COLOR_ENEMY :: raylib.Color{220, 60, 60, 255}
 COLOR_ENEMY_GREEN :: raylib.Color{60, 180, 60, 255}
 COLOR_ENEMY_BLUE :: raylib.Color{60, 100, 220, 255}
 COLOR_ENEMY_BOSS :: raylib.Color{220, 200, 60, 255}
-COLOR_ENEMY_FLYING :: raylib.Color{255, 220, 60, 255}  // Yellow flying enemy
+COLOR_ENEMY_FLYING :: raylib.Color{255, 220, 60, 255} // Yellow flying enemy
 
 COLOR_GRID_LINE :: raylib.Color{150, 150, 150, 100}
 COLOR_PATH :: raylib.Color{210, 180, 140, 255}
@@ -233,7 +236,7 @@ COLOR_LASER_BEAM :: raylib.Color{255, 68, 68, 255}
 // Enemy colors
 ENEMY_GREEN :: raylib.Color{0, 255, 0, 255}
 ENEMY_BLUE :: raylib.Color{0, 0, 255, 255}
-ENEMY_FLYING :: raylib.Color{255, 220, 60, 255}  // Yellow flying enemy
+ENEMY_FLYING :: raylib.Color{255, 220, 60, 255} // Yellow flying enemy
 
 // Tower stroke colors (for rendering)
 TOWER_LASER_STROKE :: raylib.Color{80, 90, 100, 255}
@@ -248,8 +251,8 @@ TOWER_ARCHER_STROKE :: raylib.Color{90, 70, 50, 255}
 UI_BUTTON_WIDTH :: 80
 UI_BUTTON_HEIGHT :: 24
 UI_BUTTON_FONT_SIZE :: 16
-UI_BUTTON_SHADOW_OFFSET :: 3
-UI_BUTTON_ROUNDNESS :: 0.15
+UI_BUTTON_SHADOW_OFFSET :: 1
+UI_BUTTON_ROUNDNESS :: 0.1
 
 // UI Color Constants
 UI_BUTTON_COLOR :: raylib.Color{255, 255, 255, 255}
@@ -273,13 +276,17 @@ UI_PANEL_HEIGHT :: 295
 UI_PANEL_MARGIN :: 10
 UI_PANEL_Y_POSITION :: 150
 
+// Screen-edge margins for panels
+UI_MARGIN_X :: 10
+UI_MARGIN_Y :: 10
+
 PANEL_TEXT_COLOR :: raylib.GRAY
 
 // Zoom Constants
 ZOOM_MIN :: 0.5
 ZOOM_MAX :: 3.0
-ZOOM_SPEED :: 0.1  // Zoom speed per wheel tick (reduced for smoother feel)
-ZOOM_SMOOTH_SPEED :: 8.0  // Speed of zoom smoothing (lerp factor per second)
+ZOOM_SPEED :: 0.1 // Zoom speed per wheel tick (reduced for smoother feel)
+ZOOM_SMOOTH_SPEED :: 8.0 // Speed of zoom smoothing (lerp factor per second)
 
 // Easing function for zoom (ease-in: slow start, fast end)
 ease_zoom :: proc(t: f32) -> f32 {
@@ -288,53 +295,54 @@ ease_zoom :: proc(t: f32) -> f32 {
 }
 
 // Tower Rendering Constants
-TOWER_CELL_SIZE_RATIO :: 0.8           // Tower size as ratio of cell size
-TOWER_BORDER_THICKNESS :: 3            // Border thickness in pixels
+TOWER_CELL_SIZE_RATIO :: 0.8 // Tower size as ratio of cell size
+TOWER_BORDER_THICKNESS :: 3 // Border thickness in pixels
 TOWER_BORDER_COLOR :: raylib.BLACK
-TOWER_INNER_COLOR :: raylib.DARKGRAY   // Center dot color
-TOWER_INNER_SIZE_RATIO :: 0.25         // Inner dot size as ratio of tower size
-TOWER_ROUNDED_CORNER :: 0.3            // Rectangle rounded corners (0.0 to 1.0)
-TOWER_CORNER_SEGMENTS :: 8             // Number of segments for rounded corners
+TOWER_INNER_COLOR :: raylib.DARKGRAY // Center dot color
+TOWER_INNER_SIZE_RATIO :: 0.25 // Inner dot size as ratio of tower size
+TOWER_ROUNDED_CORNER :: 0.3 // Rectangle rounded corners (0.0 to 1.0)
+TOWER_CORNER_SEGMENTS :: 8 // Number of segments for rounded corners
 
 // Tower Color Constants
-TOWER_BASE_COLOR :: raylib.Color{180, 180, 180, 255}      // Base tower body color
-TOWER_SECONDARY_COLOR :: raylib.Color{140, 140, 140, 255}   // Secondary/accent color
-TOWER_CANNON_COLOR :: raylib.Color{60, 60, 60, 255}        // Cannon barrel color
-TOWER_BARREL_OUTLINE :: raylib.Color{30, 30, 30, 255}       // Barrel outline color
-TOWER_HIGHLIGHT_COLOR :: raylib.Color{220, 220, 220, 255}   // Highlight/bright areas
+TOWER_BASE_COLOR :: raylib.Color{180, 180, 180, 255} // Base tower body color
+TOWER_SECONDARY_COLOR :: raylib.Color{140, 140, 140, 255} // Secondary/accent color
+TOWER_CANNON_COLOR :: raylib.Color{60, 60, 60, 255} // Cannon barrel color
+TOWER_BARREL_OUTLINE :: raylib.Color{30, 30, 30, 255} // Barrel outline color
+TOWER_HIGHLIGHT_COLOR :: raylib.Color{220, 220, 220, 255} // Highlight/bright areas
 
 // Tower-specific Colors (JS Style)
-TOWER_BARREL :: raylib.Color{143, 161, 179, 255}            // Tower barrel color (JS: #8fa1b3)
-TOWER_LASER_CORE :: raylib.Color{170, 221, 255, 255}        // Laser center glow (JS: #aaddff)
-TOWER_LASER_BASE :: raylib.Color{106, 122, 138, 255}        // Laser base (JS: #6a7a8a)
-TOWER_CANNON_BASE :: raylib.Color{122, 138, 154, 255}       // Cannon base (JS: #7a8a9a for bullet)
-TOWER_MISSILE_BASE :: raylib.Color{138, 122, 106, 255}      // Missile base (JS: #8a7a6a)
-TOWER_MISSILE_POD :: raylib.Color{106, 90, 74, 255}         // Missile pods (JS: #6a5a4a)
-TOWER_MISSILE_WARHEAD :: raylib.Color{255, 85, 85, 255}     // Missile warhead (JS: #ff5555)
-TOWER_SHADOW :: raylib.Color{0, 0, 0, 20}                // Shadow color
-TOWER_ARCHER_WOOD :: raylib.Color{139, 90, 43, 255}         // Archer bow wood
-TOWER_ARCHER_STRING :: raylib.Color{200, 200, 200, 255}     // Archer bow string
-TOWER_RANGE_OUTLINE :: raylib.Color{255, 255, 255, 60}      // Tower range area outline (semi-transparent white)
-TOWER_RETICLE_COLOR :: raylib.Color{255, 255, 255, 255}      // Selected cell reticle color (white with 60% opacity)
+TOWER_BARREL :: raylib.Color{143, 161, 179, 255} // Tower barrel color (JS: #8fa1b3)
+TOWER_LASER_CORE :: raylib.Color{170, 221, 255, 255} // Laser center glow (JS: #aaddff)
+TOWER_LASER_BASE :: raylib.Color{106, 122, 138, 255} // Laser base (JS: #6a7a8a)
+TOWER_CANNON_BASE :: raylib.Color{122, 138, 154, 255} // Cannon base (JS: #7a8a9a for bullet)
+TOWER_MISSILE_BASE :: raylib.Color{138, 122, 106, 255} // Missile base (JS: #8a7a6a)
+TOWER_MISSILE_POD :: raylib.Color{106, 90, 74, 255} // Missile pods (JS: #6a5a4a)
+TOWER_MISSILE_WARHEAD :: raylib.Color{255, 85, 85, 255} // Missile warhead (JS: #ff5555)
+TOWER_SHADOW :: raylib.Color{0, 0, 0, 20} // Shadow color
+TOWER_ARCHER_WOOD :: raylib.Color{139, 90, 43, 255} // Archer bow wood
+TOWER_ARCHER_STRING :: raylib.Color{200, 200, 200, 255} // Archer bow string
+TOWER_RANGE_OUTLINE :: raylib.Color{255, 255, 255, 60} // Tower range area outline (semi-transparent white)
+TOWER_RANGE_PREVIEW :: raylib.Color{255, 255, 255, 30} // Tower range preview fill (transparent white)
+TOWER_RETICLE_COLOR :: raylib.Color{255, 255, 255, 255} // Selected cell reticle color (white with 60% opacity)
 
 // Tower Component Size Constants
-TOWER_BARREL_WIDTH_RATIO :: 0.25       // Barrel width as ratio of tower size
-TOWER_BARREL_LENGTH_RATIO :: 0.6     // Barrel length as ratio of tower size
-TOWER_HATCH_RADIUS_RATIO :: 0.15     // Hatch/circle size ratio
+TOWER_BARREL_WIDTH_RATIO :: 0.25 // Barrel width as ratio of tower size
+TOWER_BARREL_LENGTH_RATIO :: 0.6 // Barrel length as ratio of tower size
+TOWER_HATCH_RADIUS_RATIO :: 0.15 // Hatch/circle size ratio
 
 // Enemy Speed Constants (cells per second, scaled by GRID_SPEED_SCALE)
-ENEMY_SPEED_DEFAULT :: 1.2             // Normal enemies
-ENEMY_SPEED_GREEN :: 1.8               // Fast green enemies (50% faster)
-ENEMY_SPEED_BLUE :: 1.1                // Medium blue enemies
-ENEMY_SPEED_BOSS :: 0.5                // Slow bosses
-ENEMY_SPEED_FLYING :: 1.3              // Flying enemies
+ENEMY_SPEED_DEFAULT :: 1.2 // Normal enemies
+ENEMY_SPEED_GREEN :: 1.8 // Fast green enemies (50% faster)
+ENEMY_SPEED_BLUE :: 1.1 // Medium blue enemies
+ENEMY_SPEED_BOSS :: 0.5 // Slow bosses
+ENEMY_SPEED_FLYING :: 1.3 // Flying enemies
 
 // Enemy Size Constants (as ratio of cell size)
-ENEMY_SIZE_BOSS :: 0.40                // Boss enemies (large)
-ENEMY_SIZE_FLYING :: 0.25              // Flying enemies (small)
-ENEMY_SIZE_BLUE :: 0.30                // Blue enemies (medium)
-ENEMY_SIZE_GREEN :: 0.20               // Green enemies (tiny)
-ENEMY_SIZE_DEFAULT :: 0.30             // Normal enemies (medium)
+ENEMY_SIZE_BOSS :: 0.40 // Boss enemies (large)
+ENEMY_SIZE_FLYING :: 0.25 // Flying enemies (small)
+ENEMY_SIZE_BLUE :: 0.30 // Blue enemies (medium)
+ENEMY_SIZE_GREEN :: 0.20 // Green enemies (tiny)
+ENEMY_SIZE_DEFAULT :: 0.30 // Normal enemies (medium)
 
 ENEMY_STROKE_WIDTH :: 4
 ENEMY_SHADOW_COLOR :: raylib.Color{0, 0, 0, 20}

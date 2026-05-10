@@ -1,9 +1,11 @@
 package main
 
-import "vendor:raylib"
+import "core:encoding/json"
+import "core:fmt"
 import "core:math"
 import "core:math/rand"
-import "core:fmt"
+import "core:os"
+import "vendor:raylib"
 
 import "constants"
 import "entities"
@@ -15,51 +17,93 @@ WINDOW_HEIGHT :: 600
 WINDOW_TITLE :: "First Impact"
 
 main :: proc() {
-	// Initialize raylib
-	raylib.SetConfigFlags({.WINDOW_RESIZABLE, .MSAA_4X_HINT})
+	// Load settings first
+	initial_settings := load_settings()
+
+	// Initialize raylib using loaded settings
+	config_flags := raylib.ConfigFlags{.WINDOW_RESIZABLE}
+	if initial_settings.vsync {
+		config_flags += {.VSYNC_HINT}
+	}
+	if initial_settings.antialiasing > 0 {
+		config_flags += {.MSAA_4X_HINT}
+	}
+
+	raylib.SetConfigFlags(config_flags)
 	raylib.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE)
 	defer raylib.CloseWindow()
-	
+
+	if initial_settings.fullscreen {
+		monitor := raylib.GetCurrentMonitor()
+		// Position window at monitor origin before toggling fullscreen
+		monitor_pos := raylib.GetMonitorPosition(monitor)
+		raylib.SetWindowPosition(i32(monitor_pos.x), i32(monitor_pos.y))
+		raylib.SetWindowSize(raylib.GetMonitorWidth(monitor), raylib.GetMonitorHeight(monitor))
+		raylib.SetWindowState({.WINDOW_UNDECORATED})
+		raylib.ToggleFullscreen()
+	}
+
 	raylib.SetTargetFPS(constants.MAX_FPS)
 	raylib.SetExitKey(.KEY_NULL) // Disable default exit key
-	
+
 	// Initialize random seed
 	rand.reset(u64(raylib.GetTime() * 1000))
-	
+
 	// Initialize translations
 	constants.init_translations()
-	
+	constants.set_language(initial_settings.language)
+
 	// Initialize fonts
 	constants.load_fonts()
 	defer constants.unload_fonts()
-	
+
 	// Initialize game
-	app_init()
-	defer app_destroy()
-	
+	app_init(initial_settings)
+	defer {
+		save_settings(app.settings)
+		app_destroy()
+	}
+
 	// Main game loop
 	for !raylib.WindowShouldClose() && !app.should_quit {
 		// Calculate delta time
 		dt := raylib.GetFrameTime()
 		app.delta_time = dt
-		
+
 		// Handle input
 		systems.input_handle(&app)
-		
+
+		// Handle window resize (including Maximized and Fullscreen)
+		if raylib.IsWindowResized() {
+			grid_total_size := f32(app.settings.grid_size) * f32(app.settings.cell_size) * app.target_zoom
+			screen_width := f32(raylib.GetScreenWidth())
+			screen_height := f32(raylib.GetScreenHeight())
+
+			// Recenter the camera relative to the new dimensions
+			app.target_camera_offset_x = i32((screen_width - grid_total_size) / 2)
+			app.target_camera_offset_y = i32((screen_height - grid_total_size) / 2)
+
+			// Snap instantly to avoid long glides when maximizing/fullscreening
+			app.camera_offset_x = app.target_camera_offset_x
+			app.camera_offset_y = app.target_camera_offset_y
+		}
+
 		// Smooth zoom and camera offset interpolation
 		zoom_needs_update := app.zoom != app.target_zoom
-		camera_needs_update := app.camera_offset_x != app.target_camera_offset_x || app.camera_offset_y != app.target_camera_offset_y
-		
+		camera_needs_update :=
+			app.camera_offset_x != app.target_camera_offset_x ||
+			app.camera_offset_y != app.target_camera_offset_y
+
 		if zoom_needs_update || camera_needs_update {
 			// Calculate progress based on zoom difference
 			total_diff := app.target_zoom - app.zoom
 			if total_diff < 0 {
 				total_diff = -total_diff
 			}
-			
+
 			// Base speed factor
 			speed := constants.ZOOM_SMOOTH_SPEED * dt
-			
+
 			// Apply easing to speed (slow start, fast end)
 			// Normalize progress roughly from 0 to 1 based on remaining distance
 			progress := 1.0 - (total_diff / (constants.ZOOM_MAX - constants.ZOOM_MIN))
@@ -69,13 +113,13 @@ main :: proc() {
 			if progress > 1.0 {
 				progress = 1.0
 			}
-			
+
 			// Apply easing to speed
 			eased_speed := speed * constants.ease_zoom(progress)
 			if eased_speed > 1.0 {
 				eased_speed = 1.0
 			}
-			
+
 			// Smooth zoom
 			if zoom_needs_update {
 				app.zoom = app.zoom + (app.target_zoom - app.zoom) * eased_speed
@@ -88,15 +132,15 @@ main :: proc() {
 					app.zoom = app.target_zoom
 				}
 			}
-			
+
 			// Smooth camera offset (same easing as zoom)
 			if camera_needs_update {
 				offset_x_diff := f32(app.target_camera_offset_x - app.camera_offset_x)
 				offset_y_diff := f32(app.target_camera_offset_y - app.camera_offset_y)
-				
+
 				app.camera_offset_x = app.camera_offset_x + i32(offset_x_diff * eased_speed)
 				app.camera_offset_y = app.camera_offset_y + i32(offset_y_diff * eased_speed)
-				
+
 				// Snap to target when very close
 				x_diff := app.camera_offset_x - app.target_camera_offset_x
 				y_diff := app.camera_offset_y - app.target_camera_offset_y
@@ -112,12 +156,12 @@ main :: proc() {
 				}
 			}
 		}
-		
+
 		// Update simulation (if playing)
 		if app.state == .PLAYING {
 			systems.simulation_update(&app, dt)
 		}
-		
+
 		// Render
 		raylib.BeginDrawing()
 		systems.render_game(&app)
@@ -126,19 +170,19 @@ main :: proc() {
 }
 
 // Initialize application
-app_init :: proc() {
+app_init :: proc(initial_settings: entities.Settings) {
 	// Calculate initial camera offset to center the grid
 	grid_total_size := f32(constants.GRID_SIZE) * f32(constants.CELL_SIZE)
 	screen_width := f32(WINDOW_WIDTH)
 	screen_height := f32(WINDOW_HEIGHT)
-	
+
 	camera_offset_x := i32((screen_width - grid_total_size) / 2)
 	camera_offset_y := i32((screen_height - grid_total_size) / 2)
-	
-	app = entities.App_State{
+
+	app = entities.App_State {
 		state = .MENU,
 		previous_state = .MENU,
-		sim = entities.Simulation{
+		sim = entities.Simulation {
 			towers = make([dynamic]entities.Tower),
 			enemies = make([dynamic]entities.Enemy),
 			projectiles = make([dynamic]entities.Projectile),
@@ -154,7 +198,7 @@ app_init :: proc() {
 			started = false,
 			selected_build_tower = .EMPTY,
 		},
-		editor = entities.Editor{
+		editor = entities.Editor {
 			game_map = entities.map_init(),
 			current_tool = .EMPTY,
 			show_grid = true,
@@ -163,20 +207,7 @@ app_init :: proc() {
 			load_map_filename = {},
 			load_map_active = false,
 		},
-		settings = entities.Settings{
-			grid_size = constants.GRID_SIZE,
-			cell_size = constants.CELL_SIZE,
-			show_grid = true,
-			show_fps = false,
-			language = .ENGLISH,
-			master_volume = 1.0,
-			fullscreen = false,
-			vsync = true,
-			antialiasing = 2, // 4x default
-			show_damage_numbers = true,
-			show_tower_range = true,
-			auto_start_wave = false,
-		},
+		settings = initial_settings,
 		zoom = 1.0,
 		target_zoom = 1.0,
 		camera_offset_x = camera_offset_x,
@@ -185,7 +216,7 @@ app_init :: proc() {
 		target_camera_offset_y = camera_offset_y,
 		selected_cell = {row = 0, col = 0, valid = false},
 	}
-	
+
 	systems.simulation_reset(&app)
 }
 
@@ -197,3 +228,38 @@ app_destroy :: proc() {
 
 // Global app instance using entities.App_State
 app: entities.App_State
+
+// Save settings to a JSON file
+save_settings :: proc(settings: entities.Settings) {
+	data, err := json.marshal(settings, {pretty = true})
+	if err == nil {
+		os.write_entire_file("settings.json", data)
+		delete(data)
+	}
+}
+
+// Load settings from a JSON file, or return defaults if it doesn't exist
+load_settings :: proc() -> entities.Settings {
+	settings := entities.Settings {
+		grid_size           = constants.GRID_SIZE,
+		cell_size           = constants.CELL_SIZE,
+		show_grid           = true,
+		show_fps            = false,
+		language            = .ENGLISH,
+		master_volume       = 1.0,
+		fullscreen          = false,
+		vsync               = true,
+		antialiasing        = 2, // 4x default
+		show_damage_numbers = true,
+		show_tower_range    = false,
+		auto_start_wave     = true,
+	}
+
+	data, ok := os.read_entire_file_from_filename("settings.json")
+	if ok {
+		json.unmarshal(data, &settings)
+		delete(data)
+	}
+
+	return settings
+}

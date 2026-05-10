@@ -22,14 +22,20 @@ Map :: struct {
 	
 	// Tile data (for obstacle levels, etc.)
 	tile_data: map[string]constants.Tile_Data,
+	
+	// Grid dimensions (can be smaller than GRID_SIZE for smaller maps)
+	width: i32,
+	height: i32,
 }
 
-// Initialize map
-map_init :: proc() -> Map {
+// Initialize map with optional grid dimensions
+map_init :: proc(width: i32 = constants.GRID_SIZE, height: i32 = constants.GRID_SIZE) -> Map {
 	m := Map{
 		biome = constants.Biome.PLAIN,
 		seed = 0,
 		tile_data = make(map[string]constants.Tile_Data),
+		width = width,
+		height = height,
 	}
 	
 	// Initialize grids to EMPTY
@@ -334,25 +340,31 @@ map_save :: proc(m: ^Map, filename: string) -> bool {
 	// Data: version, width, height, biome, seed
 	fmt.sbprint(&builder, "FIRST_IMPACT_MAP\n")
 	fmt.sbprintf(&builder, "1\n")  // version
-	fmt.sbprintf(&builder, "%d\n", constants.GRID_SIZE)  // width
-	fmt.sbprintf(&builder, "%d\n", constants.GRID_SIZE)  // height
+	fmt.sbprintf(&builder, "%d\n", m.width)  // width
+	fmt.sbprintf(&builder, "%d\n", m.height)  // height
 	fmt.sbprintf(&builder, "%d\n", m.biome)
 	fmt.sbprintf(&builder, "%d\n", m.seed)
 	
-	// Main grid
-	for row in 0..<constants.GRID_SIZE {
-		for col in 0..<constants.GRID_SIZE {
-			fmt.sbprintf(&builder, "%d ", i32(m.grid[row][col]))
+	// Write main grid (only up to width x height)
+	for row in 0..<m.height {
+		for col in 0..<m.width {
+			fmt.sbprintf(&builder, "%d", m.grid[row][col])
+			if col < m.width - 1 {
+				strings.write_byte(&builder, ' ')
+			}
 		}
-		fmt.sbprint(&builder, "\n")
+		strings.write_byte(&builder, '\n')
 	}
 	
-	// Obstacle grid
-	for row in 0..<constants.GRID_SIZE {
-		for col in 0..<constants.GRID_SIZE {
-			fmt.sbprintf(&builder, "%d ", i32(m.obstacle_grid[row][col]))
+	// Write obstacle grid (only up to width x height)
+	for row in 0..<m.height {
+		for col in 0..<m.width {
+			fmt.sbprintf(&builder, "%d", m.obstacle_grid[row][col])
+			if col < m.width - 1 {
+				strings.write_byte(&builder, ' ')
+			}
 		}
-		fmt.sbprint(&builder, "\n")
+		strings.write_byte(&builder, '\n')
 	}
 	
 	// Write to file
@@ -400,18 +412,23 @@ map_load :: proc(m: ^Map, filename: string) -> bool {
 	version := parse_i32(strings.trim_space(lines[1]))
 	_ = version  // For future version handling
 	
-	width := parse_i32(strings.trim_space(lines[2]))
-	height := parse_i32(strings.trim_space(lines[3]))
-	if width != constants.GRID_SIZE || height != constants.GRID_SIZE {
+	// Read grid dimensions from file
+	m.width = parse_i32(strings.trim_space(lines[2]))
+	m.height = parse_i32(strings.trim_space(lines[3]))
+	
+	// Validate dimensions (must not exceed GRID_SIZE)
+	if m.width > constants.GRID_SIZE || m.height > constants.GRID_SIZE ||
+	   m.width <= 0 || m.height <= 0 {
 		return false
 	}
+	
 	biome_val := parse_i32(strings.trim_space(lines[4]))
 	m.biome = constants.Biome(biome_val)
 	m.seed = parse_i32(strings.trim_space(lines[5]))
 	grid_start_idx := 6
 	
-	// Parse main grid
-	for row in 0..<constants.GRID_SIZE {
+	// Parse main grid (only up to width x height)
+	for row in 0..<m.height {
 		line_idx := grid_start_idx + int(row)
 		if line_idx >= len(lines) {
 			return false
@@ -420,8 +437,8 @@ map_load :: proc(m: ^Map, filename: string) -> bool {
 		parts := strings.split(strings.trim_space(lines[line_idx]), " ")
 		defer delete(parts)
 		
-		for col in 0..<constants.GRID_SIZE {
-			if col >= len(parts) {
+		for col in 0..<m.width {
+			if i32(col) >= i32(len(parts)) {
 				break
 			}
 			tile_val := parse_i32(parts[col])
@@ -430,9 +447,9 @@ map_load :: proc(m: ^Map, filename: string) -> bool {
 	}
 	
 	// Parse obstacle grid
-	obstacle_start := grid_start_idx + constants.GRID_SIZE
-	for row in 0..<constants.GRID_SIZE {
-		line_idx := int(obstacle_start) + int(row)
+	obstacle_start := grid_start_idx + int(m.height)
+	for row in 0..<m.height {
+		line_idx := obstacle_start + int(row)
 		if line_idx >= len(lines) {
 			return false
 		}
@@ -440,8 +457,8 @@ map_load :: proc(m: ^Map, filename: string) -> bool {
 		parts := strings.split(strings.trim_space(lines[line_idx]), " ")
 		defer delete(parts)
 		
-		for col in 0..<constants.GRID_SIZE {
-			if col >= len(parts) {
+		for col in 0..<m.width {
+			if i32(col) >= i32(len(parts)) {
 				break
 			}
 			tile_val := parse_i32(parts[col])
