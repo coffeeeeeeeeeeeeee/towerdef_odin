@@ -114,8 +114,12 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 	
 	// Right click to deselect or cancel
 	if raylib.IsMouseButtonPressed(.RIGHT) {
-		app.selected_tower = nil
-		app.selected_obstacle.valid = false
+		if app.sim.selected_build_tower != .EMPTY {
+			app.sim.selected_build_tower = .EMPTY
+		} else {
+			app.selected_tower = nil
+			app.selected_obstacle.valid = false
+		}
 	}
 	
 	// Keyboard shortcuts
@@ -141,6 +145,16 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 input_handle_paused :: proc(app: ^entities.App_State) {
 	if raylib.IsKeyPressed(.ESCAPE) || raylib.IsKeyPressed(.SPACE) {
 		// State change handled by caller
+	}
+
+	// Right click to cancel selected build tower
+	if raylib.IsMouseButtonPressed(.RIGHT) {
+		if app.sim.selected_build_tower != .EMPTY {
+			app.sim.selected_build_tower = .EMPTY
+		} else {
+			app.selected_tower = nil
+			app.selected_obstacle.valid = false
+		}
 	}
 }
 

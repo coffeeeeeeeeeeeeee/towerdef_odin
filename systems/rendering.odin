@@ -1327,11 +1327,18 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	)
 	speed2_width := speed2_text_width + padding
 
+	// 3x button width
+	speed3_text := "3x"
+	speed3_text_width := i32(
+		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(speed3_text), font_size, 0).x,
+	)
+	speed3_width := speed3_text_width + padding
+
 	// Calculate positions from right to left
 	is_between_waves := app.sim.enemies_spawned >= app.sim.enemies_to_spawn && len(app.sim.enemies) == 0
 	can_start_wave := is_between_waves || !app.sim.started
 	show_next_wave_button := !app.settings.auto_start_wave
-	
+
 	next_wave_text := constants.get_text("UI_NEXT_WAVE")
 	next_wave_text_width := i32(
 		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(next_wave_text), font_size, 0).x,
@@ -1345,22 +1352,32 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	start_width := start_text_width + padding
 
 	// Calculate total width based on visible buttons
-	visible_button_count := i32(4) // Start + Pause + 1x + 2x
-	gap_count := i32(3)
+	visible_button_count := i32(5) // Start + Pause + 1x + 2x + 3x
+	gap_count := i32(4)
 	if show_next_wave_button {
 		visible_button_count += 1
 		gap_count += 1
 	}
-	total_buttons_width := pause_width + speed1_width + speed2_width + start_width + gap * gap_count + constants.UI_MARGIN_X
+	total_buttons_width := pause_width + speed1_width + speed2_width + speed3_width + start_width + gap * gap_count + constants.UI_MARGIN_X
 	if show_next_wave_button {
 		total_buttons_width += next_wave_width
 	}
-	
-	start_x := screen_width - total_buttons_width
+
+	start_x  := screen_width - total_buttons_width
 	next_wave_x := start_x + start_width + gap
-	pause_x := next_wave_x + (show_next_wave_button ? next_wave_width + gap : 0)
+	pause_x  := next_wave_x + (show_next_wave_button ? next_wave_width + gap : 0)
 	speed1_x := pause_x + pause_width + gap
 	speed2_x := speed1_x + speed1_width + gap
+	speed3_x := speed2_x + speed2_width + gap
+
+	// Active-state colors
+	active_green        := raylib.Color{40,  167, 69,  255}
+	active_green_hover  := raylib.Color{30,  140, 55,  255}
+	active_green_press  := raylib.Color{20,  110, 40,  255}
+	active_yellow       := raylib.Color{220, 170, 0,   255}
+	active_yellow_hover := raylib.Color{190, 145, 0,   255}
+	active_yellow_press := raylib.Color{160, 120, 0,   255}
+	no_color            := raylib.Color{0,   0,   0,   0  }
 
 	// Start button (appears before first wave or between waves)
 	if render_button(
@@ -1374,7 +1391,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		raylib.Color{0, 150, 0, 255},
 	) {
 		if can_start_wave {
-			simulation_set_pause(app, false) // unpause if paused
+			simulation_set_pause(app, false)
 			start_next_wave(app)
 		}
 	}
@@ -1388,32 +1405,76 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			is_between_waves,
 		) {
 			if is_between_waves {
-				simulation_set_pause(app, false) // unpause if paused
+				simulation_set_pause(app, false)
 				start_next_wave(app)
 			}
 		}
 	}
 
-	// Pause button
+	// Pause button — yellow when paused
+	pause_col, pause_hover_col, pause_press_col := no_color, no_color, no_color
+	if app.sim.paused {
+		pause_col       = active_yellow
+		pause_hover_col = active_yellow_hover
+		pause_press_col = active_yellow_press
+	}
 	if render_button(
 		pause_text,
 		{f32(pause_x), f32(button_y), f32(pause_width), f32(constants.UI_BUTTON_HEIGHT)},
+		1, true,
+		constants.UI_TEXT_COLOR,
+		pause_col, pause_hover_col, pause_press_col,
 	) {
 		simulation_toggle_pause(app)
 	}
 
-	// Speed buttons
+	// Speed buttons — green when that speed is active
+	speed1_col, speed1_hover_col, speed1_press_col := no_color, no_color, no_color
+	if app.sim.speed == 1.0 {
+		speed1_col       = active_green
+		speed1_hover_col = active_green_hover
+		speed1_press_col = active_green_press
+	}
 	if render_button(
 		speed1_text,
 		{f32(speed1_x), f32(button_y), f32(speed1_width), f32(constants.UI_BUTTON_HEIGHT)},
+		1, true,
+		constants.UI_TEXT_COLOR,
+		speed1_col, speed1_hover_col, speed1_press_col,
 	) {
 		simulation_set_speed(app, 1.0)
+	}
+
+	speed2_col, speed2_hover_col, speed2_press_col := no_color, no_color, no_color
+	if app.sim.speed == 2.0 {
+		speed2_col       = active_green
+		speed2_hover_col = active_green_hover
+		speed2_press_col = active_green_press
 	}
 	if render_button(
 		speed2_text,
 		{f32(speed2_x), f32(button_y), f32(speed2_width), f32(constants.UI_BUTTON_HEIGHT)},
+		1, true,
+		constants.UI_TEXT_COLOR,
+		speed2_col, speed2_hover_col, speed2_press_col,
 	) {
 		simulation_set_speed(app, 2.0)
+	}
+
+	speed3_col, speed3_hover_col, speed3_press_col := no_color, no_color, no_color
+	if app.sim.speed == 3.0 {
+		speed3_col       = active_green
+		speed3_hover_col = active_green_hover
+		speed3_press_col = active_green_press
+	}
+	if render_button(
+		speed3_text,
+		{f32(speed3_x), f32(button_y), f32(speed3_width), f32(constants.UI_BUTTON_HEIGHT)},
+		1, true,
+		constants.UI_TEXT_COLOR,
+		speed3_col, speed3_hover_col, speed3_press_col,
+	) {
+		simulation_set_speed(app, 3.0)
 	}
 
 	// Render build toolbar (shared logic)
@@ -1596,15 +1657,6 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 	// Render build toolbar (shared logic)
 	render_build_toolbar(app)
 
-	// Top toolbar
-	raylib.DrawRectangle(
-		0,
-		0,
-		screen_width,
-		constants.UI_TOOLBAR_HEIGHT,
-		raylib.Color{50, 50, 50, 200},
-	)
-
 	// Biome selector using render_select (dropdown, not dropup)
 	biome_names := []string {
 		constants.get_text("EDITOR_BIOME_PLAIN"),
@@ -1619,8 +1671,8 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 		constants.get_text("EDITOR_BIOME_LABEL"),
 		biome_names,
 		&biome_index,
-		10,
-		4,
+		constants.UI_MARGIN_X,
+		constants.UI_MARGIN_Y,
 		i32(constants.UI_DROPDOWN_WIDTH),
 		i32(constants.UI_DROPDOWN_HEIGHT),
 		false, // Changed to false for dropdown (opens downward)
@@ -1630,7 +1682,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 	}
 
 	// Right-side buttons - laid out from right to left with consistent gap
-	y_pos := 4
+	y_pos := constants.UI_MARGIN_Y
 	gap := i32(10)
 
 	// Helper to calculate actual button width
@@ -2167,8 +2219,8 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	btn_width := i32(constants.UI_BUTTON_WIDTH)
 	spacing := i32(constants.UI_PANEL_MARGIN)
 
-	// Panel dimensions — 11 setting rows
-	num_items :: 11
+	// Panel dimensions — 12 setting rows
+	num_items :: 12
 	panel_width := i32(350)
 	panel_inner_height := i32(num_items) * (item_height + spacing) - spacing
 	panel_total_height := panel_inner_height + 60 // extra for title + padding
@@ -2187,40 +2239,52 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	ctrl_x := cx + cw - btn_width
 
 	// --- Master Volume ---
+	vol_label := fmt.tprintf(
+		"%s  %d%%",
+		constants.get_text("SETTINGS_VOLUME"),
+		i32(app.settings.master_volume * 100),
+	)
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_VOLUME")),
+		strings.clone_to_cstring(vol_label),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
 		constants.PANEL_TEXT_COLOR,
 	)
-	volume_value := i32(app.settings.master_volume * 100)
-	volume_text := fmt.tprintf("%d%%", volume_value)
+	new_master := render_slider(
+		{f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)},
+		app.settings.master_volume,
+	)
+	if new_master != app.settings.master_volume {
+		app.settings.master_volume = new_master
+		raylib.SetMasterVolume(new_master)
+		set_ui_volume(new_master, app.settings.ui_volume)
+	}
+
+	item_y += item_height + spacing
+
+	// --- UI Volume ---
+	ui_vol_label := fmt.tprintf(
+		"%s  %d%%",
+		constants.get_text("SETTINGS_UI_VOLUME"),
+		i32(app.settings.ui_volume * 100),
+	)
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(volume_text),
-		{f32(ctrl_x + 30), f32(item_y + 4)},
+		strings.clone_to_cstring(ui_vol_label),
+		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
 		constants.PANEL_TEXT_COLOR,
 	)
-
-	if render_button("-", {f32(ctrl_x - 40), f32(item_y), 30, f32(btn_height)}) {
-		if app.settings.master_volume > 0.0 {
-			app.settings.master_volume -= 0.1
-			if app.settings.master_volume < 0.0 {
-				app.settings.master_volume = 0.0
-			}
-		}
-	}
-	if render_button("+", {f32(ctrl_x - 5), f32(item_y), 30, f32(btn_height)}) {
-		if app.settings.master_volume < 1.0 {
-			app.settings.master_volume += 0.1
-			if app.settings.master_volume > 1.0 {
-				app.settings.master_volume = 1.0
-			}
-		}
+	new_ui_vol := render_slider(
+		{f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)},
+		app.settings.ui_volume,
+	)
+	if new_ui_vol != app.settings.ui_volume {
+		app.settings.ui_volume = new_ui_vol
+		set_ui_volume(app.settings.master_volume, new_ui_vol)
 	}
 
 	item_y += item_height + spacing
@@ -2813,11 +2877,77 @@ render_button_with_color :: proc(
 }
 
 render_slider :: proc(rect: raylib.Rectangle, value: f32) -> f32 {
-	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
+	v := clamp(value, 0.0, 1.0)
 
-	raylib.DrawRectangleRounded(rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, constants.UI_BUTTON_COLOR)
+	// Track geometry
+	track_height := rect.height * 0.3
+	track_y      := rect.y + (rect.height - track_height) / 2
+	track_rect   := raylib.Rectangle{rect.x, track_y, rect.width, track_height}
 
-	return value
+	// Thumb geometry
+	thumb_radius := rect.height * 0.45
+	thumb_x      := rect.x + v * rect.width
+	thumb_x       = clamp(thumb_x, rect.x + thumb_radius, rect.x + rect.width - thumb_radius)
+	thumb_y      := rect.y + rect.height / 2
+
+	// Mouse interaction
+	mouse_pos := raylib.GetMousePosition()
+	hovered   := raylib.CheckCollisionPointRec(mouse_pos, rect)
+
+	new_value := v
+	if hovered && raylib.IsMouseButtonDown(.LEFT) {
+		raw       := (mouse_pos.x - rect.x) / rect.width
+		new_value  = clamp(raw, 0.0, 1.0)
+		thumb_x    = clamp(rect.x + new_value * rect.width, rect.x + thumb_radius, rect.x + rect.width - thumb_radius)
+	}
+
+	// Track shadow
+	raylib.DrawRectangleRounded(
+		{
+			track_rect.x + f32(constants.UI_BUTTON_SHADOW_OFFSET),
+			track_rect.y + f32(constants.UI_BUTTON_SHADOW_OFFSET),
+			track_rect.width,
+			track_rect.height,
+		},
+		constants.UI_ROUNDNESS,
+		constants.UI_SEGMENTS,
+		constants.UI_BUTTON_SHADOW_COLOR,
+	)
+
+	// Track background
+	raylib.DrawRectangleRounded(track_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, constants.UI_BUTTON_COLOR)
+
+	// Filled portion (left of thumb)
+	fill_width := new_value * rect.width
+	if fill_width > 0 {
+		raylib.DrawRectangleRounded(
+			{rect.x, track_y, fill_width, track_height},
+			constants.UI_ROUNDNESS,
+			constants.UI_SEGMENTS,
+			constants.UI_BUTTON_HOVER_COLOR,
+		)
+	}
+
+	// Thumb shadow
+	raylib.DrawCircle(
+		i32(thumb_x) + constants.UI_BUTTON_SHADOW_OFFSET,
+		i32(thumb_y) + constants.UI_BUTTON_SHADOW_OFFSET,
+		thumb_radius,
+		constants.UI_BUTTON_SHADOW_COLOR,
+	)
+
+	// Thumb
+	thumb_color := constants.UI_BUTTON_COLOR
+	if hovered {
+		if raylib.IsMouseButtonDown(.LEFT) {
+			thumb_color = constants.UI_BUTTON_PRESSED_COLOR
+		} else {
+			thumb_color = constants.UI_BUTTON_HOVER_COLOR
+		}
+	}
+	raylib.DrawCircle(i32(thumb_x), i32(thumb_y), thumb_radius, thumb_color)
+
+	return new_value
 }
 
 render_button :: proc(
@@ -3303,6 +3433,16 @@ render_panel :: proc(rect: raylib.Rectangle, title: string = "") -> raylib.Recta
 	width := i32(rect.width)
 	height := i32(rect.height)
 
+	// Drop shadow
+	shadow_offset :: 4
+	shadow_color  := raylib.Color{0, 0, 0, 40}
+	raylib.DrawRectangleRounded(
+		{rect.x + shadow_offset, rect.y + shadow_offset, rect.width, rect.height},
+		constants.UI_BUTTON_ROUNDNESS / 4,
+		constants.TOWER_CORNER_SEGMENTS,
+		shadow_color,
+	)
+
 	// Draw full panel background uniformly
 	raylib.DrawRectangleRounded(rect, constants.UI_BUTTON_ROUNDNESS / 4, constants.TOWER_CORNER_SEGMENTS, raylib.RAYWHITE)
 
@@ -3345,36 +3485,35 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 
 	tower := app.selected_tower
 
+	// Layout constants — height computed from actual content
+	button_height  : i32 = 30
+	spacing        : i32 = 8
+	font_size      : f32 = 14
+	info_height    : i32 = 22
+	line_height    : i32 = i32(font_size) + 5         // 19px per stat line
+	stats_height   : i32 = 4 * line_height - 5        // 4 lines → 71px
+	strategy_height: i32 = 30
+	// gaps: info→stats, stats→dmg, dmg→spd, spd→crit, crit→exit, exit→strategy, strategy→sell
+	num_gaps       : i32 = 7
+	inner_height   := info_height + stats_height + 4 * button_height + strategy_height + num_gaps * spacing
+	panel_height   := inner_height + 20 // 10px top + 10px bottom padding
+
 	// Panel dimensions and position
 	panel_rect := raylib.Rectangle {
 		x      = f32(raylib.GetScreenWidth() - constants.UI_PANEL_WIDTH - constants.UI_MARGIN_X),
 		y      = f32(constants.UI_PANEL_Y_POSITION),
 		width  = f32(constants.UI_PANEL_WIDTH),
-		height = f32(constants.UI_PANEL_HEIGHT),
+		height = f32(panel_height),
 	}
 
 	// Render panel background and get content area
-	content_area := render_panel(panel_rect, "")
-	content_x := i32(content_area.x)
-	content_y := i32(content_area.y)
+	content_area  := render_panel(panel_rect, "")
+	content_x     := i32(content_area.x)
+	content_y     := i32(content_area.y)
 	content_width := i32(content_area.width)
-	content_height := i32(content_area.height)
+	button_width  := content_width
 
-	// Calculate button dimensions based on content area
-	button_width := content_width
-	button_height: i32 = 30
-
-	// Calculate spacing to distribute elements evenly in available space
-	// We have: info text + 4 upgrade buttons + strategy dropdown + sell button
-	// Total elements: 7 (with spacing between them)
-	info_height: i32 = 25 // Space for tower info text
-	strategy_height: i32 = 30 // Height for strategy dropdown
-	num_buttons: i32 = 5 // Damage, Speed, Critical, Exit, Sell
-	total_elements_height := info_height + (num_buttons * button_height) + strategy_height
-	remaining_space := content_height - total_elements_height
-	spacing := remaining_space / (num_buttons + 2) // Distribute spacing between elements
-
-	// Tower info (at top of content area)
+	// Tower info
 	type_name := ""
 	switch tower.type {
 	case .ARCHER:
@@ -3390,11 +3529,10 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	}
 
 	info_text := constants.get_text_f("PANEL_TOWER_INFO", type_name, tower.level)
-	info_cstr := strings.clone_to_cstring(info_text)
 	current_y := content_y
 	raylib.DrawTextEx(
 		constants.game_fonts.bold,
-		info_cstr,
+		strings.clone_to_cstring(info_text),
 		{f32(content_x), f32(current_y)},
 		20,
 		0,
@@ -3402,65 +3540,24 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	)
 	current_y += info_height + spacing
 
-	// Stats display in two columns
-	stats_height: i32 = 40
-	stats_spacing: i32 = 10
-	col_width := content_width / 2 - stats_spacing / 2
-	font_size: f32 = 14
-
-	// Column 1: Damage and Range
-	col1_x := content_x
-	col1_y := current_y
-
-	stat_damage_text := fmt.tprintf("Daño: %.1f", tower.damage)
-	stat_damage_cstr := strings.clone_to_cstring(stat_damage_text)
-	raylib.DrawTextEx(
-		constants.game_fonts.semibold,
-		stat_damage_cstr,
-		{f32(col1_x), f32(col1_y)},
-		font_size,
-		0,
-		constants.PANEL_TEXT_COLOR,
-	)
-
-	range_text := fmt.tprintf("Rango: %.1f", tower.range)
-	range_cstr := strings.clone_to_cstring(range_text)
-	raylib.DrawTextEx(
-		constants.game_fonts.semibold,
-		range_cstr,
-		{f32(col1_x), f32(col1_y) + font_size + 5},
-		font_size,
-		0,
-		constants.PANEL_TEXT_COLOR,
-	)
-
-	// Column 2: Speed (cooldown) and Critical
-	col2_x := content_x + col_width + stats_spacing
-	col2_y := current_y
-
-	cooldown_text := fmt.tprintf("Velocidad: %.2fs", tower.cooldown)
-	cooldown_cstr := strings.clone_to_cstring(cooldown_text)
-	raylib.DrawTextEx(
-		constants.game_fonts.semibold,
-		cooldown_cstr,
-		{f32(col2_x), f32(col2_y)},
-		font_size,
-		0,
-		constants.PANEL_TEXT_COLOR,
-	)
-
+	// Stats — single column
 	crit_chance := entities.tower_get_critical_chance(tower)
-	stat_crit_text := fmt.tprintf("Críticos: %.1f%%", crit_chance * 100)
-	stat_crit_cstr := strings.clone_to_cstring(stat_crit_text)
-	raylib.DrawTextEx(
-		constants.game_fonts.semibold,
-		stat_crit_cstr,
-		{f32(col2_x), f32(col2_y) + font_size + 5},
-		font_size,
-		0,
-		constants.PANEL_TEXT_COLOR,
-	)
-
+	stat_lines := [4]string {
+		fmt.tprintf("Daño: %.1f",       tower.damage),
+		fmt.tprintf("Rango: %.1f",      tower.range),
+		fmt.tprintf("Velocidad: %.2fs", tower.cooldown),
+		fmt.tprintf("Críticos: %.1f%%", crit_chance * 100),
+	}
+	for line, i in stat_lines {
+		raylib.DrawTextEx(
+			constants.game_fonts.semibold,
+			strings.clone_to_cstring(line),
+			{f32(content_x), f32(current_y + i32(i) * line_height)},
+			font_size,
+			0,
+			constants.PANEL_TEXT_COLOR,
+		)
+	}
 	current_y += stats_height + spacing
 
 	// Upgrade Damage button
@@ -3519,15 +3616,6 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	}
 	current_y += button_height + spacing
 
-	// Exit button
-	if render_button(
-		constants.get_text("MENU_BUTTON_EXIT"),
-		{f32(content_x), f32(current_y), f32(button_width), f32(button_height)},
-	) {
-		app.should_quit = true
-	}
-	current_y += button_height + spacing
-
 	// Strategy section with dropdown
 	strategy_names := []string {
 		constants.get_text("PANEL_STRATEGY_FIRST"),
@@ -3583,41 +3671,35 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 	col := app.selected_obstacle.col
 	level := entities.map_get_obstacle_level(&app.editor.game_map, row, col)
 
+	// Layout constants — compact panel sized to content
+	button_height: i32 = 30
+	spacing      : i32 = 8
+	info_height  : i32 = 22
+	// elements: info, upgrade btn, sell btn; gaps between them: 2
+	inner_height := info_height + 2 * button_height + 2 * spacing
+	panel_height := inner_height + 20 // 10px top + 10px bottom padding
+
 	// Panel dimensions and position
 	panel_rect := raylib.Rectangle {
 		x      = f32(raylib.GetScreenWidth() - constants.UI_PANEL_WIDTH - constants.UI_MARGIN_X),
 		y      = f32(constants.UI_PANEL_Y_POSITION),
 		width  = f32(constants.UI_PANEL_WIDTH),
-		height = f32(constants.UI_PANEL_HEIGHT),
+		height = f32(panel_height),
 	}
 
 	// Render panel background and get content area
-	content_area := render_panel(panel_rect, "")
-	content_x := i32(content_area.x)
-	content_y := i32(content_area.y)
+	content_area  := render_panel(panel_rect, "")
+	content_x     := i32(content_area.x)
+	content_y     := i32(content_area.y)
 	content_width := i32(content_area.width)
-	content_height := i32(content_area.height)
+	button_width  := content_width
+	current_y     := content_y
 
-	// Calculate button dimensions based on content area
-	button_width := content_width
-	button_height: i32 = 30
-
-	// Calculate spacing to distribute elements evenly in available space
-	// We have: info text + upgrade button + sell button
-	// Total elements: 3 (with spacing between them)
-	info_height: i32 = 25 // Space for obstacle info text
-	num_buttons: i32 = 2 // Upgrade Level, Sell
-	total_elements_height := info_height + (num_buttons * button_height)
-	remaining_space := content_height - total_elements_height
-	spacing := remaining_space / (num_buttons + 1) // Distribute spacing between elements
-
-	// Obstacle info (at top of content area)
+	// Obstacle info
 	info_text := constants.get_text_f("PANEL_OBSTACLE_INFO", level)
-	info_cstr := strings.clone_to_cstring(info_text)
-	current_y := content_y
 	raylib.DrawTextEx(
 		constants.game_fonts.bold,
-		info_cstr,
+		strings.clone_to_cstring(info_text),
 		{f32(content_x), f32(current_y)},
 		20,
 		0,

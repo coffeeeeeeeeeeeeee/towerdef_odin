@@ -367,25 +367,31 @@ update_projectile_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower
 
 		// Calculate fire position
 		cs := f32(app.settings.cell_size)
-		fire_x, fire_y := entities.tower_get_cannon_tip(tower, cs)
-
-		// Adjust for different tower types
-		switch tower.type {
-		case .ARCHER, .CANNON, .SNIPER, .MISSILE:
-		// Standard firing from cannon tip
-		case .LASER:
-		// Laser handled separately
-		}
 
 		// Create projectile
 		proj_speed: f32 = 12.0
+
+		fire_gx, fire_gy: f32
 		if tower.type == .MISSILE {
 			proj_speed = 5.0
+			// Alternate between left (0) and right (1) pod
+			cx := f32(tower.c) + 0.5
+			cy := f32(tower.r) + 0.5
+			aim_angle := math.atan2(
+				tower.target.y + 0.5 - cy,
+				tower.target.x + 0.5 - cx,
+			)
+			fire_gx, fire_gy = entities.missile_barrel_spawn_pos(cx, cy, aim_angle, tower.missile_side)
+			tower.missile_side = (tower.missile_side + 1) % 2
+		} else {
+			fire_x, fire_y := entities.tower_get_cannon_tip(tower, cs)
+			fire_gx = fire_x / cs
+			fire_gy = fire_y / cs
 		}
 
 		proj := entities.projectile_init(
-			fire_x / cs,
-			fire_y / cs, // Convert back to grid units
+			fire_gx,
+			fire_gy,
 			tower.target,
 			proj_speed,
 			tower.damage,

@@ -103,7 +103,7 @@ Settings :: struct {
 	
 	// Audio
 	master_volume: f32,
-	ui_volume: f32,
+	ui_volume: f32, // inicializar en 1.0
 	
 	// Display
 	fullscreen: bool,

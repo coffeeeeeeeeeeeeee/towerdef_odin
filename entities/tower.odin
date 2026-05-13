@@ -39,7 +39,7 @@ Tower :: struct {
 	
 	// Missile system
 	missile_side: i32,
-	
+		
 	// Laser accumulation for damage display
 	_laser_accum: f32,
 	_laser_accum_timer: f32,

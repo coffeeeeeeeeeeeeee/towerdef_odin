@@ -105,3 +105,27 @@ projectile_check_hit :: proc(p: ^Projectile) -> bool {
 	
 	return dist < 0.3 // Within hit radius
 }
+
+// Calculate the spawn position (in grid coords) for a missile pod.
+// missile_side: 0 = left pod, 1 = right pod.
+// cx, cy: tower center in grid coords.
+// aim_angle: atan2(target_y - cy, target_x - cx).
+// Offsets mirror the two pod positions from draw_tower_tile (.MISSILE):
+//   left pod local (-r*1.4, -r*0.8), right pod local (r*0.6, -r*0.8), r ≈ 0.3 grid units.
+missile_barrel_spawn_pos :: proc(cx, cy: f32, aim_angle: f32, missile_side: i32) -> (x, y: f32) {
+	// Perpendicular direction (90° CCW from aim)
+	perp_x := -math.sin(aim_angle)
+	perp_y :=  math.cos(aim_angle)
+
+	// Forward direction (toward target)
+	fwd_x := math.cos(aim_angle)
+	fwd_y := math.sin(aim_angle)
+
+	// Perpendicular offsets in grid units (derived from pod local positions, r=0.3)
+	perp_offset := f32(-0.42) if missile_side == 0 else f32(0.18)
+	fwd_offset  := f32(0.24) // r * 0.8, tip of pod toward target
+
+	x = cx + perp_x * perp_offset + fwd_x * fwd_offset
+	y = cy + perp_y * perp_offset + fwd_y * fwd_offset
+	return
+}
