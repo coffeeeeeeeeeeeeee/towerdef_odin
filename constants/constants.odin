@@ -134,10 +134,10 @@ TOWER_SPECS := [Tower_Type]Tower_Spec {
 }
 
 // Enemy constants
-ENEMY_GROWTH_RATE :: 1.15
-ENEMY_BASE_HP :: 10.0
-ENEMY_GLOBAL_SPEED_MULTIPLIER :: 0.9 // Use this to scale all enemy speeds
-ENEMY_GLOBAL_HP_MULTIPLIER :: 1.1 // Use this to scale all enemy health
+ENEMY_GROWTH_RATE :: 1.2
+ENEMY_BASE_HP :: 14.0
+ENEMY_GLOBAL_SPEED_MULTIPLIER :: 0.5 // Use this to scale all enemy speeds
+ENEMY_GLOBAL_HP_MULTIPLIER :: 1.0 // Use this to scale all enemy health
 
 // Biome colors
 Biome_Colors :: struct {
@@ -148,24 +148,24 @@ Biome_Colors :: struct {
 
 BIOME_COLORS := [Biome]Biome_Colors {
 	.PLAIN = {
-		bg = raylib.Color{200, 220, 180, 255},
-		bg_grid = raylib.Color{190, 210, 170, 255},
-		path = raylib.Color{175, 195, 155, 255},
+		bg = raylib.Color{210, 215, 200, 255},
+		bg_grid = raylib.Color{200, 205, 190, 255},
+		path = raylib.Color{185, 190, 175, 255},
 	},
 	.FOREST = {
-		bg = raylib.Color{150, 200, 150, 255},
-		bg_grid = raylib.Color{130, 180, 130, 255},
-		path = raylib.Color{120, 160, 120, 255},
+		bg = raylib.Color{170, 190, 170, 255},
+		bg_grid = raylib.Color{155, 175, 155, 255},
+		path = raylib.Color{140, 160, 140, 255},
 	},
 	.DESERT = {
-		bg = raylib.Color{240, 220, 170, 255},
-		bg_grid = raylib.Color{230, 210, 160, 255},
-		path = raylib.Color{200, 180, 130, 255},
+		bg = raylib.Color{230, 215, 195, 255},
+		bg_grid = raylib.Color{220, 205, 185, 255},
+		path = raylib.Color{205, 190, 170, 255},
 	},
 	.MOUNTAIN = {
-		bg = raylib.Color{180, 190, 200, 255},
-		bg_grid = raylib.Color{160, 170, 180, 255},
-		path = raylib.Color{150, 155, 165, 255},
+		bg = raylib.Color{190, 195, 200, 255},
+		bg_grid = raylib.Color{175, 180, 185, 255},
+		path = raylib.Color{160, 165, 170, 255},
 	},
 }
 
@@ -180,32 +180,32 @@ Biome_Tree_Colors :: struct {
 
 BIOME_TREE_COLORS := [Biome]Biome_Tree_Colors {
 	.PLAIN = {
-		layer_dark = raylib.Color{40, 130, 40, 255},
-		layer_mid = raylib.Color{50, 150, 50, 255},
-		layer_light = raylib.Color{60, 170, 60, 255},
-		layer_tip = raylib.Color{70, 190, 70, 255},
-		trunk = raylib.Color{139, 69, 19, 255},
+		layer_dark = raylib.Color{90, 130, 90, 255},
+		layer_mid = raylib.Color{110, 150, 110, 255},
+		layer_light = raylib.Color{130, 170, 130, 255},
+		layer_tip = raylib.Color{150, 190, 150, 255},
+		trunk = raylib.Color{140, 110, 80, 255},
 	},
 	.FOREST = {
-		layer_dark  = raylib.Color{10, 70, 30, 255}, // Pine dark
-		layer_mid   = raylib.Color{20, 90, 40, 255}, // Pine mid
-		layer_light = raylib.Color{30, 110, 50, 255}, // Pine light
-		layer_tip   = raylib.Color{40, 130, 60, 255}, // Pine tip
-		trunk       = raylib.Color{80, 50, 30, 255},
+		layer_dark  = raylib.Color{60, 90, 70, 255},
+		layer_mid   = raylib.Color{80, 115, 90, 255},
+		layer_light = raylib.Color{100, 140, 110, 255},
+		layer_tip   = raylib.Color{120, 165, 130, 255},
+		trunk       = raylib.Color{100, 80, 65, 255},
 	},
 	.DESERT = {
-		layer_dark = raylib.Color{20, 100, 20, 255},
-		layer_mid = raylib.Color{34, 139, 34, 255},
-		layer_light = raylib.Color{60, 180, 60, 255},
-		layer_tip = raylib.Color{80, 220, 80, 255},
-		trunk = raylib.Color{160, 82, 45, 255},
+		layer_dark = raylib.Color{100, 140, 100, 255},
+		layer_mid = raylib.Color{120, 160, 120, 255},
+		layer_light = raylib.Color{140, 180, 140, 255},
+		layer_tip = raylib.Color{160, 200, 160, 255},
+		trunk = raylib.Color{150, 120, 90, 255},
 	},
 	.MOUNTAIN = {
-		layer_dark = raylib.Color{60, 80, 60, 255},
-		layer_mid = raylib.Color{80, 100, 80, 255},
-		layer_light = raylib.Color{100, 120, 100, 255},
-		layer_tip = raylib.Color{120, 140, 120, 255},
-		trunk = raylib.Color{101, 67, 33, 255},
+		layer_dark = raylib.Color{90, 110, 90, 255},
+		layer_mid = raylib.Color{110, 130, 110, 255},
+		layer_light = raylib.Color{130, 150, 130, 255},
+		layer_tip = raylib.Color{150, 170, 150, 255},
+		trunk = raylib.Color{115, 100, 85, 255},
 	},
 }
 
@@ -238,21 +238,21 @@ ENEMY_GREEN :: raylib.Color{0, 255, 0, 255}
 ENEMY_BLUE :: raylib.Color{0, 0, 255, 255}
 ENEMY_FLYING :: raylib.Color{255, 220, 60, 255} // Yellow flying enemy
 
-// Tower stroke colors (for rendering)
-TOWER_LASER_STROKE :: raylib.Color{80, 90, 100, 255}
-TOWER_CANNON_STROKE :: raylib.Color{90, 100, 110, 255}
-TOWER_MISSILE_STROKE :: raylib.Color{100, 90, 80, 255}
-TOWER_SNIPER_BASE :: raylib.Color{100, 110, 120, 255}
-TOWER_SNIPER_STROKE :: raylib.Color{70, 80, 90, 255}
-TOWER_ARCHER_BASE :: raylib.Color{120, 100, 80, 255}
-TOWER_ARCHER_STROKE :: raylib.Color{90, 70, 50, 255}
+// Tower stroke colors (for rendering) - saturated to stand out
+TOWER_LASER_STROKE :: raylib.Color{60, 100, 180, 255}
+TOWER_CANNON_STROKE :: raylib.Color{80, 90, 110, 255}
+TOWER_MISSILE_STROKE :: raylib.Color{180, 70, 60, 255}
+TOWER_SNIPER_BASE :: raylib.Color{40, 140, 60, 255}
+TOWER_SNIPER_STROKE :: raylib.Color{30, 100, 40, 255}
+TOWER_ARCHER_BASE :: raylib.Color{160, 110, 60, 255}
+TOWER_ARCHER_STROKE :: raylib.Color{120, 80, 40, 255}
 
 // UI Size Constants (raygui minimum sizes)
 UI_BUTTON_WIDTH :: 80
 UI_BUTTON_HEIGHT :: 24
 UI_BUTTON_FONT_SIZE :: 16
 UI_BUTTON_SHADOW_OFFSET :: 1
-UI_BUTTON_ROUNDNESS :: 0.1
+UI_BUTTON_ROUNDNESS :: 0.2
 
 // UI Color Constants
 UI_BUTTON_COLOR :: raylib.Color{255, 255, 255, 255}
@@ -267,6 +267,13 @@ UI_EDITOR_HIGHLIGHT_COLOR :: raylib.Color{150, 150, 150, 255}
 UI_DROPDOWN_WIDTH :: 80
 UI_DROPDOWN_HEIGHT :: 24
 
+// Menu Background Constants
+MENU_GRID_COLOR :: raylib.Color{40, 40, 60, 80}
+MENU_GRID_SPACING :: 40
+MENU_BG_TOP_COLOR :: raylib.Color{15, 15, 35, 255}      // Dark blue
+MENU_BG_BOTTOM_COLOR :: raylib.Color{35, 35, 50, 255}   // Dark purple
+MENU_GRID_SPEED :: f32(10.0)                            // Pixels per second for diagonal movement
+
 UI_INPUT_WIDTH :: 80
 UI_INPUT_HEIGHT :: 24
 
@@ -280,7 +287,31 @@ UI_PANEL_Y_POSITION :: 150
 UI_MARGIN_X :: 10
 UI_MARGIN_Y :: 10
 
+UI_SEGMENTS :: 8
+UI_ROUNDNESS :: 0.2
+
+// Toast System Constants
+UI_TOAST_FONT_SIZE :: 16
+UI_TOAST_PADDING :: 12
+UI_TOAST_SPACING :: 8
+UI_TOAST_MARGIN_TOP :: 80  // Space from top to avoid UI overlap
+UI_TOAST_SHADOW_OFFSET :: 2
+UI_TOAST_ROUNDNESS :: 0.3
+
+// Toast Colors
+UI_TOAST_SUCCESS_COLOR :: raylib.Color{50, 200, 50, 240}      // Green
+UI_TOAST_SUCCESS_TEXT_COLOR :: raylib.Color{255, 255, 255, 255}
+UI_TOAST_INFO_COLOR :: raylib.Color{50, 150, 200, 240}       // Blue
+UI_TOAST_INFO_TEXT_COLOR :: raylib.Color{255, 255, 255, 255}
+UI_TOAST_WARNING_COLOR :: raylib.Color{200, 150, 50, 240}    // Orange
+UI_TOAST_WARNING_TEXT_COLOR :: raylib.Color{255, 255, 255, 255}
+UI_TOAST_ERROR_COLOR :: raylib.Color{200, 50, 50, 240}       // Red
+UI_TOAST_ERROR_TEXT_COLOR :: raylib.Color{255, 255, 255, 255}
+
 PANEL_TEXT_COLOR :: raylib.GRAY
+
+UI_RETICLE_COLOR :: raylib.Color{255, 255, 255, 255} // Selected cell reticle color (white with 60% opacity)
+
 
 // Zoom Constants
 ZOOM_MIN :: 0.5
@@ -304,26 +335,26 @@ TOWER_ROUNDED_CORNER :: 0.3 // Rectangle rounded corners (0.0 to 1.0)
 TOWER_CORNER_SEGMENTS :: 8 // Number of segments for rounded corners
 
 // Tower Color Constants
-TOWER_BASE_COLOR :: raylib.Color{180, 180, 180, 255} // Base tower body color
-TOWER_SECONDARY_COLOR :: raylib.Color{140, 140, 140, 255} // Secondary/accent color
-TOWER_CANNON_COLOR :: raylib.Color{60, 60, 60, 255} // Cannon barrel color
-TOWER_BARREL_OUTLINE :: raylib.Color{30, 30, 30, 255} // Barrel outline color
-TOWER_HIGHLIGHT_COLOR :: raylib.Color{220, 220, 220, 255} // Highlight/bright areas
+TOWER_BASE_COLOR :: raylib.Color{190, 190, 190, 255} // Base tower body color
+TOWER_SECONDARY_COLOR :: raylib.Color{150, 150, 150, 255} // Secondary/accent color
+TOWER_CANNON_COLOR :: raylib.Color{70, 70, 80, 255} // Cannon barrel color
+TOWER_BARREL_OUTLINE :: raylib.Color{40, 40, 50, 255} // Barrel outline color
+TOWER_HIGHLIGHT_COLOR :: raylib.Color{230, 230, 230, 255} // Highlight/bright areas
 
-// Tower-specific Colors (JS Style)
-TOWER_BARREL :: raylib.Color{143, 161, 179, 255} // Tower barrel color (JS: #8fa1b3)
-TOWER_LASER_CORE :: raylib.Color{170, 221, 255, 255} // Laser center glow (JS: #aaddff)
-TOWER_LASER_BASE :: raylib.Color{106, 122, 138, 255} // Laser base (JS: #6a7a8a)
-TOWER_CANNON_BASE :: raylib.Color{122, 138, 154, 255} // Cannon base (JS: #7a8a9a for bullet)
-TOWER_MISSILE_BASE :: raylib.Color{138, 122, 106, 255} // Missile base (JS: #8a7a6a)
-TOWER_MISSILE_POD :: raylib.Color{106, 90, 74, 255} // Missile pods (JS: #6a5a4a)
-TOWER_MISSILE_WARHEAD :: raylib.Color{255, 85, 85, 255} // Missile warhead (JS: #ff5555)
-TOWER_SHADOW :: raylib.Color{0, 0, 0, 20} // Shadow color
-TOWER_ARCHER_WOOD :: raylib.Color{139, 90, 43, 255} // Archer bow wood
-TOWER_ARCHER_STRING :: raylib.Color{200, 200, 200, 255} // Archer bow string
+// Tower-specific Colors (JS Style) - saturated for visibility
+TOWER_BARREL :: raylib.Color{100, 140, 180, 255} // Tower barrel color - more saturated blue
+TOWER_LASER_CORE :: raylib.Color{100, 200, 255, 255} // Laser center glow - brighter cyan
+TOWER_LASER_BASE :: raylib.Color{80, 120, 160, 255} // Laser base - more saturated blue
+TOWER_LASER_COLOR :: raylib.Color{255, 68, 68, 255}
+TOWER_CANNON_BASE :: raylib.Color{90, 110, 140, 255} // Cannon base - more saturated blue-gray
+TOWER_MISSILE_BASE :: raylib.Color{160, 100, 80, 255} // Missile base - more saturated brown-red
+TOWER_MISSILE_POD :: raylib.Color{120, 80, 60, 255} // Missile pods - more saturated brown
+TOWER_MISSILE_WARHEAD :: raylib.Color{255, 60, 60, 255} // Missile warhead - bright red
+TOWER_SHADOW :: raylib.Color{0, 0, 0, 30} // Shadow color - slightly darker
+TOWER_ARCHER_WOOD :: raylib.Color{180, 110, 50, 255} // Archer bow wood - more saturated orange-brown
+TOWER_ARCHER_STRING :: raylib.Color{220, 220, 220, 255} // Archer bow string
 TOWER_RANGE_OUTLINE :: raylib.Color{255, 255, 255, 60} // Tower range area outline (semi-transparent white)
 TOWER_RANGE_PREVIEW :: raylib.Color{255, 255, 255, 30} // Tower range preview fill (transparent white)
-TOWER_RETICLE_COLOR :: raylib.Color{255, 255, 255, 255} // Selected cell reticle color (white with 60% opacity)
 
 // Tower Component Size Constants
 TOWER_BARREL_WIDTH_RATIO :: 0.25 // Barrel width as ratio of tower size
@@ -338,13 +369,18 @@ ENEMY_SPEED_BOSS :: 0.5 // Slow bosses
 ENEMY_SPEED_FLYING :: 1.3 // Flying enemies
 
 // Enemy Size Constants (as ratio of cell size)
-ENEMY_SIZE_BOSS :: 0.40 // Boss enemies (large)
-ENEMY_SIZE_FLYING :: 0.25 // Flying enemies (small)
-ENEMY_SIZE_BLUE :: 0.30 // Blue enemies (medium)
-ENEMY_SIZE_GREEN :: 0.20 // Green enemies (tiny)
-ENEMY_SIZE_DEFAULT :: 0.30 // Normal enemies (medium)
+ENEMY_SIZE_BOSS :: 0.32 // Boss enemies (large) - reduced 20%
+ENEMY_SIZE_FLYING :: 0.20 // Flying enemies (small) - reduced 20%
+ENEMY_SIZE_BLUE :: 0.24 // Blue enemies (medium) - reduced 20%
+ENEMY_SIZE_GREEN :: 0.16 // Green enemies (tiny) - reduced 20%
+ENEMY_SIZE_DEFAULT :: 0.24 // Normal enemies (medium) - reduced 20%
 
-ENEMY_STROKE_WIDTH :: 4
+ENEMY_STROKE_WIDTH :: 3
 ENEMY_SHADOW_COLOR :: raylib.Color{0, 0, 0, 20}
 
 PATH_WIDTH_RATIO :: 0.4
+
+// Obstacle constants
+OBSTACLE_WIDTH_RATIO :: 0.2
+OBSTACLE_HEIGHT_RATIO :: 0.6
+OBSTACLE_ROUNDEDNESS :: 0.3

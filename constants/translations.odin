@@ -18,8 +18,8 @@ Language :: enum {
 
 // No key mapping needed - use strings directly
 
-// Translations table (loaded from file)
-TRANSLATIONS: map[Language]map[string]string
+// Translations table (loaded from file) - flat map with compound keys "LANGUAGE|KEY"
+TRANSLATIONS: map[string]string
 
 // Default translations (fallback)
 DEFAULT_TRANSLATIONS: map[Language]map[string]string = {
@@ -60,6 +60,7 @@ DEFAULT_TRANSLATIONS: map[Language]map[string]string = {
 		"UI_BUTTON_SPEED_1X" = "1x",
 		"UI_BUTTON_SPEED_2X" = "2x",
 		"UI_NEXT_WAVE" = "Next Wave",
+		"UI_START" = "Start",
 		
 		// Pause Menu
 		"PAUSE_TITLE" = "Paused",
@@ -160,6 +161,7 @@ DEFAULT_TRANSLATIONS: map[Language]map[string]string = {
 		"UI_BUTTON_SPEED_1X" = "1x",
 		"UI_BUTTON_SPEED_2X" = "2x",
 		"UI_NEXT_WAVE" = "Siguiente Ola",
+		"UI_START" = "Comenzar",
 		
 		// Pause Menu
 		"PAUSE_TITLE" = "Pausado",
@@ -260,6 +262,7 @@ DEFAULT_TRANSLATIONS: map[Language]map[string]string = {
 		"UI_BUTTON_SPEED_1X" = "1x",
 		"UI_BUTTON_SPEED_2X" = "2x",
 		"UI_NEXT_WAVE" = "Próxima Onda",
+		"UI_START" = "Começar",
 		
 		// Pause Menu
 		"PAUSE_TITLE" = "Pausado",
@@ -333,42 +336,39 @@ set_language :: proc(lang: Language) {
 	current_language = lang
 }
 
-// Get translation for a key
+// Get translated text
 get_text :: proc(key: string) -> string {
 	// Try current language from loaded translations
-	if translations, ok := TRANSLATIONS[current_language]; ok {
-		if text, ok2 := translations[key]; ok2 {
-			return text
-		}
+	compound_key := fmt.tprintf("%v|%s", current_language, key)
+	if text, ok := TRANSLATIONS[compound_key]; ok {
+		return text
 	}
 	
-	// Fallback to loaded English
-	if current_language != .ENGLISH {
-		if translations, ok := TRANSLATIONS[.ENGLISH]; ok {
-			if text, ok2 := translations[key]; ok2 {
-				return text
-			}
-		}
+	// Fallback to English
+	english_key := fmt.tprintf("ENGLISH|%s", key)
+	if text, ok := TRANSLATIONS[english_key]; ok {
+		return text
 	}
 	
-	// Fallback to hardcoded defaults for current language
-	if defaults, ok := DEFAULT_TRANSLATIONS[current_language]; ok {
-		if text, ok2 := defaults[key]; ok2 {
-			return text
-		}
+	return key // Fallback to key itself
+}
+
+// Get tower name based on type
+get_tower_name :: proc(tower_type: Tower_Type) -> string {
+	switch tower_type {
+	case .ARCHER:
+		return get_text("TOWER_ARCHER_NAME")
+	case .CANNON:
+		return get_text("TOWER_CANNON_NAME")
+	case .SNIPER:
+		return get_text("TOWER_SNIPER_NAME")
+	case .MISSILE:
+		return get_text("TOWER_MISSILE_NAME")
+	case .LASER:
+		return get_text("TOWER_LASER_NAME")
+	case:
+		return "Unknown"
 	}
-	
-	// Final fallback to hardcoded English defaults
-	if current_language != .ENGLISH {
-		if english_map, ok := DEFAULT_TRANSLATIONS[.ENGLISH]; ok {
-			if text, ok2 := english_map[key]; ok2 {
-				return text
-			}
-		}
-	}
-	
-	// Last resort: return the key itself
-	return key
 }
 
 // Get formatted translation
@@ -389,18 +389,13 @@ language_from_string :: proc(s: string) -> (Language, bool) {
 
 // Initialize translations - call this at game start
 init_translations :: proc() {
-	// Create the TRANSLATIONS map
-	TRANSLATIONS = make(map[Language]map[string]string)
-	
-	// Initialize empty maps for all languages first
-	TRANSLATIONS[.ENGLISH] = make(map[string]string)
-	TRANSLATIONS[.SPANISH] = make(map[string]string)
-	TRANSLATIONS[.PORTUGUESE] = make(map[string]string)
+	// Create the TRANSLATIONS map (flat map with compound keys)
+	TRANSLATIONS = make(map[string]string)
 	
 	// Read translations.txt file
 	data, read_ok := os.read_entire_file("translations.txt")
 	if !read_ok {
-		fmt.println("WARNING: Could not read translations.txt, using hardcoded defaults only")
+		fmt.println("WARNING: Could not read translations.txt")
 		return
 	}
 	defer delete(data)
@@ -448,20 +443,10 @@ init_translations :: proc() {
 		lang_str := rest[:second_sep]
 		value_str := rest[second_sep + 1:]
 		
-		// Map language string to enum
-		lang, lang_ok := language_from_string(lang_str)
-		if !lang_ok {
-			continue
-		}
-		
-		// Use key string directly
-		trans_key := key_str
-		
-		// Get a pointer to the inner map to avoid value-copy
-		if lang_map, ok := &TRANSLATIONS[lang]; ok {
-			lang_map[trans_key] = strings.clone(value_str)
-			loaded_count += 1
-		}
+		// Store translation using compound key: "LANGUAGE|KEY"
+		compound_key := fmt.tprintf("%s|%s", lang_str, key_str)
+		TRANSLATIONS[compound_key] = strings.clone(value_str)
+		loaded_count += 1
 	}
 	
 	fmt.printf("Loaded %d translations from translations.txt\n", loaded_count)

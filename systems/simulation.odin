@@ -58,8 +58,8 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 update_wave :: proc(app: ^entities.App_State, dt: f32) {
 	sim := &app.sim
 
-	// Check if wave is complete
-	if sim.enemies_spawned >= sim.enemies_to_spawn && len(sim.enemies) == 0 {
+	// Check if wave is complete (only auto-start if game has started)
+	if sim.started && sim.enemies_spawned >= sim.enemies_to_spawn && len(sim.enemies) == 0 {
 		if app.settings.auto_start_wave {
 			start_next_wave(app)
 		}
@@ -68,6 +68,7 @@ update_wave :: proc(app: ^entities.App_State, dt: f32) {
 
 start_next_wave :: proc(app: ^entities.App_State) {
 	sim := &app.sim
+	sim.started = true  // Mark game as started
 	sim.wave_number += 1
 	sim.enemies_spawned = 0
 	sim.wave_time = 0
@@ -370,15 +371,8 @@ update_projectile_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower
 
 		// Adjust for different tower types
 		switch tower.type {
-		case .ARCHER, .CANNON, .SNIPER:
-		// Standard firing
-		case .MISSILE:
-			// Alternate sides
-			side_offset := f32(0.25 * cs)
-			forward_offset := f32(0.25 * cs)
-			side_angle := tower.angle
-			fire_x += math.cos_f32(side_angle) * side_offset
-			fire_y += math.sin_f32(side_angle) * side_offset
+		case .ARCHER, .CANNON, .SNIPER, .MISSILE:
+		// Standard firing from cannon tip
 		case .LASER:
 		// Laser handled separately
 		}

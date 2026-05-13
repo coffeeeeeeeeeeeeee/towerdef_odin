@@ -105,6 +105,7 @@ tower_upgrade_damage :: proc(t: ^Tower) -> bool {
 	// Money check should be done externally
 	t.damage_level += 1
 	t.damage *= (1.0 + constants.LASER_DAMAGE_MULTIPLIER_PER_LEVEL)
+	t.level = (t.damage_level - 1) + (t.rate_level - 1) + (t.critical_level - 1) + 1
 	return true
 }
 
@@ -114,6 +115,7 @@ tower_upgrade_rate :: proc(t: ^Tower) -> bool {
 	// Money check should be done externally
 	t.rate_level += 1
 	t.cooldown *= (1.0 - constants.LASER_COOLDOWN_REDUCTION_PER_LEVEL)
+	t.level = (t.damage_level - 1) + (t.rate_level - 1) + (t.critical_level - 1) + 1
 	return true
 }
 
@@ -122,6 +124,7 @@ tower_upgrade_critical :: proc(t: ^Tower) -> bool {
 	cost := constants.UPGRADE_COST_BASE + (t.critical_level - 1) * constants.UPGRADE_COST_INCREMENTVEL
 	// Money check should be done externally
 	t.critical_level += 1
+	t.level = (t.damage_level - 1) + (t.rate_level - 1) + (t.critical_level - 1) + 1
 	return true
 }
 

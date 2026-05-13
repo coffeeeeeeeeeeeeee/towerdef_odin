@@ -103,11 +103,13 @@ Settings :: struct {
 	
 	// Audio
 	master_volume: f32,
+	ui_volume: f32,
 	
 	// Display
 	fullscreen: bool,
 	vsync: bool,
 	antialiasing: i32,
+	window_maximized: bool,
 	
 	// Gameplay
 	show_damage_numbers: bool,
@@ -128,11 +130,14 @@ App_State :: struct {
 	editor: Editor,
 	settings: Settings,
 	
+	// UI System
+	toasts: [dynamic]Toast,
+	
 	// Camera/View
 	camera_offset_x: i32,
 	camera_offset_y: i32,
 	target_camera_offset_x: i32,  // For smooth zoom animation
-	target_camera_offset_y: i32,  // For smooth zoom animation
+	target_camera_offset_y: i32,  // For smooth zoom interpolation
 	zoom: f32,
 	target_zoom: f32,  // For smooth zoom interpolation
 	
@@ -140,6 +145,11 @@ App_State :: struct {
 	mouse_x: i32,
 	mouse_y: i32,
 	selected_tower: ^Tower,
+	selected_obstacle: struct {
+		row: i32,
+		col: i32,
+		valid: bool,
+	},
 	
 	// Selected cell (for reticle display in editor and simulation)
 	selected_cell: struct {

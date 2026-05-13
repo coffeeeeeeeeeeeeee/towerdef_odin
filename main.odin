@@ -41,6 +41,8 @@ main :: proc() {
 		raylib.SetWindowSize(raylib.GetMonitorWidth(monitor), raylib.GetMonitorHeight(monitor))
 		raylib.SetWindowState({.WINDOW_UNDECORATED})
 		raylib.ToggleFullscreen()
+	} else if initial_settings.window_maximized {
+		raylib.MaximizeWindow()
 	}
 
 	raylib.SetTargetFPS(constants.MAX_FPS)
@@ -56,6 +58,13 @@ main :: proc() {
 	// Initialize fonts
 	constants.load_fonts()
 	defer constants.unload_fonts()
+
+	// Initialize audio system
+	systems.audio_init()
+	defer systems.audio_cleanup()
+
+	// Set UI volume from settings (combined with master volume)
+	systems.set_ui_volume(initial_settings.master_volume, initial_settings.ui_volume)
 
 	// Initialize game
 	app_init(initial_settings)
@@ -86,6 +95,17 @@ main :: proc() {
 			// Snap instantly to avoid long glides when maximizing/fullscreening
 			app.camera_offset_x = app.target_camera_offset_x
 			app.camera_offset_y = app.target_camera_offset_y
+		}
+
+		// Handle window maximization state changes
+		current_maximized := raylib.IsWindowMaximized()
+		if current_maximized != app.settings.window_maximized {
+			app.settings.window_maximized = current_maximized
+			if current_maximized {
+				systems.play_sound(.MAXIMIZE)
+			} else {
+				systems.play_sound(.MINIMIZE)
+			}
 		}
 
 		// Smooth zoom and camera offset interpolation
@@ -162,6 +182,9 @@ main :: proc() {
 			systems.simulation_update(&app, dt)
 		}
 
+		// Update toasts (always)
+		entities.update_toasts(&app, dt)
+
 		// Render
 		raylib.BeginDrawing()
 		systems.render_game(&app)
@@ -182,6 +205,7 @@ app_init :: proc(initial_settings: entities.Settings) {
 	app = entities.App_State {
 		state = .MENU,
 		previous_state = .MENU,
+		toasts = make([dynamic]entities.Toast),
 		sim = entities.Simulation {
 			towers = make([dynamic]entities.Tower),
 			enemies = make([dynamic]entities.Enemy),
@@ -214,6 +238,7 @@ app_init :: proc(initial_settings: entities.Settings) {
 		camera_offset_y = camera_offset_y,
 		target_camera_offset_x = camera_offset_x,
 		target_camera_offset_y = camera_offset_y,
+		selected_obstacle = {row = 0, col = 0, valid = false},
 		selected_cell = {row = 0, col = 0, valid = false},
 	}
 
@@ -247,9 +272,11 @@ load_settings :: proc() -> entities.Settings {
 		show_fps            = false,
 		language            = .ENGLISH,
 		master_volume       = 1.0,
+		ui_volume           = 1.0,
 		fullscreen          = false,
 		vsync               = true,
 		antialiasing        = 2, // 4x default
+		window_maximized    = false,
 		show_damage_numbers = true,
 		show_tower_range    = false,
 		auto_start_wave     = true,

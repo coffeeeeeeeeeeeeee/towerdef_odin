@@ -14,6 +14,8 @@ Projectile :: struct {
 	target: ^Enemy,
 	target_orig_x: f32,
 	target_orig_y: f32,
+	target_last_x: f32,  // Last known position (for when target dies)
+	target_last_y: f32,  // Last known position (for when target dies)
 	
 	// Properties
 	speed: f32,
@@ -43,6 +45,8 @@ projectile_init :: proc(
 		target = target,
 		target_orig_x = target.x,
 		target_orig_y = target.y,
+		target_last_x = target.x,
+		target_last_y = target.y,
 		speed = speed,
 		damage = damage,
 		type = type,
@@ -54,27 +58,30 @@ projectile_init :: proc(
 // Move projectile towards target
 projectile_move :: proc(p: ^Projectile, dt: f32) -> bool {
 	// Calculate target position
-	target_x := p.target_orig_x
-	target_y := p.target_orig_y
-	
+	target_x := p.target_last_x
+	target_y := p.target_last_y
+
 	if p.target != nil {
+		// Update last known position while target is alive
+		p.target_last_x = p.target.x
+		p.target_last_y = p.target.y
 		target_x = p.target.x
 		target_y = p.target.y
 	}
-	
+
 	dx := target_x - p.x
 	dy := target_y - p.y
 	dist := math.sqrt(dx * dx + dy * dy)
-	
+
 	// Update angle based on movement direction
 	p.angle = math.atan2(dy, dx)
-	
+
 	if dist < 0.01 {
 		return true // Reached target
 	}
-	
+
 	move_dist := p.speed * dt
-	
+
 	if move_dist >= dist {
 		p.x = target_x
 		p.y = target_y

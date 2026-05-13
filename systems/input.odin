@@ -61,37 +61,51 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 		if is_mouse_over_tower_panel(app) {
 			return
 		}
-		
+
 		if is_valid_grid_pos(app, grid_x, grid_y) {
 			// Check if clicking on a tower
 			tile := app.editor.game_map.grid[grid_y][grid_x]
-			_ = tile  // Use tile to avoid unused variable warning
-			
+			obstacle := app.editor.game_map.obstacle_grid[grid_y][grid_x]
+
 			#partial switch tile {
 			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER:
 				// Select tower for upgrade
 				select_tower_at(app, grid_y, grid_x)
-			case .EMPTY:
-				// Close tower panel if clicking on empty terrain
-				app.selected_tower = nil
-				
-				// Place selected tower if one is selected
-				if app.sim.selected_build_tower != .EMPTY {
-					// Get tower spec for cost
-					tower_type := tile_to_tower_type(app.sim.selected_build_tower)
-					spec := constants.TOWER_SPECS[tower_type]
-					
-					if app.sim.money >= spec.cost {
-						// Place the tower
-						app.editor.game_map.grid[grid_y][grid_x] = app.sim.selected_build_tower
-						app.sim.money -= spec.cost
-						
-						// Create tower entity
-						tower := entities.tower_init(tower_type, grid_y, grid_x)
-						append(&app.sim.towers, tower)
-						
-						// Deselect after placing
-						app.sim.selected_build_tower = .EMPTY
+				app.selected_obstacle.valid = false // Deselect obstacle
+				play_sound(.SELECT)
+			case:
+				// Not a tower - check if it's an obstacle
+				if obstacle == .OBSTACLE {
+					// Select obstacle
+					app.selected_obstacle.row = grid_y
+					app.selected_obstacle.col = grid_x
+					app.selected_obstacle.valid = true
+					app.selected_tower = nil // Deselect tower
+					play_sound(.SELECT)
+				} else {
+					// Deselect both tower and obstacle
+					app.selected_tower = nil
+					app.selected_obstacle.valid = false
+
+					// Place selected tower if one is selected
+					if app.sim.selected_build_tower != .EMPTY {
+						// Get tower spec for cost
+						tower_type := tile_to_tower_type(app.sim.selected_build_tower)
+						spec := constants.TOWER_SPECS[tower_type]
+
+						if app.sim.money >= spec.cost {
+							// Place the tower
+							app.editor.game_map.grid[grid_y][grid_x] = app.sim.selected_build_tower
+							app.sim.money -= spec.cost
+
+							// Create tower entity
+							tower := entities.tower_init(tower_type, grid_y, grid_x)
+							append(&app.sim.towers, tower)
+
+							// Deselect after placing
+							app.sim.selected_build_tower = .EMPTY
+							play_sound(.CLICK)
+						}
 					}
 				}
 			}
@@ -101,6 +115,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 	// Right click to deselect or cancel
 	if raylib.IsMouseButtonPressed(.RIGHT) {
 		app.selected_tower = nil
+		app.selected_obstacle.valid = false
 	}
 	
 	// Keyboard shortcuts
