@@ -137,22 +137,22 @@ map_has_tower :: proc(m: ^Map, row, col: i32) -> bool {
 // Find all spawn points
 map_find_spawns :: proc(m: ^Map) -> [dynamic]Spawn_Point {
 	spawns := make([dynamic]Spawn_Point)
-	
-	for row in 0..<constants.GRID_SIZE {
-		for col in 0..<constants.GRID_SIZE {
+
+	for row in 0..<m.height {
+		for col in 0..<m.width {
 			if m.grid[row][col] == .SPAWN {
 				append(&spawns, Spawn_Point{r = i32(row), c = i32(col)})
 			}
 		}
 	}
-	
+
 	return spawns
 }
 
 // Find goal point
 map_find_goal :: proc(m: ^Map) -> (i32, i32, bool) {
-	for row in 0..<constants.GRID_SIZE {
-		for col in 0..<constants.GRID_SIZE {
+	for row in 0..<m.height {
+		for col in 0..<m.width {
 			if m.grid[row][col] == .GOAL {
 				return i32(row), i32(col), true
 			}
@@ -384,6 +384,83 @@ parse_i32 :: proc(s: string) -> i32 {
 	return i32(val)
 }
 
+// List all saved map files in the maps/ directory
+map_list_saved :: proc() -> [dynamic]string {
+	files := make([dynamic]string)
+
+	fd, err := os.open("maps")
+	if err != os.ERROR_NONE {
+		return files
+	}
+	defer os.close(fd)
+
+	fis, read_err := os.read_dir(fd, -1)
+	if read_err != os.ERROR_NONE {
+		return files
+	}
+	defer os.file_info_slice_delete(fis)
+
+	for fi in fis {
+		if !fi.is_dir && strings.has_suffix(fi.name, ".map") {
+			append(&files, strings.clone(fi.name))
+		}
+	}
+
+	return files
+}
+
+// ─── Snapshot (undo/redo) ────────────────────────────────────────────────────
+
+// Full copy of a Map's state, used for undo/redo history.
+Map_Snapshot :: struct {
+	grid:          [constants.GRID_SIZE][constants.GRID_SIZE]constants.Tile,
+	obstacle_grid: [constants.GRID_SIZE][constants.GRID_SIZE]constants.Tile,
+	tile_data:     map[string]constants.Tile_Data,
+	biome:         constants.Biome,
+	width:         i32,
+	height:        i32,
+}
+
+// Take a full snapshot of the current map state (deep copy).
+map_snapshot_save :: proc(m: ^Map) -> Map_Snapshot {
+	snap := Map_Snapshot{
+		grid          = m.grid,
+		obstacle_grid = m.obstacle_grid,
+		biome         = m.biome,
+		width         = m.width,
+		height        = m.height,
+		tile_data     = make(map[string]constants.Tile_Data),
+	}
+	for k, v in m.tile_data {
+		snap.tile_data[strings.clone(k)] = v
+	}
+	return snap
+}
+
+// Restore map state from a snapshot (deep copy back into map).
+map_snapshot_restore :: proc(m: ^Map, snap: ^Map_Snapshot) {
+	m.grid          = snap.grid
+	m.obstacle_grid = snap.obstacle_grid
+	m.biome         = snap.biome
+	m.width         = snap.width
+	m.height        = snap.height
+	delete(m.tile_data)
+	m.tile_data = make(map[string]constants.Tile_Data)
+	for k, v in snap.tile_data {
+		m.tile_data[strings.clone(k)] = v
+	}
+}
+
+// Free memory owned by a snapshot.
+map_snapshot_destroy :: proc(snap: ^Map_Snapshot) {
+	for k in snap.tile_data {
+		delete(k)
+	}
+	delete(snap.tile_data)
+}
+
+// ─── File I/O ────────────────────────────────────────────────────────────────
+
 // Load map from file
 map_load :: proc(m: ^Map, filename: string) -> bool {
 	full_path := fmt.tprintf("maps/%s", filename)
@@ -468,4 +545,3 @@ map_load :: proc(m: ^Map, filename: string) -> bool {
 	
 	return true
 }
-

@@ -75,9 +75,8 @@ laser_tower_update :: proc(t: ^Tower, dt: f32) -> (damage_dealt: f32, beam_activ
 		// Burst finished: enter cooldown
 		if t.firing_timer <= 0 {
 			t.firing_timer = 0
-			// Cooldown reduced by rate upgrade
-			cooldown_reduction := 1.0 + f32(t.rate_level - 1) * constants.LASER_COOLDOWN_REDUCTION_PER_LEVEL
-			t.cooldown_timer = t.cooldown / cooldown_reduction
+			// t.cooldown is already reduced by tower_upgrade_rate upgrades
+			t.cooldown_timer = t.cooldown
 		}
 	}
 	

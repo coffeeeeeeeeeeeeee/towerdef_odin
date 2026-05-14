@@ -130,18 +130,19 @@ tower_upgrade_critical :: proc(t: ^Tower) -> bool {
 
 // Get critical chance
 tower_get_critical_chance :: proc(t: ^Tower) -> f32 {
-	return constants.GRID_SIZE_CHANCE + f32(t.critical_level - 1) * constants.CRIT_PER_LEVEL
+	return constants.CRIT_BASE_CHANCE + f32(t.critical_level - 1) * constants.CRIT_PER_LEVEL
 }
 
 // Get damage multiplier from damage level
+// t.damage is already modified by tower_upgrade_damage, so return 1.0
 tower_get_damage_multiplier :: proc(t: ^Tower) -> f32 {
-	return 1.0 + f32(t.damage_level - 1) * constants.LASER_DAMAGE_MULTIPLIER_PER_LEVEL
+	return 1.0
 }
 
 // Get cooldown with rate upgrade applied
+// t.cooldown is already modified by tower_upgrade_rate, so return it directly
 tower_get_effective_cooldown :: proc(t: ^Tower) -> f32 {
-	cooldown_reduction := 1.0 + f32(t.rate_level - 1) * constants.LASER_COOLDOWN_REDUCTION_PER_LEVEL
-	return t.cooldown / cooldown_reduction
+	return t.cooldown
 }
 
 // Turn tower towards target

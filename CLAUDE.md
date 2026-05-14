@@ -1,0 +1,1 @@
+Esta carpeta contiene los archivos necesarios para compilar un juego en el lenguaje Odin. El juego es un juego de defensa de torres minimalista. Contiene un archivo constants.odin donde se encuentran las principales variables de márgenes, colores, timers, etc. El juego se renderiza a través de rendering.odin y el audio desde audio.odin

@@ -147,15 +147,15 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			is_boss := sim.is_wave_boss && is_last
 
 			// Calculate HP multiplier
-			multiplier: f32 = 1.0
+			multiplier: f32 = constants.ENEMY_HEALTH_DEFAULT
 			if is_boss {
-				multiplier = 10.0
+				multiplier = constants.ENEMY_HEALTH_BOSS
 			} else if sim.is_wave_green {
-				multiplier = 0.5
+				multiplier = constants.ENEMY_HEALTH_GREEN
 			} else if sim.is_wave_flying {
-				multiplier = 0.7
+				multiplier = constants.ENEMY_HEALTH_FLYING
 			} else if sim.is_wave_blue {
-				multiplier = 1.2
+				multiplier = constants.ENEMY_HEALTH_BLUE
 			}
 
 			hp :=
@@ -217,6 +217,20 @@ get_next_spawn_spawn_delay :: proc() -> f32 {
 	return 0.5 + rand.float32() * 1.0
 }
 
+// Limpia las referencias de proyectiles que apuntaban a un enemigo que va a ser removido.
+// Debe llamarse ANTES de ordered_remove para que el puntero siga siendo válido.
+// El proyectil queda con target = nil y continúa hacia la última posición conocida.
+nullify_projectile_targets :: proc(sim: ^entities.Simulation, dying_enemy: ^entities.Enemy) {
+	for &proj in sim.projectiles {
+		if proj.target == dying_enemy {
+			// Captura la posición final antes de perder el puntero
+			proj.target_last_x = dying_enemy.x
+			proj.target_last_y = dying_enemy.y
+			proj.target        = nil
+		}
+	}
+}
+
 // Update enemies
 update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 	sim := &app.sim
@@ -235,6 +249,9 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			}
 			entities.app_take_damage(app, i32(damage))
 
+			// Invalida punteros de proyectiles antes de remover
+			nullify_projectile_targets(sim, enemy)
+
 			// Remove enemy
 			entities.enemy_destroy(enemy)
 			ordered_remove(&sim.enemies, i)
@@ -246,7 +263,9 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			grid_x := i32(enemy.x + 0.5)
 			grid_y := i32(enemy.y + 0.5)
 
-			if app.editor.game_map.obstacle_grid[grid_y][grid_x] == .OBSTACLE {
+			if grid_x >= 0 && grid_x < app.editor.game_map.width &&
+			   grid_y >= 0 && grid_y < app.editor.game_map.height &&
+			   app.editor.game_map.obstacle_grid[grid_y][grid_x] == .OBSTACLE {
 				level := entities.map_get_obstacle_level(&app.editor.game_map, grid_y, grid_x)
 				damage := entities.enemy_apply_obstacle_damage(enemy, grid_x, grid_y, level)
 
@@ -271,6 +290,9 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			entities.app_add_money(app, reward)
 			sim.enemies_killed += 1
 			sim.money_earned += reward
+
+			// Invalida punteros de proyectiles antes de remover
+			nullify_projectile_targets(sim, enemy)
 
 			// Remove enemy
 			entities.enemy_destroy(enemy)
@@ -499,52 +521,47 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 		hit := entities.projectile_move(proj, dt)
 
 		if hit {
-			// Apply damage
+			is_crit :=
+				rand.float32() <
+				(constants.CRIT_BASE_CHANCE + f32(proj.critical_level - 1) * constants.CRIT_PER_LEVEL)
+			damage := proj.damage
+			if is_crit {
+				damage *= constants.CRIT_DAMAGE_MULTIPLIER
+			}
+
 			if proj.target != nil {
-				// Critical hit check
-				is_crit :=
-					rand.float32() <
-					(constants.CRIT_BASE_CHANCE +
-							f32(proj.critical_level - 1) * constants.CRIT_PER_LEVEL)
-				damage := proj.damage
-
-				if is_crit {
-					damage *= constants.CRIT_DAMAGE_MULTIPLIER
-				}
-
+				// Objetivo vivo: aplica daño directo
 				proj.target.hp -= damage
 				spawn_damage_number(app, proj.target.x + 0.5, proj.target.y + 0.5, damage, is_crit)
+			}
 
-				// AoE damage
-				if proj.aoe > 0 {
-					spawn_explosion(app, proj.x, proj.y, proj.aoe)
+			// AoE: se activa siempre al impactar, haya o no objetivo vivo.
+			// Esto genera la explosión "en el suelo" cuando el objetivo murió antes de ser alcanzado.
+			if proj.aoe > 0 {
+				spawn_explosion(app, proj.x, proj.y, proj.aoe)
 
-					// Damage nearby enemies
-					for &enemy in sim.enemies {
-						if &enemy == proj.target {
-							continue
+				for &enemy in sim.enemies {
+					if proj.target != nil && &enemy == proj.target {
+						continue // El objetivo principal ya recibió daño directo
+					}
+
+					dx := enemy.x - proj.x
+					dy := enemy.y - proj.y
+					dist := math.sqrt_f32(dx * dx + dy * dy)
+
+					if dist <= proj.aoe {
+						aoe_damage := proj.damage * 0.5
+						if is_crit {
+							aoe_damage *= constants.CRIT_DAMAGE_MULTIPLIER
 						}
-
-						dx := enemy.x - proj.x
-						dy := enemy.y - proj.y
-						dist := math.sqrt_f32(dx * dx + dy * dy)
-
-						if dist <= proj.aoe {
-							aoe_damage := proj.damage * 0.5
-							if is_crit {
-								bonus_damage :=
-									proj.damage * (constants.CRIT_DAMAGE_MULTIPLIER - 1.0)
-								aoe_damage += bonus_damage
-							}
-							enemy.hp -= aoe_damage
-							spawn_damage_number(
-								app,
-								enemy.x + 0.5,
-								enemy.y + 0.5,
-								aoe_damage,
-								is_crit,
-							)
-						}
+						enemy.hp -= aoe_damage
+						spawn_damage_number(
+							app,
+							enemy.x + 0.5,
+							enemy.y + 0.5,
+							aoe_damage,
+							is_crit,
+						)
 					}
 				}
 			}
@@ -660,6 +677,9 @@ simulation_cleanup :: proc(app: ^entities.App_State) {
 		delete(app.sim.laser_beams)
 	}
 	if len(app.sim.spawns) > 0 {
+		for &spawn in app.sim.spawns {
+			delete(spawn.path)
+		}
 		delete(app.sim.spawns)
 	}
 	if len(app.sim.graph_samples) > 0 {

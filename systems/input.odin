@@ -7,8 +7,10 @@ import "core:fmt"
 
 // Handle all input
 input_handle :: proc(app: ^entities.App_State) {
-	// Handle camera controls (global)
-	input_handle_camera(app)
+	// No mover la cámara mientras el browser de mapas está abierto en el editor
+	if !(app.state == .EDITOR && app.editor.show_map_browser) {
+		input_handle_camera(app)
+	}
 	
 	switch app.state {
 	case .MENU:
@@ -24,7 +26,7 @@ input_handle :: proc(app: ^entities.App_State) {
 	case .SETTINGS:
 		// Settings menu input is handled via render_button in render_settings_menu
 		if raylib.IsKeyPressed(.ESCAPE) {
-			entities.app_set_state(app, .MENU)
+			entities.app_set_state(app, app.previous_state)
 		}
 	}
 }
@@ -143,8 +145,16 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 
 // Paused input
 input_handle_paused :: proc(app: ^entities.App_State) {
-	if raylib.IsKeyPressed(.ESCAPE) || raylib.IsKeyPressed(.SPACE) {
-		// State change handled by caller
+	// SPACE resumes the game
+	if raylib.IsKeyPressed(.SPACE) {
+		simulation_set_pause(app, false)
+		entities.app_set_state(app, .PLAYING)
+	}
+
+	// ESCAPE goes back to main menu
+	if raylib.IsKeyPressed(.ESCAPE) {
+		simulation_set_pause(app, false)
+		entities.app_set_state(app, .MENU)
 	}
 
 	// Right click to cancel selected build tower
@@ -160,6 +170,34 @@ input_handle_paused :: proc(app: ^entities.App_State) {
 
 // Editor input
 input_handle_editor :: proc(app: ^entities.App_State) {
+	// Shortcuts de teclado (siempre activos, sin importar posición del mouse)
+	input_process_editor_shortcuts(app)
+
+	// Reset paint flag whenever the left button is released, regardless of mouse position
+	if raylib.IsMouseButtonReleased(.LEFT) {
+		app.editor.is_painting = false
+	}
+
+	// Cuando el browser está abierto: manejar scroll/ESC y bloquear el resto del input
+	if app.editor.show_map_browser {
+		if raylib.IsKeyPressed(.ESCAPE) {
+			app.editor.show_map_browser = false
+		}
+		wheel := raylib.GetMouseWheelMove()
+		if wheel != 0 {
+			app.editor.map_browser_scroll -= i32(wheel)
+			if app.editor.map_browser_scroll < 0 {
+				app.editor.map_browser_scroll = 0
+			}
+			max_scroll := i32(len(app.editor.map_browser_files)) - 8
+			if max_scroll < 0 { max_scroll = 0 }
+			if app.editor.map_browser_scroll > max_scroll {
+				app.editor.map_browser_scroll = max_scroll
+			}
+		}
+		return
+	}
+
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
 	
@@ -190,8 +228,14 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 	
 	// Left click to place or erase (continuous with IsMouseButtonDown)
 	if raylib.IsMouseButtonDown(.LEFT) {
+		// Push undo snapshot only at the start of each paint stroke
+		if !app.editor.is_painting {
+			editor_push_undo(app)
+			app.editor.is_painting = true
+		}
+
 		tool := app.editor.current_tool
-		
+
 		switch tool {
 		case .EMPTY:
 			// Erase
@@ -214,9 +258,10 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 			}
 		}
 	}
-	
+
 	// Right click to erase
 	if raylib.IsMouseButtonPressed(.RIGHT) {
+		editor_push_undo(app)
 		editor_erase_cell(app, grid_y, grid_x)
 	}
 	
@@ -326,21 +371,135 @@ input_get_hovered_cell :: proc(app: ^entities.App_State) -> (row, col: i32, vali
 
 // Process editor shortcuts
 input_process_editor_shortcuts :: proc(app: ^entities.App_State) {
-	// Clear map
-	if raylib.IsKeyDown(.LEFT_CONTROL) && raylib.IsKeyPressed(.C) {
+	ctrl := raylib.IsKeyDown(.LEFT_CONTROL) || raylib.IsKeyDown(.RIGHT_CONTROL)
+	shift := raylib.IsKeyDown(.LEFT_SHIFT) || raylib.IsKeyDown(.RIGHT_SHIFT)
+
+	// Undo (Ctrl+Z)
+	if ctrl && raylib.IsKeyPressed(.Z) && !shift {
+		editor_undo(app)
+	}
+
+	// Redo (Ctrl+Y  or  Ctrl+Shift+Z)
+	if ctrl && (raylib.IsKeyPressed(.Y) || (shift && raylib.IsKeyPressed(.Z))) {
+		editor_redo(app)
+	}
+
+	// Limpiar mapa (Ctrl+C)
+	if ctrl && raylib.IsKeyPressed(.C) {
+		editor_push_undo(app)
 		entities.map_clear(&app.editor.game_map)
+		entities.add_toast(app, "Map cleared", .INFO, 2.0)
 	}
-	
-	// Save map (placeholder)
-	if raylib.IsKeyDown(.LEFT_CONTROL) && raylib.IsKeyPressed(.S) {
-		// TODO: Implement save
+
+	// Guardar mapa (Ctrl+S) → guarda como last_saved.map
+	if ctrl && raylib.IsKeyPressed(.S) {
+		if entities.map_save(&app.editor.game_map, "last_saved.map") {
+			entities.add_toast(app, "Map saved! (Ctrl+S)", .SUCCESS, 2.0)
+		} else {
+			entities.add_toast(app, "Failed to save map", .ERROR, 3.0)
+		}
 	}
-	
-	// Load map (placeholder)
-	if raylib.IsKeyDown(.LEFT_CONTROL) && raylib.IsKeyPressed(.O) {
-		// TODO: Implement load
+
+	// Cargar mapa (Ctrl+O) → carga last_saved.map
+	if ctrl && raylib.IsKeyPressed(.O) {
+		editor_push_undo(app)
+		if entities.map_load(&app.editor.game_map, "last_saved.map") {
+			app.editor.current_biome = app.editor.game_map.biome
+			entities.add_toast(app, "Map loaded! (Ctrl+O)", .SUCCESS, 2.0)
+		} else {
+			// Roll back the undo push since nothing changed
+			if len(app.editor.undo_stack) > 0 {
+				last := len(app.editor.undo_stack) - 1
+				snap := app.editor.undo_stack[last]
+				ordered_remove(&app.editor.undo_stack, last)
+				entities.map_snapshot_destroy(&snap)
+			}
+			entities.add_toast(app, "No quick save found", .WARNING, 3.0)
+		}
+	}
+
+	// Abrir/cerrar browser de mapas (Ctrl+B)
+	if ctrl && raylib.IsKeyPressed(.B) {
+		if app.editor.show_map_browser {
+			app.editor.show_map_browser = false
+		} else {
+			for f in app.editor.map_browser_files {
+				delete(f)
+			}
+			delete(app.editor.map_browser_files)
+			app.editor.map_browser_files = entities.map_list_saved()
+			app.editor.map_browser_scroll = 0
+			app.editor.show_map_browser = true
+		}
 	}
 }
+
+// ─── Undo / Redo ─────────────────────────────────────────────────────────────
+
+// Push the current map state onto the undo stack and clear the redo stack.
+// Call this BEFORE making any change to the map (once per logical operation).
+editor_push_undo :: proc(app: ^entities.App_State) {
+	snap := entities.map_snapshot_save(&app.editor.game_map)
+	append(&app.editor.undo_stack, snap)
+
+	// Enforce history limit: drop the oldest entry
+	if len(app.editor.undo_stack) > constants.EDITOR_MAX_HISTORY {
+		entities.map_snapshot_destroy(&app.editor.undo_stack[0])
+		ordered_remove(&app.editor.undo_stack, 0)
+	}
+
+	// Any new action invalidates the redo history
+	for &s in app.editor.redo_stack {
+		entities.map_snapshot_destroy(&s)
+	}
+	clear(&app.editor.redo_stack)
+}
+
+// Undo: restore the previous state.
+editor_undo :: proc(app: ^entities.App_State) {
+	if len(app.editor.undo_stack) == 0 {
+		entities.add_toast(app, "Nothing to undo", .WARNING, 1.5)
+		return
+	}
+	// Push current state onto redo stack before restoring
+	redo_snap := entities.map_snapshot_save(&app.editor.game_map)
+	append(&app.editor.redo_stack, redo_snap)
+
+	// Pop from undo stack
+	last := len(app.editor.undo_stack) - 1
+	snap := app.editor.undo_stack[last]
+	ordered_remove(&app.editor.undo_stack, last)
+
+	entities.map_snapshot_restore(&app.editor.game_map, &snap)
+	entities.map_snapshot_destroy(&snap)
+	app.editor.current_biome = app.editor.game_map.biome
+	entities.add_toast(app, "Undo", .INFO, 0.8)
+	play_sound(.TICK)
+}
+
+// Redo: reapply the next state.
+editor_redo :: proc(app: ^entities.App_State) {
+	if len(app.editor.redo_stack) == 0 {
+		entities.add_toast(app, "Nothing to redo", .WARNING, 1.5)
+		return
+	}
+	// Push current state onto undo stack before restoring
+	undo_snap := entities.map_snapshot_save(&app.editor.game_map)
+	append(&app.editor.undo_stack, undo_snap)
+
+	// Pop from redo stack
+	last := len(app.editor.redo_stack) - 1
+	snap := app.editor.redo_stack[last]
+	ordered_remove(&app.editor.redo_stack, last)
+
+	entities.map_snapshot_restore(&app.editor.game_map, &snap)
+	entities.map_snapshot_destroy(&snap)
+	app.editor.current_biome = app.editor.game_map.biome
+	entities.add_toast(app, "Redo", .INFO, 0.8)
+	play_sound(.TICK)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Convert tile type to tower type
 tile_to_tower_type :: proc(tile: constants.Tile) -> constants.Tower_Type {

@@ -21,7 +21,7 @@ SELL_REFUND :: 0.5
 CRIT_DAMAGE_MULTIPLIER :: 2.0
 LASER_FIRING_DURATION :: 1.0
 LASER_ACCUMULATION_TIME :: 0.1
-LASER_DAMAGE_MULTIPLIER_PER_LEVEL :: 1.5
+LASER_DAMAGE_MULTIPLIER_PER_LEVEL :: 0.5
 LASER_COOLDOWN_REDUCTION_PER_LEVEL :: 0.15
 
 // Money constants
@@ -134,8 +134,8 @@ TOWER_SPECS := [Tower_Type]Tower_Spec {
 }
 
 // Enemy constants
-ENEMY_GROWTH_RATE :: 1.2
-ENEMY_BASE_HP :: 14.0
+ENEMY_GROWTH_RATE :: 1.15
+ENEMY_BASE_HP :: 10.0
 ENEMY_GLOBAL_SPEED_MULTIPLIER :: 0.5 // Use this to scale all enemy speeds
 ENEMY_GLOBAL_HP_MULTIPLIER :: 1.0 // Use this to scale all enemy health
 
@@ -215,7 +215,6 @@ CELL_SIZE :: 32
 DEFAULT_MONEY :: 100
 DEFAULT_HEALTH :: 20
 MAX_FPS :: 60
-SETTINGS_UI_VOLUME :: 0.5
 
 // Colors
 COLOR_ENEMY :: raylib.Color{220, 60, 60, 255}
@@ -285,10 +284,25 @@ UI_PANEL_Y_POSITION :: 150
 
 // Screen-edge margins for panels
 UI_MARGIN_X :: 10
-UI_MARGIN_Y :: 10
+UI_MARGIN_Y :: 8
+
+// Screen-edge margins for tooltips
+TOOLTIP_MARGIN_X :: 6
+TOOLTIP_MARGIN_Y :: 4
 
 UI_SEGMENTS :: 8
 UI_ROUNDNESS :: 0.2
+
+// Tooltip Constants
+UI_TOOLTIP_FONT_SIZE   :: 12
+UI_TOOLTIP_PADDING_H   :: 8    // Padding horizontal interior
+UI_TOOLTIP_PADDING_V   :: 5    // Padding vertical interior
+UI_TOOLTIP_OFFSET      :: 8    // Distancia fija por encima del área trigger
+UI_TOOLTIP_ROUNDNESS   :: f32(0.4)
+UI_TOOLTIP_SHADOW_OFF  :: f32(4)
+UI_TOOLTIP_BG_COLOR    :: raylib.Color{ 28,  28,  32, 225}
+UI_TOOLTIP_TEXT_COLOR  :: raylib.Color{230, 230, 230, 255}
+UI_TOOLTIP_SHADOW_COLOR :: raylib.Color{  0,   0,   0,  70}
 
 // Toast System Constants
 UI_TOAST_FONT_SIZE :: 16
@@ -314,7 +328,7 @@ UI_RETICLE_COLOR :: raylib.Color{255, 255, 255, 255} // Selected cell reticle co
 
 
 // Zoom Constants
-ZOOM_MIN :: 0.5
+ZOOM_MIN :: 0.4
 ZOOM_MAX :: 3.0
 ZOOM_SPEED :: 0.1 // Zoom speed per wheel tick (reduced for smoother feel)
 ZOOM_SMOOTH_SPEED :: 8.0 // Speed of zoom smoothing (lerp factor per second)
@@ -362,25 +376,65 @@ TOWER_BARREL_LENGTH_RATIO :: 0.6 // Barrel length as ratio of tower size
 TOWER_HATCH_RADIUS_RATIO :: 0.15 // Hatch/circle size ratio
 
 // Enemy Speed Constants (cells per second, scaled by GRID_SPEED_SCALE)
-ENEMY_SPEED_DEFAULT :: 1.2 // Normal enemies
-ENEMY_SPEED_GREEN :: 1.8 // Fast green enemies (50% faster)
-ENEMY_SPEED_BLUE :: 1.1 // Medium blue enemies
-ENEMY_SPEED_BOSS :: 0.5 // Slow bosses
+ENEMY_SPEED_BOSS :: 0.4 // Slow bosses
 ENEMY_SPEED_FLYING :: 1.3 // Flying enemies
+ENEMY_SPEED_BLUE :: 1.1 // Medium blue enemies
+ENEMY_SPEED_GREEN :: 1.8 // Fast green enemies
+ENEMY_SPEED_DEFAULT :: 1.0 // Normal enemies
 
 // Enemy Size Constants (as ratio of cell size)
-ENEMY_SIZE_BOSS :: 0.32 // Boss enemies (large) - reduced 20%
-ENEMY_SIZE_FLYING :: 0.20 // Flying enemies (small) - reduced 20%
-ENEMY_SIZE_BLUE :: 0.24 // Blue enemies (medium) - reduced 20%
-ENEMY_SIZE_GREEN :: 0.16 // Green enemies (tiny) - reduced 20%
-ENEMY_SIZE_DEFAULT :: 0.24 // Normal enemies (medium) - reduced 20%
+ENEMY_SIZE_BOSS :: 0.32 // Boss enemies (large)
+ENEMY_SIZE_FLYING :: 0.20 // Flying enemies (small)
+ENEMY_SIZE_BLUE :: 0.24 // Blue enemies (medium)
+ENEMY_SIZE_GREEN :: 0.16 // Green enemies (tiny)
+ENEMY_SIZE_DEFAULT :: 0.24 // Normal enemies (medium)
+
+// Enemy Health Multiplier Constants
+ENEMY_HEALTH_BOSS :: 30.0 // Boss enemies (large)
+ENEMY_HEALTH_FLYING :: 0.7 // Flying enemies (small)
+ENEMY_HEALTH_BLUE :: 1.2 // Blue enemies (medium)
+ENEMY_HEALTH_GREEN :: 0.5 // Green enemies (tiny)
+ENEMY_HEALTH_DEFAULT :: 1.0 // Normal enemies (medium)
 
 ENEMY_STROKE_WIDTH :: 3
 ENEMY_SHADOW_COLOR :: raylib.Color{0, 0, 0, 20}
 
 PATH_WIDTH_RATIO :: 0.4
 
-// Obstacle constants
-OBSTACLE_WIDTH_RATIO :: 0.2
-OBSTACLE_HEIGHT_RATIO :: 0.6
-OBSTACLE_ROUNDEDNESS :: 0.3
+// Obstacle barrier constants
+OBSTACLE_BARRIER_THICKNESS     :: f32(0.16)  // fracción de cs para la dimensión estrecha
+OBSTACLE_BARRIER_LENGTH        :: f32(0.86)  // fracción de cs para la dimensión larga
+OBSTACLE_BARRIER_ROUNDNESS     :: f32(0.35)
+OBSTACLE_BARRIER_SHADOW_OFFSET :: f32(3)
+OBSTACLE_BARRIER_BORDER_THICK  :: f32(1.5)
+COLOR_OBSTACLE_FILL            :: raylib.Color{145, 150, 158, 255}  // gris azulado
+COLOR_OBSTACLE_BORDER          :: raylib.Color{ 85,  90,  98, 255}  // gris oscuro
+COLOR_OBSTACLE_SHADOW          :: raylib.Color{  0,   0,   0,  55}
+
+// Map Browser Panel Constants
+UI_MAP_BROWSER_WIDTH              :: 420   // Panel width in pixels
+UI_MAP_BROWSER_HEIGHT             :: 480   // Panel height in pixels
+UI_MAP_BROWSER_SHADOW_OFFSET      :: 4     // Drop-shadow offset (larger than button shadow)
+UI_MAP_BROWSER_TITLE_Y_OFFSET     :: 14   // Y offset from panel top to title text
+UI_MAP_BROWSER_SEPARATOR_Y        :: 38   // Y offset from panel top to horizontal separator
+UI_MAP_BROWSER_HEADER_HEIGHT      :: 46   // Space reserved for title + separator (list starts here)
+UI_MAP_BROWSER_FOOTER_HEIGHT      :: 48   // Space reserved at the bottom for the Close button
+UI_MAP_BROWSER_ITEM_HEIGHT        :: 36   // Height of each map list item
+UI_MAP_BROWSER_ITEM_SIDE_PADDING  :: 8    // Horizontal inner padding for the item rect
+UI_MAP_BROWSER_ITEM_VERT_GAP      :: 4    // Vertical gap between items (2px top + 2px bottom)
+UI_MAP_BROWSER_ITEM_TEXT_INDENT   :: 10   // Left text indent inside item rect
+UI_MAP_BROWSER_ITEM_FONT_SIZE     :: 13   // Font size for list items
+UI_MAP_BROWSER_SCROLL_FONT_SIZE   :: 11   // Font size for scroll indicator text
+UI_MAP_BROWSER_CLOSE_HEIGHT       :: 28   // Close-button height (slightly taller than standard)
+UI_MAP_BROWSER_CLOSE_BTN_MARGIN   :: 10   // Margin from panel bottom to Close button
+UI_MAP_BROWSER_TITLE_FONT_SIZE    :: 16   // Font size for panel title (same as UI_BUTTON_FONT_SIZE)
+
+// Map Browser Colors
+UI_MAP_BROWSER_OVERLAY_COLOR   :: raylib.Color{0,   0,   0,   140} // Semi-transparent screen dimmer
+UI_MAP_BROWSER_SHADOW_COLOR    :: raylib.Color{0,   0,   0,   80}  // Panel drop shadow
+UI_MAP_BROWSER_SEPARATOR_COLOR :: raylib.Color{180, 180, 180, 200} // Divider line under title
+UI_MAP_BROWSER_MUTED_COLOR     :: raylib.Color{130, 130, 130, 255} // "No maps found" / scroll text
+UI_MAP_BROWSER_LOADED_COLOR    :: raylib.Color{30,  120, 30,  255} // Currently-loaded map highlight
+
+// Undo / Redo
+EDITOR_MAX_HISTORY :: 50   // Maximum number of map snapshots to keep in the undo stack

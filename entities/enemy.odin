@@ -75,7 +75,7 @@ enemy_init :: proc(
 		is_green = is_green,
 		is_blue = is_blue,
 		boss_color = boss_color,
-		heal_cooldown = 0,
+		heal_cooldown = 1.0,
 		obstacle_damage = make(map[string]bool),
 		_tmp_dist = 0,
 	}

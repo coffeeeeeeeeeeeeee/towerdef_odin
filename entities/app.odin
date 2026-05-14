@@ -77,20 +77,31 @@ Wave_Mark :: struct {
 Editor :: struct {
 	// Map
 	game_map: Map,
-	
+
 	// Current tool
 	current_tool: constants.Tile,
 	show_grid: bool,
-	
+
 	// Editor settings
 	current_biome: constants.Biome,
-	
+
 	// Debug visualization
 	show_paths: bool,
-	
+
 	// Load map filename input
 	load_map_filename: [64]u8,
 	load_map_active: bool,
+
+	// Map save/load state
+	current_map_name: string,         // Nombre del mapa cargado/guardado
+	show_map_browser: bool,           // Si el browser de mapas está abierto
+	map_browser_files: [dynamic]string, // Lista de archivos .map disponibles
+	map_browser_scroll: i32,          // Scroll offset del browser
+
+	// Undo / Redo
+	undo_stack: [dynamic]Map_Snapshot, // Snapshots anteriores (el último es el más reciente)
+	redo_stack: [dynamic]Map_Snapshot, // Snapshots para rehacer
+	is_painting: bool,                 // True mientras el botón izquierdo está presionado (para capturar solo al inicio del trazo)
 }
 
 // Settings
@@ -176,7 +187,7 @@ app_set_state :: proc(app: ^App_State, new_state: constants.Game_State) {
 app_take_damage :: proc(app: ^App_State, damage: i32) {
 	app.sim.health -= damage
 	if app.sim.health <= 0 {
-		app.state = .GAME_OVER
+		app_set_state(app, .GAME_OVER)
 	}
 }
 
