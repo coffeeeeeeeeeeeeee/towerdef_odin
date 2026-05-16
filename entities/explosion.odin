@@ -72,3 +72,37 @@ damage_number_update :: proc(dn: ^Damage_Number, dt: f32) -> bool {
 	dn.y -= 0.5 * dt
 	return dn.life <= 0
 }
+
+// Ice pulse — expanding ring emitted when the ice tower pulses
+Ice_Pulse :: struct {
+	// Center in grid units (tower center)
+	x: f32,
+	y: f32,
+	// How far the ring has expanded (grid units)
+	radius: f32,
+	// Maximum radius = tower range
+	max_radius: f32,
+	// Remaining lifetime (seconds); starts at max_life
+	life: f32,
+	max_life: f32,
+}
+
+ice_pulse_init :: proc(x, y, max_radius: f32) -> Ice_Pulse {
+	return Ice_Pulse{
+		x          = x,
+		y          = y,
+		radius     = 0,
+		max_radius = max_radius,
+		life       = 0.5,
+		max_life   = 0.5,
+	}
+}
+
+// Returns true when the pulse is finished and should be removed
+ice_pulse_update :: proc(p: ^Ice_Pulse, dt: f32) -> bool {
+	p.life -= dt
+	// Progress 0→1 over lifetime; radius expands from 0 to max_radius
+	progress := 1.0 - (p.life / p.max_life)
+	p.radius  = p.max_radius * progress
+	return p.life <= 0
+}

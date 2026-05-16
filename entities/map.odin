@@ -102,8 +102,26 @@ map_get_obstacle_level :: proc(m: ^Map, row, col: i32) -> i32 {
 
 // Set obstacle level
 map_set_obstacle_level :: proc(m: ^Map, row, col: i32, level: i32) {
-	key := map_get_tile_key(row, col)
-	m.tile_data[key] = constants.Tile_Data{level = level}
+	if existing_key, ok := map_get_existing_key(m, row, col); ok {
+		// Entry already exists: update value in place, reuse the stored key.
+		// Do NOT delete the key — it is still referenced by the map.
+		m.tile_data[existing_key] = constants.Tile_Data{level = level}
+	} else {
+		// No entry yet: clone the key so it outlives the temp allocator.
+		key := strings.clone(map_get_tile_key(row, col))
+		m.tile_data[key] = constants.Tile_Data{level = level}
+	}
+}
+
+// Helper: returns the existing heap-allocated key for (row,col) if present.
+map_get_existing_key :: proc(m: ^Map, row, col: i32) -> (key: string, found: bool) {
+	temp_key := map_get_tile_key(row, col)
+	for k in m.tile_data {
+		if k == temp_key {
+			return k, true
+		}
+	}
+	return "", false
 }
 
 // Clear map (set all to EMPTY)
@@ -128,7 +146,7 @@ map_is_path :: proc(m: ^Map, row, col: i32) -> bool {
 map_has_tower :: proc(m: ^Map, row, col: i32) -> bool {
 	tile := map_get_tile(m, row, col)
 	#partial switch tile {
-	case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER:
+	case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
 		return true
 	}
 	return false
@@ -186,11 +204,11 @@ BFS_Node :: struct {
 map_find_path_bfs :: proc(m: ^Map, start_r, start_c, goal_r, goal_c: i32, is_flying: bool) -> [dynamic]Path_Node {
 	path := make([dynamic]Path_Node)
 	
-	// Check if start or goal is out of bounds
-	if start_r < 0 || start_r >= constants.GRID_SIZE || start_c < 0 || start_c >= constants.GRID_SIZE {
+	// Check if start or goal is out of bounds (use actual map dimensions)
+	if start_r < 0 || start_r >= m.height || start_c < 0 || start_c >= m.width {
 		return path
 	}
-	if goal_r < 0 || goal_r >= constants.GRID_SIZE || goal_c < 0 || goal_c >= constants.GRID_SIZE {
+	if goal_r < 0 || goal_r >= m.height || goal_c < 0 || goal_c >= m.width {
 		return path
 	}
 	
@@ -239,8 +257,8 @@ map_find_path_bfs :: proc(m: ^Map, start_r, start_c, goal_r, goal_c: i32, is_fly
 			nr := current.r + dr[i]
 			nc := current.c + dc[i]
 			
-			// Check bounds
-			if nr < 0 || nr >= constants.GRID_SIZE || nc < 0 || nc >= constants.GRID_SIZE {
+			// Check bounds (use actual map dimensions)
+			if nr < 0 || nr >= m.height || nc < 0 || nc >= m.width {
 				continue
 			}
 			

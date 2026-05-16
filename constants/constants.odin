@@ -15,9 +15,9 @@ Game_State :: enum {
 UPGRADE_COST_BASE :: 50
 UPGRADE_COST_INCREMENTVEL :: 25
 GRID_SIZE_CHANCE :: 0.05
-CRIT_BASE_CHANCE :: 0.05
-CRIT_PER_LEVEL :: 0.03
-SELL_REFUND :: 0.5
+CRIT_BASE_CHANCE :: 0.10   // 10% base critical chance for all towers
+CRIT_PER_LEVEL   :: 0.05   // +5% per critical upgrade
+SELL_REFUND :: 0.75
 CRIT_DAMAGE_MULTIPLIER :: 2.0
 LASER_FIRING_DURATION :: 1.0
 LASER_ACCUMULATION_TIME :: 0.1
@@ -26,6 +26,11 @@ LASER_COOLDOWN_REDUCTION_PER_LEVEL :: 0.15
 
 // Money constants
 MONEY_WAVE_CLEAR :: 100
+INTEREST_RATE    :: 0.05  // 5% of current money awarded at wave start
+
+// Enemy split constants
+SPLIT_HP_RATIO   :: 0.30  // Child enemy HP = 30% of parent max_hp
+SPLIT_SPEED_MULT :: 1.30  // Child enemy speed = parent speed * 1.30
 
 // Tile types
 Tile :: enum i32 {
@@ -41,6 +46,7 @@ Tile :: enum i32 {
 	OBSTACLE        = 9,
 	ACCESSORY_TREE  = 10,
 	ACCESSORY_BLOCK = 11,
+	TOWER_ICE       = 12,
 }
 
 // Tower Types
@@ -50,6 +56,7 @@ Tower_Type :: enum {
 	SNIPER,
 	MISSILE,
 	LASER,
+	ICE,
 }
 
 // Tower Target Strategies
@@ -130,6 +137,15 @@ TOWER_SPECS := [Tower_Type]Tower_Spec {
 		aoe = 0,
 		cost = 80,
 		color = raylib.MAGENTA,
+	},
+	.ICE = {
+		type = .ICE,
+		range = 2.5,
+		damage = 0.5,
+		cooldown = 2.2,
+		aoe = 0,
+		cost = 45,
+		color = raylib.SKYBLUE,
 	},
 }
 
@@ -222,6 +238,8 @@ COLOR_ENEMY_GREEN :: raylib.Color{60, 180, 60, 255}
 COLOR_ENEMY_BLUE :: raylib.Color{60, 100, 220, 255}
 COLOR_ENEMY_BOSS :: raylib.Color{220, 200, 60, 255}
 COLOR_ENEMY_FLYING :: raylib.Color{255, 220, 60, 255} // Yellow flying enemy
+COLOR_ENEMY_SPLIT  :: raylib.Color{180, 60, 210, 255}  // Purple splitter enemy
+COLOR_ENEMY_BONUS  :: raylib.Color{255, 140, 0, 255}  // Orange bonus enemy
 
 COLOR_GRID_LINE :: raylib.Color{150, 150, 150, 100}
 COLOR_PATH :: raylib.Color{210, 180, 140, 255}
@@ -238,7 +256,13 @@ ENEMY_GREEN :: raylib.Color{0, 255, 0, 255}
 ENEMY_BLUE :: raylib.Color{0, 0, 255, 255}
 ENEMY_FLYING :: raylib.Color{255, 220, 60, 255} // Yellow flying enemy
 
+// Ice tower slow constants
+ICE_SLOW_FACTOR   :: f32(0.4)  // Speed multiplier while slowed (40% of normal)
+ICE_SLOW_DURATION :: f32(2.0)  // Seconds the slow lasts after pulse
+
 // Tower stroke colors (for rendering) - saturated to stand out
+TOWER_ICE_BASE   :: raylib.Color{160, 220, 245, 255}  // Pale cyan-blue base
+TOWER_ICE_STROKE :: raylib.Color{ 70, 160, 210, 255}  // Deeper blue stroke
 TOWER_LASER_STROKE :: raylib.Color{60, 100, 180, 255}
 TOWER_CANNON_STROKE :: raylib.Color{80, 90, 110, 255}
 TOWER_MISSILE_STROKE :: raylib.Color{180, 70, 60, 255}
@@ -252,7 +276,7 @@ UI_BUTTON_WIDTH :: 80
 UI_BUTTON_HEIGHT :: 24
 UI_BUTTON_FONT_SIZE :: 16
 UI_BUTTON_SHADOW_OFFSET :: 2
-UI_BUTTON_ROUNDNESS :: 0.2
+UI_BUTTON_ROUNDNESS :: 0.3
 
 // UI Color Constants
 UI_BUTTON_COLOR :: raylib.Color{255, 255, 255, 255}
@@ -271,16 +295,29 @@ UI_DROPDOWN_HEIGHT :: 24
 MENU_GRID_COLOR :: raylib.Color{40, 40, 60, 80}
 MENU_GRID_SPACING :: 40
 MENU_BG_TOP_COLOR :: raylib.Color{15, 15, 35, 255}      // Dark blue
-MENU_BG_BOTTOM_COLOR :: raylib.Color{35, 35, 50, 255}   // Dark purple
+MENU_BG_BOTTOM_COLOR :: raylib.Color{30, 35, 50, 255}   // Dark purple
 MENU_GRID_SPEED :: f32(10.0)                            // Pixels per second for diagonal movement
 
 UI_INPUT_WIDTH :: 80
 UI_INPUT_HEIGHT :: 24
 
+UI_SEGMENTS :: 8
+UI_ROUNDNESS :: 0.05
+UI_SHADOW_OFFSET :: 4
+UI_SHADOW_COLOR :: raylib.Color{0, 0, 0, 30}
+
+UI_PANEL_HERO_SIZE :: 32
+UI_PANEL_TITLE_SIZE :: 22
+UI_PANEL_LABEL_SIZE :: 18
+UI_PANEL_TEXT_SIZE :: 14
 UI_PANEL_WIDTH :: 200
 UI_PANEL_HEIGHT :: 295
 UI_PANEL_MARGIN :: 10
 UI_PANEL_Y_POSITION :: 150
+UI_PANEL_TITLE_COLOR :: raylib.GRAY 
+UI_PANEL_LABEL_COLOR :: raylib.DARKGRAY 
+UI_PANEL_TEXT_COLOR :: raylib.BLACK 
+UI_PANEL_COLOR :: raylib.RAYWHITE
 
 // Screen-edge margins for panels
 UI_MARGIN_X :: 10
@@ -290,15 +327,13 @@ UI_MARGIN_Y :: 8
 TOOLTIP_MARGIN_X :: 6
 TOOLTIP_MARGIN_Y :: 4
 
-UI_SEGMENTS :: 8
-UI_ROUNDNESS :: 0.2
-
 // Tooltip Constants
 UI_TOOLTIP_FONT_SIZE   :: 12
 UI_TOOLTIP_PADDING_H   :: 8    // Padding horizontal interior
 UI_TOOLTIP_PADDING_V   :: 5    // Padding vertical interior
 UI_TOOLTIP_OFFSET      :: 8    // Distancia fija por encima del área trigger
-UI_TOOLTIP_ROUNDNESS   :: f32(0.4)
+UI_TOOLTIP_SEGMENTS    :: f32(8)
+UI_TOOLTIP_ROUNDNESS   :: f32(0.3)
 UI_TOOLTIP_SHADOW_OFF  :: f32(4)
 UI_TOOLTIP_BG_COLOR    :: raylib.Color{ 28,  28,  32, 225}
 UI_TOOLTIP_TEXT_COLOR  :: raylib.Color{230, 230, 230, 255}
@@ -321,8 +356,6 @@ UI_TOAST_WARNING_COLOR :: raylib.Color{200, 150, 50, 240}    // Orange
 UI_TOAST_WARNING_TEXT_COLOR :: raylib.Color{255, 255, 255, 255}
 UI_TOAST_ERROR_COLOR :: raylib.Color{200, 50, 50, 240}       // Red
 UI_TOAST_ERROR_TEXT_COLOR :: raylib.Color{255, 255, 255, 255}
-
-PANEL_TEXT_COLOR :: raylib.GRAY
 
 UI_RETICLE_COLOR :: raylib.Color{255, 255, 255, 255} // Selected cell reticle color (white with 60% opacity)
 
@@ -376,25 +409,34 @@ TOWER_BARREL_LENGTH_RATIO :: 0.6 // Barrel length as ratio of tower size
 TOWER_HATCH_RADIUS_RATIO :: 0.15 // Hatch/circle size ratio
 
 // Enemy Speed Constants (cells per second, scaled by GRID_SPEED_SCALE)
-ENEMY_SPEED_BOSS :: 0.4 // Slow bosses
-ENEMY_SPEED_FLYING :: 1.3 // Flying enemies
-ENEMY_SPEED_BLUE :: 1.1 // Medium blue enemies
-ENEMY_SPEED_GREEN :: 1.8 // Fast green enemies
-ENEMY_SPEED_DEFAULT :: 1.0 // Normal enemies
+ENEMY_SPEED_BOSS    :: 0.4  // Slow bosses
+ENEMY_SPEED_FLYING  :: 1.3  // Flying enemies
+ENEMY_SPEED_BLUE    :: 1.1  // Medium blue enemies
+ENEMY_SPEED_GREEN   :: 1.8  // Fast green enemies
+ENEMY_SPEED_DEFAULT :: 1.0  // Normal enemies
+ENEMY_SPEED_BONUS   :: 1.5  // Bonus enemies (fast but not green-tier)
 
 // Enemy Size Constants (as ratio of cell size)
-ENEMY_SIZE_BOSS :: 0.32 // Boss enemies (large)
-ENEMY_SIZE_FLYING :: 0.20 // Flying enemies (small)
-ENEMY_SIZE_BLUE :: 0.24 // Blue enemies (medium)
-ENEMY_SIZE_GREEN :: 0.16 // Green enemies (tiny)
-ENEMY_SIZE_DEFAULT :: 0.24 // Normal enemies (medium)
+ENEMY_SIZE_BOSS    :: 0.32  // Boss enemies (large)
+ENEMY_SIZE_FLYING  :: 0.20  // Flying enemies (small)
+ENEMY_SIZE_BLUE    :: 0.24  // Blue enemies (medium)
+ENEMY_SIZE_GREEN   :: 0.16  // Green enemies (tiny)
+ENEMY_SIZE_DEFAULT :: 0.24  // Normal enemies (medium)
+ENEMY_SIZE_BONUS   :: 0.28  // Bonus enemies (slightly bigger)
 
 // Enemy Health Multiplier Constants
-ENEMY_HEALTH_BOSS :: 30.0 // Boss enemies (large)
-ENEMY_HEALTH_FLYING :: 0.7 // Flying enemies (small)
-ENEMY_HEALTH_BLUE :: 1.2 // Blue enemies (medium)
-ENEMY_HEALTH_GREEN :: 0.5 // Green enemies (tiny)
-ENEMY_HEALTH_DEFAULT :: 1.0 // Normal enemies (medium)
+ENEMY_HEALTH_BOSS    :: 10.0  // Boss enemies (very tanky)
+ENEMY_HEALTH_FLYING  ::  0.6  // Flying enemies (fragile)
+ENEMY_HEALTH_BLUE    ::  1.2  // Blue enemies (medium)
+ENEMY_HEALTH_GREEN   ::  0.5  // Green enemies (tiny)
+ENEMY_HEALTH_DEFAULT ::  0.9  // Normal enemies
+ENEMY_HEALTH_BONUS   ::  2.0  // Bonus enemies (tough — all abilities combined)
+
+// Bonus wave constants
+BONUS_WAVE_CHANCE       :: f32(0.25)  // 25% chance of a bonus wave on any non-boss wave
+BONUS_WAVE_ENEMY_COUNT  :: i32(5)     // Enemies per bonus wave
+ENEMY_REWARD_BONUS      :: i32(25)    // Extra gold granted on bonus enemy kill
+BOSS_WAVE_INTERVAL      :: i32(10)    // Boss appears every N waves
 
 ENEMY_STROKE_WIDTH :: 3
 ENEMY_SHADOW_COLOR :: raylib.Color{0, 0, 0, 20}

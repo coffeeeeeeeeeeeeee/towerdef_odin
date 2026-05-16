@@ -52,14 +52,19 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 
 	// Update laser beams
 	update_laser_beams(app, s_dt)
+
+	// Update ice pulses
+	update_ice_pulses(app, s_dt)
 }
 
 // Wave management
 update_wave :: proc(app: ^entities.App_State, dt: f32) {
 	sim := &app.sim
 
-	// Check if wave is complete (only auto-start if game has started)
-	if sim.started && sim.enemies_spawned >= sim.enemies_to_spawn && len(sim.enemies) == 0 {
+	// Check if wave is complete: game must have started, all enemies spawned AND cleared,
+	// and enemies_to_spawn > 0 to avoid triggering before the first wave is launched.
+	if sim.started && sim.enemies_to_spawn > 0 &&
+	   sim.enemies_spawned >= sim.enemies_to_spawn && len(sim.enemies) == 0 {
 		if app.settings.auto_start_wave {
 			start_next_wave(app)
 		}
@@ -68,34 +73,62 @@ update_wave :: proc(app: ^entities.App_State, dt: f32) {
 
 start_next_wave :: proc(app: ^entities.App_State) {
 	sim := &app.sim
+
+	// Interest bonus: reward the player for saving money between waves
+	if sim.wave_number > 0 {
+		interest := i32(f32(sim.money) * constants.INTEREST_RATE)
+		if interest > 0 {
+			entities.app_add_money(app, interest)
+			entities.add_toast(app, fmt.tprintf("+$%d interés", interest), .INFO)
+		}
+	}
+
 	sim.started = true  // Mark game as started
 	sim.wave_number += 1
 	sim.enemies_spawned = 0
 	sim.wave_time = 0
 
+	// Determine wave type based on wave number.
+	sim.is_wave_boss  = sim.wave_number % constants.BOSS_WAVE_INTERVAL == 0
+
+	// Bonus wave: random chance on any non-boss wave (all sub-type abilities combined).
+	sim.is_wave_bonus = !sim.is_wave_boss && rand.float32() < constants.BONUS_WAVE_CHANCE
+
+	// Sub-types: on bonus waves all flags are active; on normal waves rotate by wave number.
+	if sim.is_wave_bonus {
+		sim.is_wave_green  = true
+		sim.is_wave_flying = true
+		sim.is_wave_blue   = true
+		sim.is_wave_split  = true
+	} else {
+		sim.is_wave_green  = !sim.is_wave_boss && sim.wave_number % 4 == 1
+		sim.is_wave_flying = !sim.is_wave_boss && sim.wave_number % 4 == 2
+		sim.is_wave_blue   = !sim.is_wave_boss && sim.wave_number % 4 == 3
+		sim.is_wave_split  = !sim.is_wave_boss && sim.wave_number % 4 == 0
+	}
+
 	// Record wave marker for graph
 	append(
 		&sim.wave_marks,
 		entities.Wave_Mark {
-			time = sim.play_time,
-			wave = sim.wave_number,
-			is_boss = sim.wave_number % 5 == 0,
-			is_green = sim.wave_number % 4 == 1,
-			is_flying = sim.wave_number % 4 == 2,
-			is_blue = sim.wave_number % 4 == 3,
+			time      = sim.play_time,
+			wave      = sim.wave_number,
+			is_boss   = sim.is_wave_boss,
+			is_green  = sim.is_wave_green,
+			is_flying = sim.is_wave_flying,
+			is_blue   = sim.is_wave_blue,
+			is_split  = sim.is_wave_split,
+			is_bonus  = sim.is_wave_bonus,
 		},
 	)
 
-	// Determine wave type based on wave number
-	sim.is_wave_boss = sim.wave_number % 5 == 0
-	sim.is_wave_green = !sim.is_wave_boss && (sim.wave_number % 4 == 1)
-	sim.is_wave_flying = !sim.is_wave_boss && (sim.wave_number % 4 == 2)
-	sim.is_wave_blue = !sim.is_wave_boss && (sim.wave_number % 4 == 3)
-
 	// Calculate enemies to spawn
-	sim.enemies_to_spawn = 5 + sim.wave_number * 2
 	if sim.is_wave_boss {
 		sim.enemies_to_spawn = 1
+	} else if sim.is_wave_bonus {
+		sim.enemies_to_spawn = constants.BONUS_WAVE_ENEMY_COUNT
+	} else {
+		sim.enemies_to_spawn = 5 + sim.wave_number * 2
 	}
 
 	// Reset spawn timers
@@ -147,15 +180,19 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			is_boss := sim.is_wave_boss && is_last
 
 			// Calculate HP multiplier
-			multiplier: f32 = constants.ENEMY_HEALTH_DEFAULT
+			multiplier: f32
 			if is_boss {
 				multiplier = constants.ENEMY_HEALTH_BOSS
+			} else if sim.is_wave_bonus {
+				multiplier = constants.ENEMY_HEALTH_BONUS
 			} else if sim.is_wave_green {
 				multiplier = constants.ENEMY_HEALTH_GREEN
 			} else if sim.is_wave_flying {
 				multiplier = constants.ENEMY_HEALTH_FLYING
 			} else if sim.is_wave_blue {
 				multiplier = constants.ENEMY_HEALTH_BLUE
+			} else {
+				multiplier = constants.ENEMY_HEALTH_DEFAULT
 			}
 
 			hp :=
@@ -164,33 +201,18 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 				multiplier *
 				constants.ENEMY_GLOBAL_HP_MULTIPLIER
 
-			// Boss color cycle
-			boss_color := raylib.WHITE
-			if is_boss {
-				boss_cycle := (sim.wave_number - 1) / 5 % 4
-				switch boss_cycle {
-				case 0:
-					app.sim.money += constants.MONEY_WAVE_CLEAR
-					app.sim.money_earned += constants.MONEY_WAVE_CLEAR
-				case 1:
-					boss_color = constants.COLOR_ENEMY
-				case 2:
-					boss_color = constants.COLOR_ENEMY_BOSS
-				case 3:
-					boss_color = constants.COLOR_ENEMY_BLUE
-				}
-			}
-
-			// Speed
-			speed: f32 = constants.ENEMY_SPEED_DEFAULT
-			if is_boss {
-				speed = constants.ENEMY_SPEED_BOSS
+			// Speed — bonus enemies use their own speed constant
+			speed: f32
+			if sim.is_wave_bonus {
+				speed = constants.ENEMY_SPEED_BONUS
 			} else if sim.is_wave_green {
 				speed = constants.ENEMY_SPEED_GREEN
 			} else if sim.is_wave_blue {
 				speed = constants.ENEMY_SPEED_BLUE
 			} else if sim.is_wave_flying {
 				speed = constants.ENEMY_SPEED_FLYING
+			} else {
+				speed = constants.ENEMY_SPEED_DEFAULT
 			}
 
 			speed *= constants.ENEMY_GLOBAL_SPEED_MULTIPLIER
@@ -202,8 +224,10 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 				sim.is_wave_flying,
 				sim.is_wave_green,
 				sim.is_wave_blue,
-				boss_color,
+				raylib.WHITE,
+				sim.is_wave_bonus,
 			)
+			enemy.is_split = sim.is_wave_split
 
 			// Set enemy path (this also sets initial position to spawn)
 			entities.enemy_set_path(&enemy, spawn.path)
@@ -234,6 +258,10 @@ nullify_projectile_targets :: proc(sim: ^entities.Simulation, dying_enemy: ^enti
 // Update enemies
 update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 	sim := &app.sim
+
+	// Collect split children to spawn after the main loop to avoid invalidating indices
+	split_children: [dynamic]entities.Enemy
+	defer delete(split_children)
 
 	for i := len(sim.enemies) - 1; i >= 0; i -= 1 {
 		enemy := &sim.enemies[i]
@@ -278,6 +306,9 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 		// Blue enemy healing
 		entities.enemy_update_healing(enemy, dt)
 
+		// Slow effect tick
+		entities.enemy_update_slow(enemy, dt)
+
 		// Check death
 		if enemy.hp <= 0 {
 			// Enemy died - give reward
@@ -287,9 +318,36 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			} else if enemy.is_green {
 				reward = 3
 			}
+			if enemy.is_bonus {
+				reward += constants.ENEMY_REWARD_BONUS
+			}
 			entities.app_add_money(app, reward)
 			sim.enemies_killed += 1
 			sim.money_earned += reward
+
+			// Split: parent has is_split=true; children are created with is_split=false so they don't split again.
+			// Children of bonus enemies keep sub-type flags but NOT is_bonus (no extra gold).
+			if enemy.is_split && !enemy.is_boss {
+				for _ in 0 ..< 2 {
+					child_hp := enemy.max_hp * constants.SPLIT_HP_RATIO
+					child := entities.enemy_init(
+						child_hp,
+						enemy.speed * constants.SPLIT_SPEED_MULT,
+						false,
+						enemy.is_flying,
+						enemy.is_green,
+						enemy.is_blue,
+						enemy.boss_color,
+						false, // is_bonus: children no dan gold extra
+					)
+					// Resume from where the parent is in the path
+					child_path := enemy.path[int(enemy.path_idx):]
+					entities.enemy_set_path_slice(&child, child_path)
+					child.x = enemy.x
+					child.y = enemy.y
+					append(&split_children, child)
+				}
+			}
 
 			// Invalida punteros de proyectiles antes de remover
 			nullify_projectile_targets(sim, enemy)
@@ -298,6 +356,12 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			entities.enemy_destroy(enemy)
 			ordered_remove(&sim.enemies, i)
 		}
+	}
+
+	// Append split children now that iteration is done
+	// (wave completion uses len(sim.enemies)==0, so no counter adjustment needed)
+	for child in split_children {
+		append(&sim.enemies, child)
 	}
 }
 
@@ -310,6 +374,12 @@ update_towers :: proc(app: ^entities.App_State, dt: f32) {
 		// Update timers
 		if tower.timer > 0 {
 			tower.timer -= dt
+		}
+
+		// ICE tower: AoE pulse-based slow — no targeting or barrel rotation needed
+		if tower.type == .ICE {
+			update_ice_tower(app, &tower)
+			continue
 		}
 
 		// Find target
@@ -333,10 +403,49 @@ update_towers :: proc(app: ^entities.App_State, dt: f32) {
 					update_laser_tower(app, &tower, dt)
 				case .ARCHER, .CANNON, .SNIPER, .MISSILE:
 					update_projectile_tower(app, &tower, dt)
+				case .ICE:
+					// Handled above via continue
 				}
 			}
 		}
 	}
+}
+
+// Update ice tower — pulses AoE slow when cooldown expires
+update_ice_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
+	if tower.timer > 0 {
+		return
+	}
+	tower.timer = entities.tower_get_effective_cooldown(tower)
+
+	// Slow + damage all enemies in range (ground + flying)
+	crit_chance := constants.CRIT_BASE_CHANCE + f32(tower.critical_level - 1) * constants.CRIT_PER_LEVEL
+	for &enemy in app.sim.enemies {
+		dx := (enemy.x + 0.5) - (f32(tower.c) + 0.5)
+		dy := (enemy.y + 0.5) - (f32(tower.r) + 0.5)
+		dist := math.sqrt_f32(dx * dx + dy * dy)
+		if dist <= tower.range {
+			entities.enemy_apply_slow(&enemy, constants.ICE_SLOW_FACTOR, constants.ICE_SLOW_DURATION)
+
+			// Apply damage per pulse
+			is_crit := rand.float32() < crit_chance
+			dmg := tower.damage
+			if is_crit {
+				dmg *= constants.CRIT_DAMAGE_MULTIPLIER
+			}
+			enemy.hp -= dmg
+			tower.total_damage += dmg
+			spawn_damage_number(app, enemy.x + 0.5, enemy.y + 0.5, dmg, is_crit)
+		}
+	}
+
+	// Spawn expanding ring visual at tower center
+	pulse := entities.ice_pulse_init(
+		f32(tower.c) + 0.5,
+		f32(tower.r) + 0.5,
+		tower.range,
+	)
+	append(&app.sim.ice_pulses, pulse)
 }
 
 // Update laser tower
@@ -345,6 +454,7 @@ update_laser_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, dt:
 
 	if damage > 0 && tower.target != nil {
 		tower.target.hp -= damage
+		tower.total_damage += damage
 
 		// Show accumulated damage
 		should_show, display_damage, is_crit := entities.laser_should_show_damage(tower)
@@ -353,6 +463,7 @@ update_laser_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, dt:
 				// Apply bonus critical damage
 				bonus := display_damage * (constants.CRIT_DAMAGE_MULTIPLIER - 1.0)
 				tower.target.hp -= bonus
+				tower.total_damage += bonus
 			}
 			spawn_damage_number(
 				app,
@@ -421,6 +532,8 @@ update_projectile_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower
 			tower.type,
 			tower.aoe,
 			tower.critical_level,
+			tower.r,
+			tower.c,
 		)
 
 		append(&sim.projectiles, proj)
@@ -529,9 +642,21 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 				damage *= constants.CRIT_DAMAGE_MULTIPLIER
 			}
 
+			// Find source tower for damage attribution
+			source_tower: ^entities.Tower = nil
+			if proj.source_r >= 0 {
+				for &t in sim.towers {
+					if t.r == proj.source_r && t.c == proj.source_c {
+						source_tower = &t
+						break
+					}
+				}
+			}
+
 			if proj.target != nil {
 				// Objetivo vivo: aplica daño directo
 				proj.target.hp -= damage
+				if source_tower != nil { source_tower.total_damage += damage }
 				spawn_damage_number(app, proj.target.x + 0.5, proj.target.y + 0.5, damage, is_crit)
 			}
 
@@ -555,6 +680,7 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 							aoe_damage *= constants.CRIT_DAMAGE_MULTIPLIER
 						}
 						enemy.hp -= aoe_damage
+						if source_tower != nil { source_tower.total_damage += aoe_damage }
 						spawn_damage_number(
 							app,
 							enemy.x + 0.5,
@@ -590,6 +716,16 @@ update_damage_numbers :: proc(app: ^entities.App_State, dt: f32) {
 	for i := len(sim.damage_numbers) - 1; i >= 0; i -= 1 {
 		if entities.damage_number_update(&sim.damage_numbers[i], dt) {
 			ordered_remove(&sim.damage_numbers, i)
+		}
+	}
+}
+
+// Update ice pulses (expanding ring animation)
+update_ice_pulses :: proc(app: ^entities.App_State, dt: f32) {
+	sim := &app.sim
+	for i := len(sim.ice_pulses) - 1; i >= 0; i -= 1 {
+		if entities.ice_pulse_update(&sim.ice_pulses[i], dt) {
+			ordered_remove(&sim.ice_pulses, i)
 		}
 	}
 }
@@ -643,7 +779,7 @@ simulation_remove_tower_at :: proc(app: ^entities.App_State, row, col: i32) -> b
 			ordered_remove(&app.sim.towers, i)
 
 			// Deselect tower
-			app.selected_tower = nil
+			entities.app_deselect_tower(app)
 
 			return true
 		}
@@ -658,42 +794,28 @@ simulation_cleanup :: proc(app: ^entities.App_State) {
 		entities.enemy_destroy(&e)
 	}
 
-	if len(app.sim.towers) > 0 {
-		delete(app.sim.towers)
+	delete(app.sim.towers)
+	delete(app.sim.enemies)
+	delete(app.sim.projectiles)
+	delete(app.sim.explosions)
+	delete(app.sim.damage_numbers)
+	delete(app.sim.laser_beams)
+	delete(app.sim.ice_pulses)
+	for &spawn in app.sim.spawns {
+		delete(spawn.path)
 	}
-	if len(app.sim.enemies) > 0 {
-		delete(app.sim.enemies)
-	}
-	if len(app.sim.projectiles) > 0 {
-		delete(app.sim.projectiles)
-	}
-	if len(app.sim.explosions) > 0 {
-		delete(app.sim.explosions)
-	}
-	if len(app.sim.damage_numbers) > 0 {
-		delete(app.sim.damage_numbers)
-	}
-	if len(app.sim.laser_beams) > 0 {
-		delete(app.sim.laser_beams)
-	}
-	if len(app.sim.spawns) > 0 {
-		for &spawn in app.sim.spawns {
-			delete(spawn.path)
-		}
-		delete(app.sim.spawns)
-	}
-	if len(app.sim.graph_samples) > 0 {
-		delete(app.sim.graph_samples)
-	}
-	if len(app.sim.wave_marks) > 0 {
-		delete(app.sim.wave_marks)
-	}
+	delete(app.sim.spawns)
+	delete(app.sim.graph_samples)
+	delete(app.sim.wave_marks)
 }
 
 // Reset simulation
 simulation_reset :: proc(app: ^entities.App_State) {
 	// Clear old data
 	simulation_cleanup(app)
+
+	// Clear selected tower so it doesn't point into freed memory (Bug #2)
+	entities.app_deselect_tower(app)
 
 	// Initialize new simulation
 	app.sim = entities.Simulation {
@@ -703,6 +825,7 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		explosions       = make([dynamic]entities.Explosion),
 		damage_numbers   = make([dynamic]entities.Damage_Number),
 		laser_beams      = make([dynamic]entities.Laser_Beam),
+		ice_pulses       = make([dynamic]entities.Ice_Pulse),
 		spawns           = make([dynamic]entities.Spawn_Point),
 		money            = constants.DEFAULT_MONEY,
 		health           = constants.DEFAULT_HEALTH,
@@ -718,6 +841,7 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		is_wave_green    = false,
 		is_wave_flying   = false,
 		is_wave_blue     = false,
+		is_wave_split    = false,
 		enemies_killed   = 0,
 		money_earned     = 0,
 		towers_built     = 0,
@@ -744,7 +868,7 @@ simulation_init_from_editor :: proc(app: ^entities.App_State) -> bool {
 			tile := app.editor.game_map.grid[row][col]
 
 			#partial switch tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
 				// Convert tile to tower type
 				tower_type: constants.Tower_Type
 				#partial switch tile {
@@ -758,6 +882,8 @@ simulation_init_from_editor :: proc(app: ^entities.App_State) -> bool {
 					tower_type = .MISSILE
 				case .TOWER_LASER:
 					tower_type = .LASER
+				case .TOWER_ICE:
+					tower_type = .ICE
 				case:
 					tower_type = .ARCHER
 				}

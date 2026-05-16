@@ -43,6 +43,9 @@ Tower :: struct {
 	// Laser accumulation for damage display
 	_laser_accum: f32,
 	_laser_accum_timer: f32,
+
+	// Lifetime damage statistics
+	total_damage: f32,
 }
 
 // Initialize a new tower
@@ -80,22 +83,25 @@ tower_get_base_cost :: proc(t: ^Tower) -> i32 {
 	return spec.cost
 }
 
-// Get upgrade cost
-tower_get_upgrade_cost :: proc(level: i32) -> i32 {
-	if level <= 1 {
-		return 0
+// Suma el dinero total gastado en upgrades para llegar a un nivel dado.
+// Nivel 1 = sin upgrades = 0. Cada paso i→i+1 cuesta UPGRADE_COST_BASE + (i-1)*INCREMENT.
+tower_get_total_upgrade_cost :: proc(level: i32) -> i32 {
+	total := i32(0)
+	for i in i32(1)..<level {
+		total += constants.UPGRADE_COST_BASE + (i - 1) * constants.UPGRADE_COST_INCREMENTVEL
 	}
-	return constants.UPGRADE_COST_BASE + (level - 1) * constants.UPGRADE_COST_INCREMENTVEL
+	return total
 }
 
-// Calculate sell refund
+// Calculate sell refund: (base_cost + total_upgrades_spent) * SELL_REFUND
 tower_get_sell_refund :: proc(t: ^Tower) -> i32 {
 	base_cost := tower_get_base_cost(t)
-	
-	upgrades_spent := tower_get_upgrade_cost(t.damage_level) +
-		tower_get_upgrade_cost(t.rate_level) +
-		tower_get_upgrade_cost(t.critical_level)
-	
+
+	upgrades_spent :=
+		tower_get_total_upgrade_cost(t.damage_level) +
+		tower_get_total_upgrade_cost(t.rate_level) +
+		tower_get_total_upgrade_cost(t.critical_level)
+
 	return i32(f32(base_cost + upgrades_spent) * constants.SELL_REFUND)
 }
 

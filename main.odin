@@ -189,6 +189,11 @@ main :: proc() {
 		raylib.BeginDrawing()
 		systems.render_game(&app)
 		raylib.EndDrawing()
+
+		// Free all temp-allocator memory accumulated this frame.
+		// fmt.ctprintf / strings.clone_to_cstring(s, context.temp_allocator) are
+		// safe to use anywhere in the frame because their lifetime is exactly one frame.
+		free_all(context.temp_allocator)
 	}
 }
 
@@ -238,6 +243,8 @@ app_init :: proc(initial_settings: entities.Settings) {
 		camera_offset_y = camera_offset_y,
 		target_camera_offset_x = camera_offset_x,
 		target_camera_offset_y = camera_offset_y,
+		selected_tower_r = -1,
+		selected_tower_c = -1,
 		selected_obstacle = {row = 0, col = 0, valid = false},
 		selected_cell = {row = 0, col = 0, valid = false},
 	}
@@ -249,6 +256,22 @@ app_init :: proc(initial_settings: entities.Settings) {
 app_destroy :: proc() {
 	entities.map_destroy(&app.editor.game_map)
 	systems.simulation_cleanup(&app)
+
+	// Free editor dynamic data
+	for f in app.editor.map_browser_files {
+		delete(f)
+	}
+	delete(app.editor.map_browser_files)
+
+	for &s in app.editor.undo_stack {
+		entities.map_snapshot_destroy(&s)
+	}
+	delete(app.editor.undo_stack)
+
+	for &s in app.editor.redo_stack {
+		entities.map_snapshot_destroy(&s)
+	}
+	delete(app.editor.redo_stack)
 }
 
 // Global app instance using entities.App_State

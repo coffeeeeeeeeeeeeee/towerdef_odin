@@ -59,8 +59,8 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 	
 	// Left click to place tower
 	if raylib.IsMouseButtonPressed(.LEFT) {
-		// Don't process grid clicks if mouse is over tower control panel
-		if is_mouse_over_tower_panel(app) {
+		// Don't process grid clicks if mouse is over any UI panel or button
+		if ui_is_click_blocked(mouse_x, mouse_y) {
 			return
 		}
 
@@ -70,7 +70,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 			obstacle := app.editor.game_map.obstacle_grid[grid_y][grid_x]
 
 			#partial switch tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
 				// Select tower for upgrade
 				select_tower_at(app, grid_y, grid_x)
 				app.selected_obstacle.valid = false // Deselect obstacle
@@ -82,11 +82,11 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 					app.selected_obstacle.row = grid_y
 					app.selected_obstacle.col = grid_x
 					app.selected_obstacle.valid = true
-					app.selected_tower = nil // Deselect tower
+					entities.app_deselect_tower(app) // Deselect tower
 					play_sound(.SELECT)
 				} else {
 					// Deselect both tower and obstacle
-					app.selected_tower = nil
+					entities.app_deselect_tower(app)
 					app.selected_obstacle.valid = false
 
 					// Place selected tower if one is selected
@@ -119,7 +119,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 		if app.sim.selected_build_tower != .EMPTY {
 			app.sim.selected_build_tower = .EMPTY
 		} else {
-			app.selected_tower = nil
+			entities.app_deselect_tower(app)
 			app.selected_obstacle.valid = false
 		}
 	}
@@ -162,7 +162,7 @@ input_handle_paused :: proc(app: ^entities.App_State) {
 		if app.sim.selected_build_tower != .EMPTY {
 			app.sim.selected_build_tower = .EMPTY
 		} else {
-			app.selected_tower = nil
+			entities.app_deselect_tower(app)
 			app.selected_obstacle.valid = false
 		}
 	}
@@ -243,7 +243,7 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 		case .PATH, .SPAWN, .GOAL:
 			// Place path elements
 			app.editor.game_map.grid[grid_y][grid_x] = tool
-		case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER:
+		case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
 			// Place tower (only on empty cells)
 			if app.editor.game_map.grid[grid_y][grid_x] == .EMPTY {
 				app.editor.game_map.grid[grid_y][grid_x] = tool
@@ -323,9 +323,11 @@ editor_erase_cell :: proc(app: ^entities.App_State, row, col: i32) {
 	// Also remove from obstacle grid
 	app.editor.game_map.obstacle_grid[row][col] = .EMPTY
 	
-	// Remove tile data
-	key := entities.map_get_tile_key(row, col)
-	delete_key(&app.editor.game_map.tile_data, key)
+	// Remove tile data — also free the cloned key string
+	if existing_key, ok := entities.map_get_existing_key(&app.editor.game_map, row, col); ok {
+		delete_key(&app.editor.game_map.tile_data, existing_key)
+		delete(existing_key)
+	}
 }
 
 // Game over input
@@ -350,11 +352,11 @@ screen_to_grid :: proc(app: ^entities.App_State, screen_x, screen_y: i32) -> (gr
 select_tower_at :: proc(app: ^entities.App_State, row, col: i32) {
 	for &tower in app.sim.towers {
 		if tower.r == row && tower.c == col {
-			app.selected_tower = &tower
+			entities.app_select_tower(app, row, col)
 			return
 		}
 	}
-	app.selected_tower = nil
+	entities.app_deselect_tower(app)
 }
 
 // Get hovered cell info
@@ -514,6 +516,8 @@ tile_to_tower_type :: proc(tile: constants.Tile) -> constants.Tower_Type {
 		return .MISSILE
 	case .TOWER_LASER:
 		return .LASER
+	case .TOWER_ICE:
+		return .ICE
 	case:
 		return .ARCHER  // Default
 	}
@@ -526,34 +530,25 @@ input_handle_camera :: proc(app: ^entities.App_State) {
 	if wheel_movement != 0 {
 		mouse_x := raylib.GetMouseX()
 		mouse_y := raylib.GetMouseY()
-		
-		// Get grid cell under mouse before zoom using screen_to_grid
-		grid_col, grid_row := screen_to_grid(app, mouse_x, mouse_y)
-		
-		// Calculate exact position within the cell (fractional part)
-		cs_old := f32(app.settings.cell_size) * app.zoom
-		cell_offset_x := (f32(mouse_x) - f32(app.camera_offset_x)) / cs_old - f32(grid_col)
-		cell_offset_y := (f32(mouse_y) - f32(app.camera_offset_y)) / cs_old - f32(grid_row)
-		
-		// Update target zoom with continuous value
+
+		// Use the current (interpolated) zoom and the current camera offset so that
+		// the anchor cell is computed in the world that is actually being rendered.
+		// This avoids the mismatch between app.zoom and app.target_zoom during animation.
+		cs_cur := f32(app.settings.cell_size) * app.zoom
+
+		// World position under mouse (fractional grid coordinates)
+		world_x := (f32(mouse_x) - f32(app.camera_offset_x)) / cs_cur
+		world_y := (f32(mouse_y) - f32(app.camera_offset_y)) / cs_cur
+
+		// Update target zoom
 		app.target_zoom += wheel_movement * constants.ZOOM_SPEED
-		
-		// Clamp target zoom
-		if app.target_zoom < constants.ZOOM_MIN {
-			app.target_zoom = constants.ZOOM_MIN
-		}
-		if app.target_zoom > constants.ZOOM_MAX {
-			app.target_zoom = constants.ZOOM_MAX
-		}
-		
-		// Calculate new cell size with target zoom
+		if app.target_zoom < constants.ZOOM_MIN { app.target_zoom = constants.ZOOM_MIN }
+		if app.target_zoom > constants.ZOOM_MAX { app.target_zoom = constants.ZOOM_MAX }
+
+		// Compute new camera offset so the same world position stays under the mouse
 		cs_new := f32(app.settings.cell_size) * app.target_zoom
-		
-		// Calculate target camera offset to keep the same grid cell + offset under mouse
-		// mouse = offset + (grid + cell_offset) * cs_new
-		// offset = mouse - (grid + cell_offset) * cs_new
-		app.target_camera_offset_x = i32(f32(mouse_x) - (f32(grid_col) + cell_offset_x) * cs_new)
-		app.target_camera_offset_y = i32(f32(mouse_y) - (f32(grid_row) + cell_offset_y) * cs_new)
+		app.target_camera_offset_x = i32(f32(mouse_x) - world_x * cs_new)
+		app.target_camera_offset_y = i32(f32(mouse_y) - world_y * cs_new)
 	}
 	
 	// Pan with middle mouse button

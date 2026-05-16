@@ -23,7 +23,11 @@ Projectile :: struct {
 	type: constants.Tower_Type,
 	aoe: f32,
 	critical_level: i32,
-	
+
+	// Source tower grid position (for damage stats attribution)
+	source_r: i32,
+	source_c: i32,
+
 	// Rotation
 	angle: f32,  // Direction of movement in radians
 }
@@ -38,6 +42,8 @@ projectile_init :: proc(
 	type: constants.Tower_Type,
 	aoe: f32,
 	critical_level: i32,
+	source_r: i32 = -1,
+	source_c: i32 = -1,
 ) -> Projectile {
 	return Projectile{
 		x = x,
@@ -52,6 +58,8 @@ projectile_init :: proc(
 		type = type,
 		aoe = aoe,
 		critical_level = critical_level,
+		source_r = source_r,
+		source_c = source_c,
 	}
 }
 

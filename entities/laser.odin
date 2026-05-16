@@ -86,7 +86,7 @@ laser_tower_update :: proc(t: ^Tower, dt: f32) -> (damage_dealt: f32, beam_activ
 // Check if laser accumulated damage should be displayed
 laser_should_show_damage :: proc(t: ^Tower) -> (should_show: bool, damage: f32, is_critical: bool) {
 	if t._laser_accum_timer >= constants.LASER_ACCUMULATION_TIME {
-		critical_chance := constants.CRIT_BASE_CHANCE + f32(t.damage_level - 1) * constants.CRIT_PER_LEVEL
+		critical_chance := constants.CRIT_BASE_CHANCE + f32(t.critical_level - 1) * constants.CRIT_PER_LEVEL
 		is_crit := rand.float32() < critical_chance
 		
 		final_damage := t._laser_accum

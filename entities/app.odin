@@ -14,7 +14,8 @@ Simulation :: struct {
 	explosions: [dynamic]Explosion,
 	damage_numbers: [dynamic]Damage_Number,
 	laser_beams: [dynamic]Laser_Beam,
-	
+	ice_pulses:  [dynamic]Ice_Pulse,
+
 	// Spawns
 	spawns: [dynamic]Spawn_Point,
 	
@@ -38,10 +39,12 @@ Simulation :: struct {
 	next_spawn_delay: f32,
 	
 	// Wave type flags
-	is_wave_boss: bool,
+	is_wave_boss:  bool,
 	is_wave_green: bool,
 	is_wave_flying: bool,
-	is_wave_blue: bool,
+	is_wave_blue:  bool,
+	is_wave_split: bool,
+	is_wave_bonus: bool,
 	
 	// Stats
 	enemies_killed: i32,
@@ -65,12 +68,14 @@ Graph_Sample :: struct {
 
 // Marks when a wave started, with its type for color/shape
 Wave_Mark :: struct {
-	time: f32,
-	wave: i32,
-	is_boss: bool,
+	time:     f32,
+	wave:     i32,
+	is_boss:  bool,
 	is_green: bool,
-	is_blue: bool,
+	is_blue:  bool,
 	is_flying: bool,
+	is_split: bool,
+	is_bonus: bool,
 }
 
 // Editor state
@@ -155,7 +160,11 @@ App_State :: struct {
 	// Input state
 	mouse_x: i32,
 	mouse_y: i32,
-	selected_tower: ^Tower,
+	// Selected tower stored as grid position to avoid dangling pointers
+	// when app.sim.towers reallocates. Use app_get_selected_tower() to get ^Tower.
+	// -1 means no tower selected.
+	selected_tower_r: i32,
+	selected_tower_c: i32,
 	selected_obstacle: struct {
 		row: i32,
 		col: i32,
@@ -175,6 +184,32 @@ App_State :: struct {
 	
 	// Quit flag
 	should_quit: bool,
+}
+
+// Get selected tower by searching sim.towers for the stored (r, c).
+// Returns nil if no tower is selected or the position no longer has a tower.
+app_get_selected_tower :: proc(app: ^App_State) -> ^Tower {
+	if app.selected_tower_r < 0 {
+		return nil
+	}
+	for &t in app.sim.towers {
+		if t.r == app.selected_tower_r && t.c == app.selected_tower_c {
+			return &t
+		}
+	}
+	return nil
+}
+
+// Deselect the currently selected tower.
+app_deselect_tower :: proc(app: ^App_State) {
+	app.selected_tower_r = -1
+	app.selected_tower_c = -1
+}
+
+// Select tower at grid position (r, c).
+app_select_tower :: proc(app: ^App_State, r, c: i32) {
+	app.selected_tower_r = r
+	app.selected_tower_c = c
 }
 
 // Set game state

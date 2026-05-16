@@ -23,15 +23,18 @@ Toast :: struct {
 	is_active: bool,
 }
 
-// Add a new toast to the system
+// Add a new toast to the system.
+// El mensaje se clona en el heap para que sobreviva al free_all(context.temp_allocator)
+// que ocurre al final de cada frame. El caller puede pasar un string literal, un tprintf,
+// o cualquier string — aquí siempre se hace una copia propia.
 add_toast :: proc(app: ^App_State, message: string, type: Toast_Type, duration: f32 = 3.0) {
 	toast := Toast {
-		message = message,
+		message = strings.clone(message), // heap — no depende del temp_allocator
 		type = type,
 		creation_time = rl.GetTime(),
 		duration = duration,
-		y_position = 0, // Will be calculated when rendering
-		opacity = 0, // Will animate in
+		y_position = 0,
+		opacity = 0,
 		is_active = true,
 	}
 	append(&app.toasts, toast)
@@ -46,6 +49,7 @@ update_toasts :: proc(app: ^App_State, dt: f32) {
 		
 		// Check if toast should be removed
 		if current_time - toast.creation_time > f64(toast.duration) {
+			delete(app.toasts[i].message) // liberar el string clonado en add_toast
 			ordered_remove(&app.toasts, i)
 			continue
 		}
@@ -107,7 +111,7 @@ render_toasts :: proc(app: ^App_State) {
 		// Measure text dimensions
 		text_width := rl.MeasureTextEx(
 			constants.game_fonts.regular,
-			strings.clone_to_cstring(toast.message),
+			strings.clone_to_cstring(toast.message, context.temp_allocator),
 			font_size,
 			0,
 		).x
@@ -130,7 +134,7 @@ render_toasts :: proc(app: ^App_State) {
 		text_y := current_y + f32(padding)
 		rl.DrawTextEx(
 			constants.game_fonts.regular,
-			strings.clone_to_cstring(toast.message),
+			strings.clone_to_cstring(toast.message, context.temp_allocator),
 			{text_x, text_y},
 			font_size,
 			0,

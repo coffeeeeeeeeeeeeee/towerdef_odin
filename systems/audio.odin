@@ -3,7 +3,6 @@ package systems
 import "../constants"
 import "../entities"
 import "core:fmt"
-import "core:strings"
 import "vendor:raylib"
 
 // Sound type enumeration
@@ -75,97 +74,97 @@ audio_init :: proc() {
 
 	// Load click sounds
 	for i in 0 ..< 5 {
-		audio_state.click_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/click_%03d.ogg", i + 1)))
+		audio_state.click_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/click_%03d.ogg", i + 1))
 	}
 
 	// Load select sounds
 	for i in 0 ..< 8 {
-		audio_state.select_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/select_%03d.ogg", i + 1)))
+		audio_state.select_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/select_%03d.ogg", i + 1))
 	}
 
 	// Load toggle sounds
 	for i in 0 ..< 4 {
-		audio_state.toggle_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/toggle_%03d.ogg", i + 1)))
+		audio_state.toggle_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/toggle_%03d.ogg", i + 1))
 	}
 
 	// Load switch sounds
 	for i in 0 ..< 7 {
-		audio_state.switch_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/switch_%03d.ogg", i + 1)))
+		audio_state.switch_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/switch_%03d.ogg", i + 1))
 	}
 
 	// Load scroll sounds
 	for i in 0 ..< 5 {
-		audio_state.scroll_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/scroll_%03d.ogg", i + 1)))
+		audio_state.scroll_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/scroll_%03d.ogg", i + 1))
 	}
 
 	// Load open sounds
 	for i in 0 ..< 4 {
-		audio_state.open_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/open_%03d.ogg", i + 1)))
+		audio_state.open_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/open_%03d.ogg", i + 1))
 	}
 
 	// Load close sounds
 	for i in 0 ..< 4 {
-		audio_state.close_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/close_%03d.ogg", i + 1)))
+		audio_state.close_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/close_%03d.ogg", i + 1))
 	}
 
 	// Load maximize sounds
 	for i in 0 ..< 9 {
-		audio_state.maximize_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/maximize_%03d.ogg", i + 1)))
+		audio_state.maximize_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/maximize_%03d.ogg", i + 1))
 	}
 
 	// Load minimize sounds
 	for i in 0 ..< 9 {
-		audio_state.minimize_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/minimize_%03d.ogg", i + 1)))
+		audio_state.minimize_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/minimize_%03d.ogg", i + 1))
 	}
 
 	// Load confirmation sounds
 	for i in 0 ..< 4 {
-		audio_state.confirmation_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/confirmation_%03d.ogg", i + 1)))
+		audio_state.confirmation_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/confirmation_%03d.ogg", i + 1))
 	}
 
 	// Load error sounds
 	for i in 0 ..< 8 {
-		audio_state.error_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/error_%03d.ogg", i + 1)))
+		audio_state.error_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/error_%03d.ogg", i + 1))
 	}
 
 	// Load question sounds
 	for i in 0 ..< 4 {
-		audio_state.question_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/question_%03d.ogg", i + 1)))
+		audio_state.question_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/question_%03d.ogg", i + 1))
 	}
 
 	// Load back sounds
 	for i in 0 ..< 4 {
-		audio_state.back_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/back_%03d.ogg", i + 1)))
+		audio_state.back_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/back_%03d.ogg", i + 1))
 	}
 
 	// Load drop sounds
 	for i in 0 ..< 4 {
-		audio_state.drop_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/drop_%03d.ogg", i + 1)))
+		audio_state.drop_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/drop_%03d.ogg", i + 1))
 	}
 
 	// Load glass sounds
 	for i in 0 ..< 6 {
-		audio_state.glass_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/glass_%03d.ogg", i + 1)))
+		audio_state.glass_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/glass_%03d.ogg", i + 1))
 	}
 
 	// Load glitch sounds
 	for i in 0 ..< 4 {
-		audio_state.glitch_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/glitch_%03d.ogg", i + 1)))
+		audio_state.glitch_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/glitch_%03d.ogg", i + 1))
 	}
 
 	// Load pluck sounds
 	for i in 0 ..< 2 {
-		audio_state.pluck_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/pluck_%03d.ogg", i + 1)))
+		audio_state.pluck_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/pluck_%03d.ogg", i + 1))
 	}
 
 	// Load scratch sounds
 	for i in 0 ..< 5 {
-		audio_state.scratch_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/scratch_%03d.ogg", i + 1)))
+		audio_state.scratch_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/scratch_%03d.ogg", i + 1))
 	}
 
 	// Load tick sounds
 	for i in 0 ..< 3 {
-		audio_state.tick_sounds[i] = raylib.LoadSound(strings.clone_to_cstring(fmt.tprintf("audio/tick_%03d.ogg", i + 1)))
+		audio_state.tick_sounds[i] = raylib.LoadSound(fmt.ctprintf("audio/tick_%03d.ogg", i + 1))
 	}
 	
 	audio_state.initialized = true

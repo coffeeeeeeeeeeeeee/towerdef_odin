@@ -9,6 +9,7 @@ import "vendor:raylib"
 
 // Render the entire game
 render_game :: proc(app: ^entities.App_State) {
+	ui_blocks_clear() // Reset click-blocking registry for this frame
 	render_map(app)
 	render_tower_ranges(app)
 	render_map_objects(app)
@@ -18,21 +19,28 @@ render_game :: proc(app: ^entities.App_State) {
 
 // Render tower ranges (separate layer above grid)
 render_tower_ranges :: proc(app: ^entities.App_State) {
-	if !app.settings.show_tower_range {
-		return
-	}
-
 	cs := f32(app.settings.cell_size) * app.zoom
 
-	for &tower in app.sim.towers {
-		spec := constants.TOWER_SPECS[tower.type]
-		x := f32(tower.c) * cs + f32(app.camera_offset_x)
-		y := f32(tower.r) * cs + f32(app.camera_offset_y)
-		center_x := x + cs / 2
-		center_y := y + cs / 2
-		range_px := spec.range * cs
+	// All towers when the setting is on
+	if app.settings.show_tower_range {
+		for &tower in app.sim.towers {
+			center_x := f32(tower.c) * cs + f32(app.camera_offset_x) + cs / 2
+			center_y := f32(tower.r) * cs + f32(app.camera_offset_y) + cs / 2
+			range_px := tower.range * cs
+			raylib.DrawCircle(i32(center_x), i32(center_y), range_px, constants.TOWER_RANGE_PREVIEW)
+		}
+	}
 
-		raylib.DrawCircle(i32(center_x), i32(center_y), range_px, constants.TOWER_RANGE_PREVIEW)
+	// Selected tower always gets a highlighted range ring, regardless of the setting
+	if selected := entities.app_get_selected_tower(app); selected != nil {
+		center_x := f32(selected.c) * cs + f32(app.camera_offset_x) + cs / 2
+		center_y := f32(selected.r) * cs + f32(app.camera_offset_y) + cs / 2
+		range_px := selected.range * cs
+
+		// Filled disc — subtle tint inside the range
+		raylib.DrawCircle(i32(center_x), i32(center_y), range_px, raylib.Color{255, 255, 255, 40})
+		// Crisp outline ring
+		raylib.DrawCircleLines(i32(center_x), i32(center_y), range_px, raylib.Color{255, 255, 255, 160})
 	}
 }
 
@@ -49,7 +57,7 @@ render_map_objects :: proc(app: ^entities.App_State) {
 			y := f32(row) * cs + f32(app.camera_offset_y)
 
 			#partial switch tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
 				// In game mode, find tower entity
 				if app.state == .PLAYING || app.state == .PAUSED {
 					for &tower in app.sim.towers {
@@ -79,12 +87,7 @@ render_map_objects :: proc(app: ^entities.App_State) {
 		}
 	}
 
-	// Draw obstacles (use the minimum of width and height)
-	gs_for_obstacles := m.width
-	if m.height < gs_for_obstacles {
-		gs_for_obstacles = m.height
-	}
-	render_obstacles(m, cs, i32(gs_for_obstacles), app.camera_offset_x, app.camera_offset_y)
+	render_obstacles(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y)
 
 	// Draw laser beams (on top of everything)
 	if app.state == .PLAYING || (app.state == .PAUSED && app.previous_state == .PLAYING) {
@@ -92,9 +95,9 @@ render_map_objects :: proc(app: ^entities.App_State) {
 	}
 
 	// Draw reticle for selected tower in PLAYING/PAUSED modes
-	if app.selected_tower != nil && (app.state == .PLAYING || app.state == .PAUSED) {
-		sx := f32(app.selected_tower.c) * cs + f32(app.camera_offset_x)
-		sy := f32(app.selected_tower.r) * cs + f32(app.camera_offset_y)
+	if app.selected_tower_r >= 0 && (app.state == .PLAYING || app.state == .PAUSED) {
+		sx := f32(app.selected_tower_c) * cs + f32(app.camera_offset_x)
+		sy := f32(app.selected_tower_r) * cs + f32(app.camera_offset_y)
 		render_reticle(sx, sy, cs, constants.UI_RETICLE_COLOR)
 	}
 
@@ -144,20 +147,11 @@ render_map :: proc(app: ^entities.App_State) {
 		biome_colors.bg_grid,
 	)
 
-	// Draw paths (use the minimum of width and height for gs parameter)
-	gs_for_rendering := m.width
-	if m.height < gs_for_rendering {
-		gs_for_rendering = m.height
-	}
-	render_paths(m, cs, i32(gs_for_rendering), app.camera_offset_x, app.camera_offset_y)
+	render_paths(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y)
 
-	// Grid lines (use the minimum of width and height)
+	// Grid lines
 	if app.settings.show_grid {
-		gs_for_grid := m.width
-		if m.height < gs_for_grid {
-			gs_for_grid = m.height
-		}
-		render_grid_lines(app, cs, i32(gs_for_grid))
+		render_grid_lines(app, cs, i32(m.width), i32(m.height))
 	}
 
 	// Draw tower ghost in PLAYING/PAUSED modes when building
@@ -175,20 +169,20 @@ render_map :: proc(app: ^entities.App_State) {
 }
 
 // Render paths
-render_paths :: proc(m: ^entities.Map, cs: f32, gs: i32, camera_offset_x, camera_offset_y: i32) {
+render_paths :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset_x, camera_offset_y: i32) {
 	path_width := cs * constants.PATH_WIDTH_RATIO
 	path_color := constants.BIOME_COLORS[m.biome].path
 
-	is_path_like :: proc(m: ^entities.Map, row, col: i32) -> bool {
-		if row < 0 || row >= constants.GRID_SIZE || col < 0 || col >= constants.GRID_SIZE {
+	is_path_like :: proc(m: ^entities.Map, row, col, map_w, map_h: i32) -> bool {
+		if row < 0 || row >= map_h || col < 0 || col >= map_w {
 			return false
 		}
 		tile := m.grid[row][col]
 		return tile == .PATH || tile == .SPAWN || tile == .GOAL
 	}
 
-	for row in 0 ..< gs {
-		for col in 0 ..< gs {
+	for row in 0 ..< map_h {
+		for col in 0 ..< map_w {
 			tile := m.grid[row][col]
 			if tile != .PATH && tile != .SPAWN && tile != .GOAL {
 				continue
@@ -199,10 +193,10 @@ render_paths :: proc(m: ^entities.Map, cs: f32, gs: i32, camera_offset_x, camera
 			cx := x + cs / 2
 			cy := y + cs / 2
 
-			top := is_path_like(m, row - 1, col)
-			right := is_path_like(m, row, col + 1)
-			bottom := is_path_like(m, row + 1, col)
-			left := is_path_like(m, row, col - 1)
+			top := is_path_like(m, row - 1, col, map_w, map_h)
+			right := is_path_like(m, row, col + 1, map_w, map_h)
+			bottom := is_path_like(m, row + 1, col, map_w, map_h)
+			left := is_path_like(m, row, col - 1, map_w, map_h)
 
 			// Draw center
 			is_spawn_or_goal := tile == .SPAWN || tile == .GOAL
@@ -261,26 +255,22 @@ render_paths :: proc(m: ^entities.Map, cs: f32, gs: i32, camera_offset_x, camera
 }
 
 // Render grid lines
-render_grid_lines :: proc(app: ^entities.App_State, cs: f32, gs: i32) {
-	for i in 0 ..= gs {
+render_grid_lines :: proc(app: ^entities.App_State, cs: f32, map_w, map_h: i32) {
+	// Vertical lines (one per column boundary)
+	for i in 0 ..= map_w {
 		x := i32(f32(i) * cs) + app.camera_offset_x
-		y := i32(f32(i) * cs) + app.camera_offset_y
-
-		// Vertical
 		raylib.DrawLine(
-			x,
-			app.camera_offset_y,
-			x,
-			app.camera_offset_y + i32(f32(gs) * cs),
+			x, app.camera_offset_y,
+			x, app.camera_offset_y + i32(f32(map_h) * cs),
 			constants.COLOR_GRID_LINE,
 		)
-
-		// Horizontal
+	}
+	// Horizontal lines (one per row boundary)
+	for i in 0 ..= map_h {
+		y := i32(f32(i) * cs) + app.camera_offset_y
 		raylib.DrawLine(
-			app.camera_offset_x,
-			y,
-			app.camera_offset_x + i32(f32(gs) * cs),
-			y,
+			app.camera_offset_x, y,
+			app.camera_offset_x + i32(f32(map_w) * cs), y,
 			constants.COLOR_GRID_LINE,
 		)
 	}
@@ -330,10 +320,14 @@ render_tooltip :: proc(rect: raylib.Rectangle) -> raylib.Rectangle {
 	if r.y < my                      { r.y = my }
 	if r.y + r.height > sh - my      { r.y = sh - r.height - my }
 
-	roundness := f32(constants.UI_BUTTON_ROUNDNESS) / 2
-	segments  := i32(constants.TOWER_CORNER_SEGMENTS)
+	roundness := f32(constants.UI_TOOLTIP_ROUNDNESS)
+	segments  := i32(constants.UI_TOOLTIP_SEGMENTS)
 	raylib.DrawRectangleRounded(
-		{r.x + constants.UI_TOOLTIP_SHADOW_OFF, r.y + constants.UI_TOOLTIP_SHADOW_OFF, r.width, r.height},
+		{
+			r.x + constants.UI_TOOLTIP_SHADOW_OFF,
+			r.y + constants.UI_TOOLTIP_SHADOW_OFF,
+			r.width, r.height
+		},
 		roundness, segments, raylib.Color{0, 0, 0, 40},
 	)
 	raylib.DrawRectangleRounded(r, roundness, segments, raylib.RAYWHITE)
@@ -373,7 +367,7 @@ render_pips_tooltip :: proc(title: string, pips: []Tooltip_Pip, trigger_rect: ra
 	title_w    := f32(0)
 	title_cstr : cstring
 	if has_title {
-		title_cstr = strings.clone_to_cstring(title)
+		title_cstr = strings.clone_to_cstring(title, context.temp_allocator)
 		title_w    = raylib.MeasureTextEx(constants.game_fonts.bold, title_cstr, title_sz, 0).x
 		title_area = 28
 	}
@@ -398,7 +392,7 @@ render_pips_tooltip :: proc(title: string, pips: []Tooltip_Pip, trigger_rect: ra
 		raylib.DrawTextEx(
 			constants.game_fonts.bold, title_cstr,
 			{tip_x + pad, tip_y + 8},
-			title_sz, 0, constants.PANEL_TEXT_COLOR,
+			title_sz, 0, constants.UI_PANEL_TEXT_COLOR,
 		)
 		sep_y := tip_y + title_area - 2
 		raylib.DrawLineEx(
@@ -457,8 +451,7 @@ render_label_tooltip :: proc(label: string, trigger_rect: raylib.Rectangle) {
 
 	pad      := f32(10)
 	font_sz  := f32(constants.UI_TOOLTIP_FONT_SIZE)
-	label_cstr := strings.clone_to_cstring(label)
-	defer delete(label_cstr)
+	label_cstr := strings.clone_to_cstring(label, context.temp_allocator)
 	label_w := raylib.MeasureTextEx(constants.game_fonts.bold, label_cstr, font_sz, 0).x
 
 	tip_w := label_w + pad * 2
@@ -477,7 +470,7 @@ render_label_tooltip :: proc(label: string, trigger_rect: raylib.Rectangle) {
 	text_y := tip_y + tip_h/2 - font_sz/2
 	raylib.DrawTextEx(
 		constants.game_fonts.bold, label_cstr,
-		{text_x, text_y}, font_sz, 0, constants.PANEL_TEXT_COLOR,
+		{text_x, text_y}, font_sz, 0, constants.UI_PANEL_TEXT_COLOR,
 	)
 }
 
@@ -728,27 +721,27 @@ draw_obstacle_preview :: proc(x, y, cs: f32) {
 render_obstacles :: proc(
 	m: ^entities.Map,
 	cs: f32,
-	gs: i32,
+	map_w, map_h: i32,
 	camera_offset_x, camera_offset_y: i32,
 ) {
 
 	// Helper: ¿es la celda adyacente parte del camino?
-	is_path :: proc(m: ^entities.Map, r, c, gs: i32) -> bool {
-		if r < 0 || r >= gs || c < 0 || c >= gs { return false }
+	is_path :: proc(m: ^entities.Map, r, c, map_w, map_h: i32) -> bool {
+		if r < 0 || r >= map_h || c < 0 || c >= map_w { return false }
 		t := m.grid[r][c]
 		return t == .PATH || t == .SPAWN || t == .GOAL
 	}
 
-	for row in 0 ..< gs {
-		for col in 0 ..< gs {
+	for row in 0 ..< map_h {
+		for col in 0 ..< map_w {
 			if m.obstacle_grid[row][col] == .OBSTACLE {
 				x := f32(col) * cs + f32(camera_offset_x)
 				y := f32(row) * cs + f32(camera_offset_y)
 
 				// Camino horizontal → barrera vertical (estrecha en X, larga en Y)
 				// Camino vertical   → barrera horizontal (larga en X, estrecha en Y)
-				has_h := is_path(m, row, col-1, gs) || is_path(m, row, col+1, gs)
-				has_v := is_path(m, row-1, col, gs) || is_path(m, row+1, col, gs)
+				has_h := is_path(m, row, col-1, map_w, map_h) || is_path(m, row, col+1, map_w, map_h)
+				has_v := is_path(m, row-1, col, map_w, map_h) || is_path(m, row+1, col, map_w, map_h)
 
 				cx := x + cs/2
 				cy := y + cs/2
@@ -831,6 +824,38 @@ render_laser_beams :: proc(app: ^entities.App_State, cs: f32) {
 	}
 }
 
+// Render ice pulses — each is an expanding ring that fades as it grows
+render_ice_pulses :: proc(app: ^entities.App_State, cs: f32) {
+	for &pulse in app.sim.ice_pulses {
+		// Screen center of the tower
+		cx := pulse.x * cs + f32(app.camera_offset_x)
+		cy := pulse.y * cs + f32(app.camera_offset_y)
+
+		radius_px  := pulse.radius * cs
+		// t goes 1→0 (full alpha at birth, transparent when done)
+		t          := pulse.life / pulse.max_life
+		alpha      := u8(t * 210.0)
+
+		ring_thick := max(2.5, cs * 0.09)
+		outer_r    := radius_px
+		inner_r    := max(0.0, outer_r - ring_thick)
+
+		// Faint filled disc — subtle interior glow
+		raylib.DrawCircle(i32(cx), i32(cy), outer_r, raylib.Color{140, 220, 255, alpha / 4})
+
+		// Bright ring edge
+		raylib.DrawRing(
+			raylib.Vector2{cx, cy},
+			inner_r,
+			outer_r,
+			0,
+			360,
+			48,
+			raylib.Color{180, 235, 255, alpha},
+		)
+	}
+}
+
 // Render gameplay elements (enemies, projectiles, effects)
 render_gameplay :: proc(app: ^entities.App_State) {
 	if app.state != .PLAYING && app.state != .PAUSED {
@@ -838,6 +863,9 @@ render_gameplay :: proc(app: ^entities.App_State) {
 	}
 
 	cs := f32(app.settings.cell_size) * app.zoom
+
+	// Render ice pulses (expanding rings, below enemies)
+	render_ice_pulses(app, cs)
 
 	// Render enemies
 	render_enemies(app, cs)
@@ -859,101 +887,96 @@ render_gameplay :: proc(app: ^entities.App_State) {
 	}
 }
 
-// Render enemies
+// Draw a single enemy shape at screen position (cx, cy).
+// size is the radius/half-size in pixels. shadow_offset > 0 draws a drop shadow.
+// Bosses are always drawn as squares; flying non-bosses as triangles; others as circles.
+render_enemy_shape :: proc(cx, cy, size: f32, color: raylib.Color, is_flying: bool, is_boss: bool = false, shadow_offset: f32 = 0) {
+	border_color := raylib.Color{
+		u8(f32(color.r) * 0.6),
+		u8(f32(color.g) * 0.6),
+		u8(f32(color.b) * 0.6),
+		color.a,
+	}
+	shadow_color := constants.ENEMY_SHADOW_COLOR
+	sw := f32(constants.ENEMY_STROKE_WIDTH)
+
+	if is_boss {
+		// Square — border rect then inner rect
+		if shadow_offset > 0 {
+			raylib.DrawRectangle(
+				i32(cx - size + shadow_offset), i32(cy - size + shadow_offset),
+				i32(size * 2), i32(size * 2),
+				shadow_color,
+			)
+		}
+		raylib.DrawRectangle(i32(cx - size), i32(cy - size), i32(size * 2), i32(size * 2), border_color)
+		raylib.DrawRectangle(
+			i32(cx - size + sw), i32(cy - size + sw),
+			i32(size * 2 - sw * 2), i32(size * 2 - sw * 2),
+			color,
+		)
+	} else if is_flying {
+		if shadow_offset > 0 {
+			v1s := raylib.Vector2{cx + shadow_offset, cy - size - 2 + shadow_offset}
+			v2s := raylib.Vector2{cx - size - 2 + shadow_offset, cy + size + 2 + shadow_offset}
+			v3s := raylib.Vector2{cx + size + 2 + shadow_offset, cy + size + 2 + shadow_offset}
+			raylib.DrawTriangle(v1s, v2s, v3s, shadow_color)
+		}
+		v1 := raylib.Vector2{cx, cy - size}
+		v2 := raylib.Vector2{cx - size, cy + size}
+		v3 := raylib.Vector2{cx + size, cy + size}
+		raylib.DrawTriangle(v1, v2, v3, color)
+		raylib.DrawLineEx(v1, v2, sw, border_color)
+		raylib.DrawLineEx(v2, v3, sw, border_color)
+		raylib.DrawLineEx(v3, v1, sw, border_color)
+	} else {
+		if shadow_offset > 0 {
+			raylib.DrawCircle(i32(cx + shadow_offset), i32(cy + shadow_offset), size, shadow_color)
+		}
+		raylib.DrawCircle(i32(cx), i32(cy), size, border_color)
+		raylib.DrawCircle(i32(cx), i32(cy), size - sw, color)
+	}
+}
+
+// Render all enemies in the simulation
 render_enemies :: proc(app: ^entities.App_State, cs: f32) {
 	for &enemy in app.sim.enemies {
 		x := enemy.x * cs + f32(app.camera_offset_x)
 		y := enemy.y * cs + f32(app.camera_offset_y)
 
-		// Enemy size reduced to 3/4 of original
-		size := entities.enemy_get_size(&enemy) * cs
+		size  := entities.enemy_get_size(&enemy) * cs
 		color := entities.enemy_get_color(&enemy)
+		so    := max(f32(2), cs * 0.08)
+		cx    := x + cs / 2
+		cy    := y + cs / 2
 
-		// Shadow offset
-		so := max(2, cs * 0.08)
-		shadow_color := constants.ENEMY_SHADOW_COLOR
+		render_enemy_shape(cx, cy, size, color, enemy.is_flying, enemy.is_boss, so)
 
-		// Draw enemy border (darkened version of body color, 2px thick)
-		border_color := raylib.Color {
-			u8(f32(color.r) * 0.6),
-			u8(f32(color.g) * 0.6),
-			u8(f32(color.b) * 0.6),
-			color.a,
+		// Slow overlay: translucent blue halo when slowed by ice tower
+		if enemy.slow_timer > 0 {
+			pulse := f32(math.abs(math.sin(f64(raylib.GetTime()) * 5.0)))
+			alpha := u8(60.0 + 50.0 * pulse)
+			raylib.DrawCircle(i32(cx), i32(cy), size + max(1.5, cs * 0.07), raylib.Color{100, 200, 255, alpha})
 		}
 
-		if enemy.is_flying {
-			// Flying enemies are drawn as triangles (pointing up)
-			center_x := x + cs / 2
-			center_y := y + cs / 2
+		// Health bar
+		hp_percent  := enemy.hp / enemy.max_hp
+		hp_bar_w    := cs * 0.6
+		hp_bar_h    := cs * 0.1
+		hp_bar_x    := cx - hp_bar_w / 2
+		hp_bar_y    := y - cs * 0.05
 
-			// Triangle shadow (offset)
-			v1_shadow := raylib.Vector2{center_x + so, center_y - size - 2 + so} // Top
-			v2_shadow := raylib.Vector2{center_x - size - 2 + so, center_y + size + 2 + so} // Bottom left
-			v3_shadow := raylib.Vector2{center_x + size + 2 + so, center_y + size + 2 + so} // Bottom right
-			raylib.DrawTriangle(v1_shadow, v2_shadow, v3_shadow, shadow_color)
+		raylib.DrawRectangle(i32(hp_bar_x), i32(hp_bar_y), i32(hp_bar_w), i32(hp_bar_h), raylib.DARKGRAY)
 
-			// Inner triangle (body)
-			v1_body := raylib.Vector2{center_x, center_y - size} // Top
-			v2_body := raylib.Vector2{center_x - size, center_y + size} // Bottom left
-			v3_body := raylib.Vector2{center_x + size, center_y + size} // Bottom right
-			raylib.DrawTriangle(v1_body, v2_body, v3_body, color)
-
-			// Triangle outline using DrawLineEx
-			raylib.DrawLineEx(v1_body, v2_body, constants.ENEMY_STROKE_WIDTH, border_color)
-			raylib.DrawLineEx(v2_body, v3_body, constants.ENEMY_STROKE_WIDTH, border_color)
-			raylib.DrawLineEx(v3_body, v1_body, constants.ENEMY_STROKE_WIDTH, border_color)
-		} else {
-			// Ground enemies are drawn as circles
-			center_x := x + cs / 2
-			center_y := y + cs / 2
-
-			// Circle shadow (offset)
-			raylib.DrawCircle(i32(center_x + so), i32(center_y + so), size, shadow_color)
-
-			// Circle outline using DrawCircleLines
-			raylib.DrawCircle(i32(center_x), i32(center_y), size, border_color)
-
-			// Circle body
-			raylib.DrawCircle(i32(center_x), i32(center_y), size - constants.ENEMY_STROKE_WIDTH, color)
-		}
-
-		// Health bar - positioned higher up and slightly taller
-		hp_percent := enemy.hp / enemy.max_hp
-		hp_bar_width := cs * 0.6
-		hp_bar_height := cs * 0.1
-		hp_bar_x := x + cs / 2 - hp_bar_width / 2
-		hp_bar_y := y - cs * 0.05
-
-		raylib.DrawRectangle(
-			i32(hp_bar_x),
-			i32(hp_bar_y),
-			i32(hp_bar_width),
-			i32(hp_bar_height),
-			raylib.DARKGRAY,
-		)
-
-		// Health bar fill
 		if hp_percent > 0.01 {
 			hp_color := raylib.GREEN
 			if hp_percent < 0.3 {
-				hp_color = raylib.Color{200, 50, 50, 255} // Softer red
+				hp_color = raylib.Color{200, 50, 50, 255}
 			} else if hp_percent < 0.6 {
 				hp_color = raylib.YELLOW
 			}
-
-			// Ensure minimum width of 1 pixel to avoid artifacts
-			fill_width := hp_bar_width * hp_percent
-			if fill_width < 1.0 {
-				fill_width = 1.0
-			}
-
-			raylib.DrawRectangle(
-				i32(hp_bar_x),
-				i32(hp_bar_y),
-				i32(fill_width),
-				i32(hp_bar_height),
-				hp_color,
-			)
+			fill_w := max(hp_bar_w * hp_percent, 1.0)
+			raylib.DrawRectangle(i32(hp_bar_x), i32(hp_bar_y), i32(fill_w), i32(hp_bar_h), hp_color)
 		}
 	}
 }
@@ -1013,7 +1036,7 @@ render_projectiles :: proc(app: ^entities.App_State, cs: f32) {
 		x := proj.x * cs + f32(app.camera_offset_x)
 		y := proj.y * cs + f32(app.camera_offset_y)
 
-		switch proj.type {
+		#partial switch proj.type {
 		case .ARCHER:
 			// Arrow - small circle at cannon tip
 			raylib.DrawCircle(i32(x), i32(y), cs * 0.08, raylib.BROWN)
@@ -1061,8 +1084,6 @@ render_projectiles :: proc(app: ^entities.App_State, cs: f32) {
 				{tip_x, tip_y},
 				missile_color,
 			)
-		case .LASER:
-		// No projectile for laser
 		}
 	}
 }
@@ -1133,21 +1154,18 @@ render_damage_numbers :: proc(app: ^entities.App_State, cs: f32) {
 		outline_color := raylib.Color{0, 0, 0, 255}
 		outline_color.a = alpha
 
-		damage_text := fmt.tprintf("%.0f", dn.value)
+		// Redondear al entero más cercano; si queda en 0 no dibujar nada
+		display_value := i32(dn.value + 0.5)
+		if display_value == 0 {
+			continue
+		}
+		damage_text := fmt.ctprintf("%d", display_value)
 		font_size := cs * 0.25
 		if dn.is_critical {
 			font_size = cs * 0.5
 		}
 
-		draw_text_with_outline(
-			strings.clone_to_cstring(damage_text),
-			{x, y},
-			font_size,
-			0,
-			color,
-			outline_color,
-			1,
-		)
+		draw_text_with_outline(damage_text, {x, y}, font_size, 0, color, outline_color, 1)
 	}
 }
 
@@ -1180,7 +1198,7 @@ render_ui :: proc(app: ^entities.App_State) {
 		fps_font_size := f32(20)
 		raylib.DrawTextEx(
 			constants.game_fonts.regular,
-			strings.clone_to_cstring(fps_text),
+			strings.clone_to_cstring(fps_text, context.temp_allocator),
 			{f32(constants.UI_MARGIN_X), f32(screen_height - constants.UI_MARGIN_Y - 20)},
 			fps_font_size,
 			0,
@@ -1236,13 +1254,13 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	title_text := constants.get_text("MENU_TITLE")
 	title_size := f32(screen_height) * 0.08
 	title_width := f32(
-		raylib.MeasureTextEx(constants.game_fonts.bold, strings.clone_to_cstring(title_text), title_size, 0).x,
+		raylib.MeasureTextEx(constants.game_fonts.bold, strings.clone_to_cstring(title_text, context.temp_allocator), title_size, 0).x,
 	)
 	title_x := f32(screen_width) / 2 - title_width / 2
 	title_y := f32(screen_height) / 4
 	raylib.DrawTextEx(
 		constants.game_fonts.bold,
-		strings.clone_to_cstring(title_text),
+		strings.clone_to_cstring(title_text, context.temp_allocator),
 		{title_x, title_y},
 		title_size,
 		0,
@@ -1259,7 +1277,7 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	// Play button
 	play_text := constants.get_text("MENU_BUTTON_PLAY")
 	play_button_y := start_y
-	play_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(play_text), button_font_size, 0).x)
+	play_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(play_text, context.temp_allocator), button_font_size, 0).x)
 	play_width := play_text_width
 	play_x := screen_width / 2 - play_width / 2
 	if render_button(
@@ -1272,7 +1290,7 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	// Editor button
 	editor_text := constants.get_text("MENU_BUTTON_EDITOR")
 	editor_button_y := play_button_y + menu_button_height + i32(10)
-	editor_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(editor_text), button_font_size, 0).x)
+	editor_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(editor_text, context.temp_allocator), button_font_size, 0).x)
 	editor_width := editor_text_width
 	editor_x := screen_width / 2 - editor_width / 2
 	if render_button(
@@ -1285,7 +1303,7 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	// Settings button
 	settings_text := constants.get_text("MENU_BUTTON_SETTINGS")
 	settings_button_y := editor_button_y + menu_button_height + i32(10)
-	settings_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(settings_text), button_font_size, 0).x)
+	settings_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(settings_text, context.temp_allocator), button_font_size, 0).x)
 	settings_width := settings_text_width
 	settings_x := screen_width / 2 - settings_width / 2
 	if render_button(
@@ -1298,7 +1316,7 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	// Exit button
 	exit_text := constants.get_text("MENU_BUTTON_EXIT")
 	exit_button_y := settings_button_y + menu_button_height + i32(10)
-	exit_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(exit_text), button_font_size, 0).x)
+	exit_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(exit_text, context.temp_allocator), button_font_size, 0).x)
 	exit_width := exit_text_width
 	exit_x := screen_width / 2 - exit_width / 2
 	if render_button(
@@ -1325,46 +1343,97 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	hud_panel_gap : f32 = 6
 	hud_px        := f32(constants.UI_MARGIN_X)
 	hud_py        := f32(constants.UI_MARGIN_Y)
-	hud_font      := f32(constants.UI_BUTTON_FONT_SIZE)
 
 	// Money
-	{
-		c := render_panel({hud_px, hud_py, hud_panel_w, hud_panel_h}, constants.get_text("UI_MONEY"))
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring(fmt.tprintf("%d", app.sim.money)),
-			{c.x, c.y + (c.height - hud_font) / 2},
-			hud_font, 0, constants.UI_TEXT_COLOR,
-		)
-	}
+	render_info_panel(
+		{hud_px, hud_py, hud_panel_w, hud_panel_h},
+		constants.get_text("UI_MONEY"),
+		fmt.tprintf("%d", app.sim.money),
+	)
 
 	// Health
 	hud_py += hud_panel_h + hud_panel_gap
-	{
-		c := render_panel({hud_px, hud_py, hud_panel_w, hud_panel_h}, constants.get_text("UI_HEALTH"))
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring(fmt.tprintf("%d", app.sim.health)),
-			{c.x, c.y + (c.height - hud_font) / 2},
-			hud_font, 0, constants.UI_TEXT_COLOR,
-		)
-	}
+	render_info_panel(
+		{hud_px, hud_py, hud_panel_w, hud_panel_h},
+		constants.get_text("UI_HEALTH"),
+		fmt.tprintf("%d", app.sim.health),
+	)
 
 	// Wave
 	hud_py += hud_panel_h + hud_panel_gap
 	{
 		display_wave := app.sim.wave_number
 		if display_wave == 0 { display_wave = 1 }
-		c := render_panel({hud_px, hud_py, hud_panel_w, hud_panel_h}, constants.get_text("UI_WAVE"))
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring(fmt.tprintf("%d", display_wave)),
-			{c.x, c.y + (c.height - hud_font) / 2},
-			hud_font, 0, constants.UI_TEXT_COLOR,
+		render_info_panel(
+			{hud_px, hud_py, hud_panel_w, hud_panel_h},
+			constants.get_text("UI_WAVE"),
+			fmt.tprintf("%d", display_wave),
 		)
 	}
 
-	font_size := hud_font // usado por el resto del proc
+	// Upcoming waves preview — 3 icons horizontal
+	hud_py += hud_panel_h + hud_panel_gap
+	{
+		upcoming_panel_h : f32 = 68
+		c := render_info_panel({hud_px, hud_py, hud_panel_w, upcoming_panel_h}, constants.get_text("UI_UPCOMING"))
+
+		base_wave := app.sim.wave_number
+		icon_r    : f32 = 9
+		slot_w    := c.width / 3
+		cy        := c.y + c.height / 2
+
+		for i in 0 ..< 3 {
+			wave_n    := base_wave + 1 + i32(i)
+			cx        := c.x + (f32(i) + 0.5) * slot_w
+
+			is_boss   := wave_n % constants.BOSS_WAVE_INTERVAL == 0
+			is_green  := !is_boss && wave_n % 4 == 1
+			is_flying := !is_boss && wave_n % 4 == 2
+			is_blue   := !is_boss && wave_n % 4 == 3
+			is_split  := !is_boss && wave_n % 4 == 0
+
+			// Sub-type color (same priority as enemy_get_color)
+			// Bonus waves are random — shown as gold with "?" to indicate surprise
+			wave_color: raylib.Color
+			switch {
+			case is_boss:
+				wave_color = constants.COLOR_ENEMY
+			case is_green:
+				wave_color = constants.COLOR_ENEMY_GREEN
+			case is_flying:
+				wave_color = constants.COLOR_ENEMY_FLYING
+			case is_blue:
+				wave_color = constants.COLOR_ENEMY_BLUE
+			case is_split:
+				wave_color = constants.COLOR_ENEMY_SPLIT
+			case:
+				wave_color = constants.COLOR_ENEMY
+			}
+
+			// Tooltip key — boss overrides sub-type label
+			enemy_type_key: string
+			if is_boss {
+				enemy_type_key = "ENEMY_TYPE_BOSS"
+			} else {
+				switch {
+				case is_green:  enemy_type_key = "ENEMY_TYPE_FAST"
+				case is_flying: enemy_type_key = "ENEMY_TYPE_FLYING"
+				case is_blue:   enemy_type_key = "ENEMY_TYPE_HEALER"
+				case is_split:  enemy_type_key = "ENEMY_TYPE_SPLITTER"
+				case:           enemy_type_key = "ENEMY_TYPE_NORMAL"
+				}
+			}
+
+			render_enemy_shape(cx, cy, icon_r, wave_color, is_flying, is_boss)
+
+			// Tooltip on hover
+			hit_r    := icon_r + 4
+			hit_rect := raylib.Rectangle{cx - hit_r, cy - hit_r, hit_r * 2, hit_r * 2}
+			render_label_tooltip(constants.get_text(enemy_type_key), hit_rect)
+		}
+	}
+
+	font_size := f32(constants.UI_BUTTON_FONT_SIZE) // usado por el resto del proc
 
 	// Calculate button widths based on text
 	button_y := i32(10)
@@ -1377,28 +1446,28 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		pause_text = constants.get_text("UI_BUTTON_RESUME")
 	}
 	pause_text_width := i32(
-		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(pause_text), font_size, 0).x,
+		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(pause_text, context.temp_allocator), font_size, 0).x,
 	)
 	pause_width := pause_text_width + padding
 
 	// 1x button width
 	speed1_text := "1x"
 	speed1_text_width := i32(
-		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(speed1_text), font_size, 0).x,
+		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(speed1_text, context.temp_allocator), font_size, 0).x,
 	)
 	speed1_width := speed1_text_width + padding
 
 	// 2x button width
 	speed2_text := "2x"
 	speed2_text_width := i32(
-		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(speed2_text), font_size, 0).x,
+		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(speed2_text, context.temp_allocator), font_size, 0).x,
 	)
 	speed2_width := speed2_text_width + padding
 
 	// 3x button width
 	speed3_text := "3x"
 	speed3_text_width := i32(
-		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(speed3_text), font_size, 0).x,
+		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(speed3_text, context.temp_allocator), font_size, 0).x,
 	)
 	speed3_width := speed3_text_width + padding
 
@@ -1409,13 +1478,13 @@ render_game_ui :: proc(app: ^entities.App_State) {
 
 	next_wave_text := constants.get_text("UI_NEXT_WAVE")
 	next_wave_text_width := i32(
-		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(next_wave_text), font_size, 0).x,
+		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(next_wave_text, context.temp_allocator), font_size, 0).x,
 	)
 	next_wave_width := next_wave_text_width + padding
 
 	start_text := constants.get_text("UI_START")
 	start_text_width := i32(
-		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(start_text), font_size, 0).x,
+		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(start_text, context.temp_allocator), font_size, 0).x,
 	)
 	start_width := start_text_width + padding
 
@@ -1570,12 +1639,13 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 			{constants.get_text("TOWER_SNIPER_NAME"), .TOWER_SNIPER},
 			{constants.get_text("TOWER_MISSILE_NAME"), .TOWER_MISSILE},
 			{constants.get_text("TOWER_LASER_NAME"), .TOWER_LASER},
+			{constants.get_text("TOWER_ICE_NAME"), .TOWER_ICE},
 			{constants.get_text("EDITOR_TOOL_OBSTACLE"), .OBSTACLE},
 			{constants.get_text("EDITOR_TOOL_TREE"), .ACCESSORY_TREE},
 			{constants.get_text("EDITOR_TOOL_BLOCK"), .ACCESSORY_BLOCK},
 		}
 
-		button_width := i32(75) // slightly narrower to fit 12 buttons
+		button_width := i32(70) // slightly narrower to fit 13 buttons
 		total_width := i32(len(tools)) * button_width + i32(len(tools) - 1) * 5
 		start_x := (screen_width - total_width) / 2
 
@@ -1608,7 +1678,7 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 			preview_y := f32(y) + 2 // Small top padding
 
 			switch tool.tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
 				tower_type := tile_to_tower_type(tool.tile)
 				draw_tower_tile(preview_x, preview_y, preview_size, tower_type, 0, false)
 			case .OBSTACLE:
@@ -1653,6 +1723,7 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 			.TOWER_SNIPER,
 			.TOWER_MISSILE,
 			.TOWER_LASER,
+			.TOWER_ICE,
 		}
 		tower_names := []string{
 			constants.get_text("TOWER_ARCHER_NAME"),
@@ -1660,8 +1731,9 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 			constants.get_text("TOWER_SNIPER_NAME"),
 			constants.get_text("TOWER_MISSILE_NAME"),
 			constants.get_text("TOWER_LASER_NAME"),
+			constants.get_text("TOWER_ICE_NAME"),
 		}
-		tower_costs := []i32{20, 40, 60, 50, 80}
+		tower_costs := []i32{20, 40, 60, 50, 80, 45}
 
 		total_width :=
 			i32(len(tower_types)) * constants.UI_BUTTON_WIDTH + i32(len(tower_types) - 1) * 5
@@ -1763,7 +1835,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 	// Helper to calculate actual button width
 	btn_w :: proc(text: string) -> i32 {
 		text_width := i32(
-			raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text), f32(constants.UI_BUTTON_FONT_SIZE), 0).x,
+			raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text, context.temp_allocator), f32(constants.UI_BUTTON_FONT_SIZE), 0).x,
 		)
 		min_w := text_width + 20
 		return min_w > constants.UI_BUTTON_WIDTH ? min_w : constants.UI_BUTTON_WIDTH
@@ -1901,7 +1973,7 @@ render_map_browser :: proc(app: ^entities.App_State) {
 
 	// Mensaje cuando no hay mapas guardados
 	if len(app.editor.map_browser_files) == 0 {
-		no_maps_cs := strings.clone_to_cstring("No saved maps found")
+		no_maps_cs := strings.clone_to_cstring("No saved maps found", context.temp_allocator)
 		nw := raylib.MeasureTextEx(constants.game_fonts.regular, no_maps_cs, item_font, 0).x
 		raylib.DrawTextEx(
 			constants.game_fonts.regular,
@@ -1950,7 +2022,7 @@ render_map_browser :: proc(app: ^entities.App_State) {
 			text_color = constants.UI_MAP_BROWSER_LOADED_COLOR
 		}
 
-		fname_cs := strings.clone_to_cstring(fname)
+		fname_cs := strings.clone_to_cstring(fname, context.temp_allocator)
 		// Centrar el texto verticalmente dentro del item rect
 		text_y := item_rect.y + (f32(item_h - constants.UI_MAP_BROWSER_ITEM_VERT_GAP) - item_font) / 2
 		raylib.DrawTextEx(
@@ -1995,7 +2067,7 @@ render_map_browser :: proc(app: ^entities.App_State) {
 			total,
 		)
 		scroll_font := f32(constants.UI_MAP_BROWSER_SCROLL_FONT_SIZE)
-		scroll_cs   := strings.clone_to_cstring(scroll_text)
+		scroll_cs   := strings.clone_to_cstring(scroll_text, context.temp_allocator)
 		sw          := raylib.MeasureTextEx(constants.game_fonts.regular, scroll_cs, scroll_font, 0).x
 		// Posición: centrado, justo arriba del botón Close
 		scroll_y := f32(panel_y + panel_h - constants.UI_MAP_BROWSER_FOOTER_HEIGHT) + scroll_font
@@ -2032,7 +2104,7 @@ render_pause_menu :: proc(app: ^entities.App_State) {
 
 	// Pause title
 	title := constants.get_text("PAUSE_TITLE")
-	title_cstr := strings.clone_to_cstring(title)
+	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 	title_size := f32(40)
 	title_width := raylib.MeasureTextEx(constants.game_fonts.bold, title_cstr, title_size, 0).x
 	title_x := f32(screen_width) / 2 - title_width / 2
@@ -2101,7 +2173,7 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 
 	// --- Title ---
 	title := constants.get_text("GAME_OVER_TITLE")
-	title_cstr := strings.clone_to_cstring(title)
+	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 	title_size := f32(36)
 	title_width := raylib.MeasureTextEx(constants.game_fonts.bold, title_cstr, title_size, 0).x
 	title_x := f32(screen_width) / 2 - title_width / 2
@@ -2117,7 +2189,7 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 
 	// --- Subtitle ---
 	wave_text := constants.get_text_f("GAME_OVER_WAVES_SURVIVED", app.sim.wave_number)
-	wave_cstr := strings.clone_to_cstring(wave_text)
+	wave_cstr := strings.clone_to_cstring(wave_text, context.temp_allocator)
 	sub_size := f32(18)
 	wave_width := raylib.MeasureTextEx(constants.game_fonts.semibold, wave_cstr, sub_size, 0).x
 	wave_x := f32(screen_width) / 2 - wave_width / 2
@@ -2149,11 +2221,11 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 	}
 	graph_content := render_panel(graph_rect)
 
-	// Graph area inside panel (leave margin for labels)
-	label_margin_l := i32(40) // left labels (money)
-	label_margin_r := i32(30) // right labels (health)
-	label_margin_b := i32(22) // bottom (wave markers + time)
-	label_margin_t := i32(14) // top (legend)
+	// Graph area inside panel
+	label_margin_l := i32(6)  // small padding left
+	label_margin_r := i32(6)  // small padding right
+	label_margin_b := i32(14) // bottom (wave markers)
+	label_margin_t := i32(6)  // top padding
 
 	gx := i32(graph_content.x) + label_margin_l
 	gy := i32(graph_content.y) + label_margin_t
@@ -2214,42 +2286,6 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 			raylib.DrawLineEx({x0, y0}, {x1, y1}, 2.0, health_color)
 		}
 
-		// Y-axis labels
-		// Money (left)
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring(fmt.tprintf("$%d", max_money)),
-			{f32(gx - label_margin_l + 2), f32(gy)},
-			small_font,
-			0,
-			money_color,
-		)
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring("$0"),
-			{f32(gx - label_margin_l + 2), f32(gy + gh - i32(small_font))},
-			small_font,
-			0,
-			money_color,
-		)
-		// Health (right)
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring(fmt.tprintf("%d", max_health)),
-			{f32(gx + gw + 4), f32(gy)},
-			small_font,
-			0,
-			health_color,
-		)
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring("0"),
-			{f32(gx + gw + 4), f32(gy + gh - i32(small_font))},
-			small_font,
-			0,
-			health_color,
-		)
-
 		// X-axis line
 		raylib.DrawLine(
 			i32(gx),
@@ -2257,29 +2293,6 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 			i32(gx + gw),
 			i32(gy + gh),
 			raylib.Color{180, 180, 180, 120},
-		)
-
-		// Time labels
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring("0:00"),
-			{f32(gx), f32(gy + gh + 2)},
-			small_font,
-			0,
-			constants.PANEL_TEXT_COLOR,
-		)
-		end_mins := i32(max_time) / 60
-		end_secs := i32(max_time) % 60
-		end_str := fmt.tprintf("%d:%02d", end_mins, end_secs)
-		end_w :=
-			raylib.MeasureTextEx(constants.game_fonts.regular, strings.clone_to_cstring(end_str), small_font, 0).x
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring(end_str),
-			{f32(gx + gw) - end_w, f32(gy + gh + 2)},
-			small_font,
-			0,
-			constants.PANEL_TEXT_COLOR,
 		)
 
 		// Wave markers along x-axis
@@ -2328,37 +2341,6 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 			}
 		}
 
-		// Legend (top-right inside graph)
-		legend_x := f32(gx + gw) - 90
-		legend_y := f32(gy) - 2
-		raylib.DrawLineEx(
-			{legend_x, legend_y + 5},
-			{legend_x + 14, legend_y + 5},
-			2.0,
-			money_color,
-		)
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring(constants.get_text("UI_MONEY")),
-			{legend_x + 18, legend_y},
-			small_font,
-			0,
-			constants.PANEL_TEXT_COLOR,
-		)
-		raylib.DrawLineEx(
-			{legend_x + 55, legend_y + 5},
-			{legend_x + 69, legend_y + 5},
-			2.0,
-			health_color,
-		)
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring(constants.get_text("UI_HEALTH")),
-			{legend_x + 73, legend_y},
-			small_font,
-			0,
-			constants.PANEL_TEXT_COLOR,
-		)
 	}
 
 	// ============================================================
@@ -2381,15 +2363,15 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 
 	// Helper: draw a stat row
 	draw_stat :: proc(label: string, value: string, cx, cw, y: i32, font_size: f32) {
-		label_cstr := strings.clone_to_cstring(label)
-		value_cstr := strings.clone_to_cstring(value)
+		label_cstr := strings.clone_to_cstring(label, context.temp_allocator)
+		value_cstr := strings.clone_to_cstring(value, context.temp_allocator)
 		raylib.DrawTextEx(
 			constants.game_fonts.regular,
 			label_cstr,
 			{f32(cx), f32(y)},
 			font_size,
 			0,
-			constants.PANEL_TEXT_COLOR,
+			constants.UI_PANEL_TEXT_COLOR,
 		)
 		vw := raylib.MeasureTextEx(constants.game_fonts.semibold, value_cstr, font_size, 0).x
 		raylib.DrawTextEx(
@@ -2398,7 +2380,7 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 			{f32(cx + cw) - vw, f32(y)},
 			font_size,
 			0,
-			constants.PANEL_TEXT_COLOR,
+			constants.UI_PANEL_TEXT_COLOR,
 		)
 	}
 
@@ -2511,11 +2493,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	)
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(vol_label),
+		strings.clone_to_cstring(vol_label, context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	new_master := render_slider(
 		{f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)},
@@ -2537,11 +2519,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	)
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(ui_vol_label),
+		strings.clone_to_cstring(ui_vol_label, context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	new_ui_vol := render_slider(
 		{f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)},
@@ -2557,11 +2539,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// --- Language ---
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_LANGUAGE")),
+		strings.clone_to_cstring(constants.get_text("SETTINGS_LANGUAGE"), context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	lang_options := []string{
 		constants.get_text("SETTINGS_LANGUAGE_ENGLISH"),
@@ -2579,11 +2561,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// --- Antialiasing ---
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_ANTIALIASING")),
+		strings.clone_to_cstring(constants.get_text("SETTINGS_ANTIALIASING"), context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	aa_options := []string{"Off", "2x", "4x", "8x"}
 	_ = render_select(
@@ -2603,13 +2585,13 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// --- Grid Size ---
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring("Grid Size:"),
+		strings.clone_to_cstring("Grid Size:", context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
-	grid_size_options := []string{"10x10", "20x20", "30x30", "40x40"}
+	grid_size_options := []string{"10x10", "15x15", "20x20", "25x25"}
 	grid_size_index: i32 = 0
 	switch app.settings.grid_size {
 	case 10:
@@ -2649,11 +2631,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// --- Fullscreen ---
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_FULLSCREEN")),
+		strings.clone_to_cstring(constants.get_text("SETTINGS_FULLSCREEN"), context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	fs_text :=
 		constants.get_text("UI_ON") if app.settings.fullscreen else constants.get_text("UI_OFF")
@@ -2684,11 +2666,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// --- V-Sync ---
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_VSYNC")),
+		strings.clone_to_cstring(constants.get_text("SETTINGS_VSYNC"), context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	vsync_text :=
 		constants.get_text("UI_ON") if app.settings.vsync else constants.get_text("UI_OFF")
@@ -2706,11 +2688,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// --- Show Grid ---
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_GRID")),
+		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_GRID"), context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	grid_text :=
 		constants.get_text("UI_ON") if app.settings.show_grid else constants.get_text("UI_OFF")
@@ -2723,11 +2705,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// --- Damage Numbers ---
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_DAMAGE_NUMBERS")),
+		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_DAMAGE_NUMBERS"), context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	dmg_text :=
 		constants.get_text("UI_ON") if app.settings.show_damage_numbers else constants.get_text("UI_OFF")
@@ -2740,11 +2722,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// --- Tower Range ---
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_TOWER_RANGE")),
+		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_TOWER_RANGE"), context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	range_text :=
 		constants.get_text("UI_ON") if app.settings.show_tower_range else constants.get_text("UI_OFF")
@@ -2757,11 +2739,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// --- Show FPS ---
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_FPS")),
+		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_FPS"), context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	fps_text :=
 		constants.get_text("UI_ON") if app.settings.show_fps else constants.get_text("UI_OFF")
@@ -2774,11 +2756,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	// --- Auto Wave ---
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_AUTO_WAVE")),
+		strings.clone_to_cstring(constants.get_text("SETTINGS_AUTO_WAVE"), context.temp_allocator),
 		{f32(cx), f32(item_y + 4)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	auto_text :=
 		constants.get_text("UI_ON") if app.settings.auto_start_wave else constants.get_text("UI_OFF")
@@ -2818,7 +2800,7 @@ render_select :: proc(
 	for opt in options {
 		t := fmt.tprintf("%s%s", prefix, opt)
 		w := f32(
-			raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(t), font_size, 0).x,
+			raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(t, context.temp_allocator), font_size, 0).x,
 		)
 		if w > max_text_width {
 			max_text_width = w
@@ -2830,6 +2812,9 @@ render_select :: proc(
 	if actual_width < min_width {
 		actual_width = min_width
 	}
+
+	// Always block clicks through the main select button
+	append(&ui_click_blocks, raylib.Rectangle{f32(x), f32(y), f32(actual_width), f32(height)})
 
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
@@ -2865,13 +2850,13 @@ render_select :: proc(
 	// Text
 	text := fmt.tprintf("%s%s", prefix, options[selected_index^])
 	text_width := f32(
-		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text), font_size, 0).x,
+		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text, context.temp_allocator), font_size, 0).x,
 	)
 	text_x := f32(x) + f32(actual_width) / 2 - text_width / 2
 	text_y := f32(y) + f32(height) / 2 - font_size / 2
 	raylib.DrawTextEx(
 		constants.game_fonts.semibold,
-		strings.clone_to_cstring(text),
+		strings.clone_to_cstring(text, context.temp_allocator),
 		{text_x, text_y},
 		font_size,
 		0,
@@ -2921,6 +2906,9 @@ render_select :: proc(
 		list_height := i32(len(options)) * height
 		list_y := dropup ? y - list_height : y + height
 
+		// Block clicks through the open dropdown list
+		append(&ui_click_blocks, raylib.Rectangle{f32(x), f32(list_y), f32(actual_width), f32(list_height)})
+
 		// Draw list background shadow
 		raylib.DrawRectangle(
 			x + constants.UI_BUTTON_SHADOW_OFFSET,
@@ -2966,13 +2954,13 @@ render_select :: proc(
 
 			item_text := options[i]
 			item_text_width := f32(
-				raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(item_text), font_size, 0).x,
+				raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(item_text, context.temp_allocator), font_size, 0).x,
 			)
 			item_text_x := f32(x) + f32(actual_width) / 2 - item_text_width / 2
 			item_text_y := f32(item_y) + f32(height) / 2 - font_size / 2
 			raylib.DrawTextEx(
 				constants.game_fonts.semibold,
-				strings.clone_to_cstring(item_text),
+				strings.clone_to_cstring(item_text, context.temp_allocator),
 				{item_text_x, item_text_y},
 				font_size,
 				0,
@@ -3031,10 +3019,13 @@ render_button_with_color :: proc(
 	}
 
 	text_width :=
-		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text), font_size, 0).x
+		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text, context.temp_allocator), font_size, 0).x
 	if int(text_width) + 20 > int(width) {
 		actual_width = i32(text_width) + 20
 	}
+
+	// Register final button area to block grid clicks behind it
+	append(&ui_click_blocks, raylib.Rectangle{f32(x), f32(y), f32(actual_width), f32(actual_height)})
 
 	// Check hover
 	mouse_pos := raylib.GetMousePosition()
@@ -3091,12 +3082,12 @@ render_button_with_color :: proc(
 
 	for line, i in lines {
 		line_width :=
-			raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(line), font_size, 0).x
+			raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(line, context.temp_allocator), font_size, 0).x
 		line_x := f32(x) + f32(actual_width) / 2 - line_width / 2
 		line_y := start_y + f32(i) * line_spacing
 		raylib.DrawTextEx(
 			constants.game_fonts.semibold,
-			strings.clone_to_cstring(line),
+			strings.clone_to_cstring(line, context.temp_allocator),
 			{line_x, line_y},
 			font_size,
 			0,
@@ -3199,7 +3190,7 @@ render_button :: proc(
 ) -> bool {
 	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
 	text_width := f32(
-		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text), font_size, 0).x,
+		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text, context.temp_allocator), font_size, 0).x,
 	)
 
 	x := i32(rect.x)
@@ -3212,6 +3203,9 @@ render_button :: proc(
 	if actual_width < min_width {
 		actual_width = min_width
 	}
+
+	// Register button area to block grid clicks behind it
+	append(&ui_click_blocks, raylib.Rectangle{f32(x), f32(y), f32(actual_width), f32(height)})
 
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
@@ -3272,12 +3266,12 @@ render_button :: proc(
 
 	for line, i in lines {
 		line_width :=
-			raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(line), font_size, 0).x
+			raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(line, context.temp_allocator), font_size, 0).x
 		line_x := f32(x) + f32(actual_width) / 2 - line_width / 2
 		line_y := start_y + f32(i) * line_spacing
 		raylib.DrawTextEx(
 			constants.game_fonts.semibold,
-			strings.clone_to_cstring(line),
+			strings.clone_to_cstring(line, context.temp_allocator),
 			{line_x, line_y},
 			font_size,
 			0,
@@ -3292,31 +3286,6 @@ render_button :: proc(
 	}
 
 	return false
-}
-
-
-// Check if mouse is over a rectangle
-is_mouse_over_rect :: proc(rect: raylib.Rectangle) -> bool {
-	mouse_pos := raylib.GetMousePosition()
-	return raylib.CheckCollisionPointRec(mouse_pos, rect)
-}
-
-// Check if mouse is over tower control panel (to prevent grid clicks)
-is_mouse_over_tower_panel :: proc(app: ^entities.App_State) -> bool {
-	if app.selected_tower == nil && !app.selected_obstacle.valid {
-		return false
-	}
-
-	panel_rect := raylib.Rectangle {
-		x      = f32(
-			raylib.GetScreenWidth() - constants.UI_PANEL_WIDTH - constants.UI_PANEL_MARGIN,
-		),
-		y      = f32(constants.UI_PANEL_Y_POSITION),
-		width  = f32(constants.UI_PANEL_WIDTH),
-		height = f32(constants.UI_PANEL_HEIGHT),
-	}
-
-	return is_mouse_over_rect(panel_rect)
 }
 
 // Unified tower drawing function (JS style) - works for both editor and simulation
@@ -3355,6 +3324,9 @@ draw_tower_tile :: proc(
 	case .ARCHER:
 		fill = constants.TOWER_ARCHER_BASE
 		stroke = constants.TOWER_ARCHER_STROKE
+	case .ICE:
+		fill = constants.TOWER_ICE_BASE
+		stroke = constants.TOWER_ICE_STROKE
 	}
 
 	// Draw shadow (hard shadow offset to bottom-right like JS)
@@ -3571,6 +3543,34 @@ draw_tower_tile :: proc(
 			height = f32(barrel_h),
 		}
 		raylib.DrawRectanglePro(barrel_rect, origin, archer_rotation, constants.TOWER_ARCHER_WOOD)
+
+	case .ICE:
+		// Snowflake: 6 lines radiating from center at 30° intervals, no rotation needed
+		snow_r := cs * 0.32
+		num_arms :: 6
+		for i in 0 ..< num_arms {
+			a := f32(i) * math.PI / f32(num_arms / 2)
+			ex := cx + math.cos(a) * snow_r
+			ey := cy + math.sin(a) * snow_r
+			// Shadow
+			raylib.DrawLineEx(
+				{cx + so, cy + so},
+				{ex + so, ey + so},
+				max(1.5, cs * 0.05),
+				constants.TOWER_SHADOW,
+			)
+			// Arm
+			raylib.DrawLineEx(
+				{cx, cy},
+				{ex, ey},
+				max(1.5, cs * 0.05),
+				constants.TOWER_ICE_STROKE,
+			)
+		}
+		// Center crystal
+		raylib.DrawCircle(i32(cx + so), i32(cy + so), r * 0.55, constants.TOWER_SHADOW)
+		raylib.DrawCircle(i32(cx), i32(cy), r * 0.55, raylib.Color{220, 245, 255, 255})
+		raylib.DrawCircle(i32(cx), i32(cy), r * 0.28, constants.TOWER_ICE_STROKE)
 	}
 }
 
@@ -3657,6 +3657,27 @@ render_reticle :: proc(x, y, cs: f32, color: raylib.Color) {
 tower_panel_active: bool = false
 tower_panel_strategy_active: i32 = 0 // 0 = FIRST, 1 = LAST, 2 = MAX_HP, 3 = MIN_HP
 
+// UI click-blocking registry.
+// Every rendered panel and button appends its screen rectangle here.
+// input_handle_playing reads this to ignore grid clicks that land on UI.
+// Cleared at the start of each frame in render_game.
+ui_click_blocks: [dynamic]raylib.Rectangle
+
+ui_blocks_clear :: proc() {
+	clear(&ui_click_blocks)
+}
+
+// Returns true if screen position (x, y) falls inside any registered UI rect.
+ui_is_click_blocked :: proc(x, y: i32) -> bool {
+	p := raylib.Vector2{f32(x), f32(y)}
+	for rect in ui_click_blocks {
+		if raylib.CheckCollisionPointRec(p, rect) {
+			return true
+		}
+	}
+	return false
+}
+
 // Game session stats (tracked across play session)
 game_session_start_time: f64 = 0
 game_session_end_time: f64 = 0
@@ -3665,44 +3686,58 @@ game_session_total_kills: i32 = 0
 // Render panel with rounded corners and optional title
 // Returns a rectangle representing the available content area
 render_panel :: proc(rect: raylib.Rectangle, title: string = "") -> raylib.Rectangle {
+	// Register panel area so input system ignores grid clicks behind it
+	append(&ui_click_blocks, rect)
+
 	x := i32(rect.x)
 	y := i32(rect.y)
 	width := i32(rect.width)
 	height := i32(rect.height)
 
 	// Drop shadow
-	shadow_offset :: 4
-	shadow_color  := raylib.Color{0, 0, 0, 40}
 	raylib.DrawRectangleRounded(
-		{rect.x + shadow_offset, rect.y + shadow_offset, rect.width, rect.height},
-		constants.UI_BUTTON_ROUNDNESS / 4,
-		constants.TOWER_CORNER_SEGMENTS,
-		shadow_color,
+		{
+			rect.x + constants.UI_SHADOW_OFFSET,
+			rect.y + constants.UI_SHADOW_OFFSET,
+			rect.width,
+			rect.height
+		},
+		constants.UI_ROUNDNESS,
+		constants.UI_SEGMENTS,
+		constants.UI_SHADOW_COLOR,
 	)
 
 	// Draw full panel background uniformly
-	raylib.DrawRectangleRounded(rect, constants.UI_BUTTON_ROUNDNESS / 4, constants.TOWER_CORNER_SEGMENTS, raylib.RAYWHITE)
+	raylib.DrawRectangleRounded(
+		rect,
+		constants.UI_ROUNDNESS,
+		constants.UI_SEGMENTS,
+		constants.UI_PANEL_COLOR
+	)
+
+	margin_x := i32(constants.UI_MARGIN_X / 2)
+	margin_y := i32(constants.UI_MARGIN_Y / 2)
 
 	// Draw title inside panel margins if provided
 	title_height: i32 = 0
 	if title != "" {
 		title_height = 30 // Space for title line
-		title_cstr := strings.clone_to_cstring(title)
+		title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 		raylib.DrawTextEx(
 			constants.game_fonts.bold,
 			title_cstr,
-			{f32(x + 10), f32(y + 10)},
-			22,
+			{f32(x + margin_x), f32(y + margin_y)},
+			constants.UI_PANEL_TITLE_SIZE,
 			0,
-			constants.PANEL_TEXT_COLOR,
+			constants.UI_PANEL_TITLE_COLOR,
 		)
 	}
 
 	// Calculate content area (below title with margin)
-	content_x := x + 10
-	content_y := y + 10 + title_height
-	content_width := width - 20
-	content_height := height - 20 - title_height // 10px top + bottom padding
+	content_x := x + margin_x
+	content_y := y + margin_y + title_height
+	content_width := width - constants.UI_MARGIN_X
+	content_height := height - constants.UI_MARGIN_X - title_height
 
 	return raylib.Rectangle {
 		x = f32(content_x),
@@ -3712,24 +3747,72 @@ render_panel :: proc(rect: raylib.Rectangle, title: string = "") -> raylib.Recta
 	}
 }
 
+// Render info panel: small title at top, large bold value centered below.
+// Delegates shadow + background + click-blocking to render_panel (called with no title).
+// Returns the content rectangle so callers can draw additional content (e.g. icons).
+render_info_panel :: proc(rect: raylib.Rectangle, label: string, value: string = "") -> raylib.Rectangle {
+	// render_panel handles: drop shadow, rounded background, ui_click_blocks registration.
+	_ = render_panel(rect)
+
+	x := rect.x
+	y := rect.y
+
+	// Small label at top-left
+	label_font_size : f32 = constants.UI_PANEL_LABEL_SIZE
+	label_margin    : f32 = constants.UI_MARGIN_X / 2
+	if label != "" {
+		raylib.DrawTextEx(
+			constants.game_fonts.bold,
+			strings.clone_to_cstring(label, context.temp_allocator),
+			{x + label_margin, y + label_margin},
+			label_font_size, 0,
+			constants.UI_PANEL_LABEL_COLOR,
+		)
+	}
+	label_area_h : f32 = label_font_size + label_margin * 2
+
+	// Content area below label
+	content_x := x + label_margin
+	content_y := y + label_area_h
+	content_w := rect.width - label_margin * 2
+	content_h := rect.height - label_area_h - label_margin
+
+	// Large bold value centered inside content area
+	if value != "" {
+		value_font_size : f32 = constants.UI_PANEL_HERO_SIZE
+		value_cstr  := strings.clone_to_cstring(value, context.temp_allocator)
+		value_size  := raylib.MeasureTextEx(constants.game_fonts.bold, value_cstr, value_font_size, 0)
+		value_x     := content_x + (content_w - value_size.x) / 2
+		value_y     := content_y + (content_h - value_size.y) / 2
+		raylib.DrawTextEx(
+			constants.game_fonts.bold,
+			value_cstr,
+			{value_x, value_y},
+			value_font_size, 0,
+			constants.UI_TEXT_COLOR,
+		)
+	}
+
+	return raylib.Rectangle{content_x, content_y, content_w, content_h}
+}
+
 // Render tower control panel
 render_tower_control_panel :: proc(app: ^entities.App_State) {
 	// Only show if a tower is selected
-	if app.selected_tower == nil {
+	tower := entities.app_get_selected_tower(app)
+	if tower == nil {
 		tower_panel_active = false
 		return
 	}
 
-	tower := app.selected_tower
-
 	// Layout constants — height computed from actual content
 	button_height  : i32 = 30
-	spacing        : i32 = 8
-	font_size      : f32 = 14
-	info_height    : i32 = 22
-	line_height    : i32 = i32(font_size) + 5         // 19px per stat line
-	stats_height   : i32 = 4 * line_height - 5        // 4 lines → 71px
 	strategy_height: i32 = 30
+	spacing        : i32 = constants.UI_PANEL_MARGIN / 2
+	font_size      : f32 = constants.UI_PANEL_TEXT_SIZE
+	info_height    : i32 = constants.UI_PANEL_TEXT_SIZE
+	line_height    : i32 = i32(font_size) + 5         // 19px per stat line
+	stats_height   : i32 = 5 * line_height - 5        // 5 lines (4 stats + total damage)
 	// gaps: info→stats, stats→dmg, dmg→spd, spd→crit, crit→exit, exit→strategy, strategy→sell
 	num_gaps       : i32 = 7
 	inner_height   := info_height + stats_height + 4 * button_height + strategy_height + num_gaps * spacing
@@ -3742,13 +3825,6 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 		width  = f32(constants.UI_PANEL_WIDTH),
 		height = f32(panel_height),
 	}
-
-	// Render panel background and get content area
-	content_area  := render_panel(panel_rect, "")
-	content_x     := i32(content_area.x)
-	content_y     := i32(content_area.y)
-	content_width := i32(content_area.width)
-	button_width  := content_width
 
 	// Tower info
 	type_name := ""
@@ -3763,36 +3839,38 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 		type_name = constants.get_text("TOWER_MISSILE_NAME")
 	case .LASER:
 		type_name = constants.get_text("TOWER_LASER_NAME")
+	case .ICE:
+		type_name = constants.get_text("TOWER_ICE_NAME")
 	}
 
 	info_text := constants.get_text_f("PANEL_TOWER_INFO", type_name, tower.level)
+
+	// Render panel background and get content area
+	content_area  := render_panel(panel_rect, info_text)
+	content_x     := i32(content_area.x)
+	content_y     := i32(content_area.y)
+	content_width := i32(content_area.width)
+	button_width  := content_width
+	
 	current_y := content_y
-	raylib.DrawTextEx(
-		constants.game_fonts.bold,
-		strings.clone_to_cstring(info_text),
-		{f32(content_x), f32(current_y)},
-		20,
-		0,
-		constants.PANEL_TEXT_COLOR,
-	)
-	current_y += info_height + spacing
 
 	// Stats — single column
 	crit_chance := entities.tower_get_critical_chance(tower)
-	stat_lines := [4]string {
-		fmt.tprintf("Daño: %.1f",       tower.damage),
-		fmt.tprintf("Rango: %.1f",      tower.range),
-		fmt.tprintf("Velocidad: %.2fs", tower.cooldown),
-		fmt.tprintf("Críticos: %.1f%%", crit_chance * 100),
+	stat_lines := [5]string {
+		fmt.tprintf("Daño: %.1f",          tower.damage),
+		fmt.tprintf("Rango: %.1f",         tower.range),
+		fmt.tprintf("Velocidad: %.2fs",    tower.cooldown),
+		fmt.tprintf("Críticos: %.1f%%",    crit_chance * 100),
+		fmt.tprintf("Total: %.0f dmg",     tower.total_damage),
 	}
 	for line, i in stat_lines {
 		raylib.DrawTextEx(
 			constants.game_fonts.semibold,
-			strings.clone_to_cstring(line),
+			strings.clone_to_cstring(line, context.temp_allocator),
 			{f32(content_x), f32(current_y + i32(i) * line_height)},
 			font_size,
 			0,
-			constants.PANEL_TEXT_COLOR,
+			constants.UI_PANEL_TEXT_COLOR,
 		)
 	}
 	current_y += stats_height + spacing
@@ -3939,11 +4017,11 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 	info_text := constants.get_text_f("PANEL_OBSTACLE_INFO", level)
 	raylib.DrawTextEx(
 		constants.game_fonts.bold,
-		strings.clone_to_cstring(info_text),
+		strings.clone_to_cstring(info_text, context.temp_allocator),
 		{f32(content_x), f32(current_y)},
 		20,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	current_y += info_height + spacing
 
@@ -3951,11 +4029,11 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 	damage_stat := 5 * level
 	raylib.DrawTextEx(
 		constants.game_fonts.semibold,
-		strings.clone_to_cstring(fmt.tprintf("Daño: %d", damage_stat)),
+		fmt.ctprintf("Daño: %d", damage_stat),
 		{f32(content_x), f32(current_y)},
 		font_size,
 		0,
-		constants.PANEL_TEXT_COLOR,
+		constants.UI_PANEL_TEXT_COLOR,
 	)
 	current_y += stat_height + spacing
 
@@ -3992,6 +4070,11 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 		raylib.Color{170, 0, 0, 255},
 	) {
 		app.editor.game_map.obstacle_grid[row][col] = .EMPTY
+		// Clear level data so a new obstacle placed here starts at level 1
+		if existing_key, ok := entities.map_get_existing_key(&app.editor.game_map, row, col); ok {
+			delete_key(&app.editor.game_map.tile_data, existing_key)
+			delete(existing_key)
+		}
 		app.sim.money += sell_cost
 		app.selected_obstacle.valid = false
 		play_sound(.CONFIRMATION)
