@@ -57,7 +57,7 @@ render_map_objects :: proc(app: ^entities.App_State) {
 			y := f32(row) * cs + f32(app.camera_offset_y)
 
 			#partial switch tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE, .TOWER_ENHANCE:
 				// In game mode, find tower entity
 				if app.state == .PLAYING || app.state == .PAUSED {
 					for &tower in app.sim.towers {
@@ -1740,6 +1740,7 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 			{constants.get_text("TOWER_MISSILE_NAME"), .TOWER_MISSILE},
 			{constants.get_text("TOWER_LASER_NAME"), .TOWER_LASER},
 			{constants.get_text("TOWER_ICE_NAME"), .TOWER_ICE},
+			{constants.get_text("TOWER_ENHANCE_NAME"), .TOWER_ENHANCE},
 			{constants.get_text("EDITOR_TOOL_OBSTACLE"), .OBSTACLE},
 			{constants.get_text("EDITOR_TOOL_TREE"), .ACCESSORY_TREE},
 			{constants.get_text("EDITOR_TOOL_BLOCK"), .ACCESSORY_BLOCK},
@@ -1778,7 +1779,7 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 			preview_y := f32(y) + 2 // Small top padding
 
 			switch tool.tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE, .TOWER_ENHANCE:
 				tower_type := tile_to_tower_type(tool.tile)
 				draw_tower_tile(preview_x, preview_y, preview_size, tower_type, 0, false)
 			case .OBSTACLE:
@@ -3376,6 +3377,9 @@ draw_tower_tile :: proc(
 	case .ICE:
 		fill = constants.TOWER_ICE_BASE
 		stroke = constants.TOWER_ICE_STROKE
+	case .ENHANCE:
+		fill = constants.TOWER_ENHANCE_BASE
+		stroke = constants.TOWER_ENHANCE_STROKE
 	}
 
 	// Draw shadow (hard shadow offset to bottom-right like JS)
@@ -3620,6 +3624,36 @@ draw_tower_tile :: proc(
 		raylib.DrawCircle(i32(cx + so), i32(cy + so), r * 0.55, constants.TOWER_SHADOW)
 		raylib.DrawCircle(i32(cx), i32(cy), r * 0.55, raylib.Color{220, 245, 255, 255})
 		raylib.DrawCircle(i32(cx), i32(cy), r * 0.28, constants.TOWER_ICE_STROKE)
+
+	case .ENHANCE:
+		// Star: 8 radiating arms alternating long/short
+		num_arms :: 8
+		for i in 0 ..< num_arms {
+			a := f32(i) * math.PI * 2 / f32(num_arms)
+			arm_r := cs * 0.30 if i % 2 == 0 else cs * 0.17
+			ex := cx + math.cos(a) * arm_r
+			ey := cy + math.sin(a) * arm_r
+			// Shadow
+			raylib.DrawLineEx(
+				{cx + so, cy + so},
+				{ex + so, ey + so},
+				max(2.0, cs * 0.07),
+				constants.TOWER_SHADOW,
+			)
+			// Arm
+			raylib.DrawLineEx(
+				{cx, cy},
+				{ex, ey},
+				max(2.0, cs * 0.07),
+				constants.TOWER_ENHANCE_STROKE,
+			)
+		}
+		// Glow ring
+		raylib.DrawCircle(i32(cx + so), i32(cy + so), r * 0.60, constants.TOWER_SHADOW)
+		raylib.DrawCircle(i32(cx), i32(cy), r * 0.60, constants.TOWER_ENHANCE_GLOW)
+		// Core
+		raylib.DrawCircle(i32(cx), i32(cy), r * 0.35, constants.TOWER_ENHANCE_BASE)
+		raylib.DrawCircle(i32(cx), i32(cy), r * 0.18, constants.TOWER_ENHANCE_STROKE)
 	}
 }
 
@@ -3890,6 +3924,8 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 		type_name = constants.get_text("TOWER_LASER_NAME")
 	case .ICE:
 		type_name = constants.get_text("TOWER_ICE_NAME")
+	case .ENHANCE:
+		type_name = constants.get_text("TOWER_ENHANCE_NAME")
 	}
 
 	info_text := constants.get_text_f("PANEL_TOWER_INFO", type_name, tower.level)

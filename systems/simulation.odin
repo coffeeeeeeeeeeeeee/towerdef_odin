@@ -185,18 +185,19 @@ start_next_wave :: proc(app: ^entities.App_State) {
 
 	// Selección de carta cada DECK_SELECTION_INTERVAL oleadas (pausa el juego)
 	if sim.wave_number % constants.DECK_SELECTION_INTERVAL == 0 {
-		selection_pool := [8]entities.Card{
+		selection_pool := [9]entities.Card{
 			{kind = .TOWER, tower_type = .ARCHER},
 			{kind = .TOWER, tower_type = .CANNON},
 			{kind = .TOWER, tower_type = .SNIPER},
 			{kind = .TOWER, tower_type = .MISSILE},
 			{kind = .TOWER, tower_type = .LASER},
 			{kind = .TOWER, tower_type = .ICE},
+			{kind = .TOWER, tower_type = .ENHANCE},
 			{kind = .OBSTACLE},
 			{kind = .OBSTACLE},
 		}
 		for i in 0 ..< 3 {
-			sim.card_selection_choices[i] = selection_pool[rand.int_max(8)]
+			sim.card_selection_choices[i] = selection_pool[rand.int_max(9)]
 		}
 		sim.card_selection_active = true
 		simulation_set_pause(app, true)
@@ -458,6 +459,12 @@ update_towers :: proc(app: ^entities.App_State, dt: f32) {
 			continue
 		}
 
+		// ENHANCE tower: periodic boost pulse — no targeting needed
+		if tower.type == .ENHANCE {
+			update_enhance_tower(app, &tower)
+			continue
+		}
+
 		// Find target
 		target_enemy := find_target(app, &tower)
 		tower.target = target_enemy
@@ -479,7 +486,7 @@ update_towers :: proc(app: ^entities.App_State, dt: f32) {
 					update_laser_tower(app, &tower, dt)
 				case .ARCHER, .CANNON, .SNIPER, .MISSILE:
 					update_projectile_tower(app, &tower, dt)
-				case .ICE:
+				case .ICE, .ENHANCE:
 					// Handled above via continue
 				}
 			}
@@ -522,6 +529,32 @@ update_ice_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 	)
 	append(&app.sim.ice_pulses, pulse)
 	play_sfx(.TOWER_ICE)
+}
+
+// Update enhance tower — periodically upgrades nearby towers by one level
+update_enhance_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
+	if tower.timer > 0 {
+		return
+	}
+	tower.timer = entities.tower_get_effective_cooldown(tower)
+
+	for &t in app.sim.towers {
+		// Don't boost itself or other ENHANCE towers
+		if t.type == .ENHANCE {
+			continue
+		}
+		// Cap at ENHANCE_MAX_LEVEL
+		if t.level >= constants.ENHANCE_MAX_LEVEL {
+			continue
+		}
+		// Check distance (center to center)
+		dx := f32(t.c) - f32(tower.c)
+		dy := f32(t.r) - f32(tower.r)
+		dist := math.sqrt_f32(dx * dx + dy * dy)
+		if dist <= tower.range {
+			entities.tower_upgrade(&t)
+		}
+	}
 }
 
 // Update laser tower
@@ -620,7 +653,7 @@ update_projectile_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower
 		case .CANNON:  play_sfx(.TOWER_CANNON)
 		case .SNIPER:  play_sfx(.TOWER_SNIPER)
 		case .MISSILE: play_sfx(.TOWER_MISSILE)
-		case .LASER, .ICE: // handled separately
+		case .LASER, .ICE, .ENHANCE: // handled separately
 		}
 	}
 }
@@ -978,7 +1011,7 @@ simulation_init_from_editor :: proc(app: ^entities.App_State) -> bool {
 			tile := app.editor.game_map.grid[row][col]
 
 			#partial switch tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE, .TOWER_ENHANCE:
 				// Convert tile to tower type
 				tower_type: constants.Tower_Type
 				#partial switch tile {
@@ -994,6 +1027,8 @@ simulation_init_from_editor :: proc(app: ^entities.App_State) -> bool {
 					tower_type = .LASER
 				case .TOWER_ICE:
 					tower_type = .ICE
+				case .TOWER_ENHANCE:
+					tower_type = .ENHANCE
 				case:
 					tower_type = .ARCHER
 				}

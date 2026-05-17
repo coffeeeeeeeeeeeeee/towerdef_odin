@@ -91,6 +91,7 @@ build_starter_deck :: proc(sim: ^Simulation) {
 		{kind = .TOWER, tower_type = .MISSILE},
 		{kind = .TOWER, tower_type = .LASER},
 		{kind = .TOWER, tower_type = .ICE},
+		{kind = .TOWER, tower_type = .ENHANCE},
 		{kind = .OBSTACLE},
 		{kind = .OBSTACLE},
 	}
@@ -112,6 +113,7 @@ card_name :: proc(card: Card) -> string {
 	case .MISSILE: return constants.get_text("TOWER_MISSILE_NAME")
 	case .LASER:   return constants.get_text("TOWER_LASER_NAME")
 	case .ICE:     return constants.get_text("TOWER_ICE_NAME")
+	case .ENHANCE: return constants.get_text("TOWER_ENHANCE_NAME")
 	}
 	return "?"
 }
@@ -133,6 +135,7 @@ card_to_tile :: proc(card: Card) -> constants.Tile {
 	case .MISSILE: return .TOWER_MISSILE
 	case .LASER:   return .TOWER_LASER
 	case .ICE:     return .TOWER_ICE
+	case .ENHANCE: return .TOWER_ENHANCE
 	}
 	return .EMPTY
 }

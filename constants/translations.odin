@@ -53,9 +53,10 @@ get_tower_name :: proc(tower_type: Tower_Type) -> string {
 		return get_text("TOWER_LASER_NAME")
 	case .ICE:
 		return get_text("TOWER_ICE_NAME")
-	case:
-		return "Unknown"
+	case .ENHANCE:
+		return get_text("TOWER_ENHANCE_NAME")
 	}
+	return "Unknown"
 }
 
 // Get formatted translation

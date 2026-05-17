@@ -70,7 +70,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 			obstacle := app.editor.game_map.obstacle_grid[grid_y][grid_x]
 
 			#partial switch tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE, .TOWER_ENHANCE:
 				// Select tower for upgrade
 				select_tower_at(app, grid_y, grid_x)
 				app.selected_obstacle.valid = false // Deselect obstacle
@@ -256,7 +256,7 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 		case .PATH, .SPAWN, .GOAL:
 			// Place path elements
 			app.editor.game_map.grid[grid_y][grid_x] = tool
-		case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
+		case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE, .TOWER_ENHANCE:
 			// Place tower (only on empty cells)
 			if app.editor.game_map.grid[grid_y][grid_x] == .EMPTY {
 				app.editor.game_map.grid[grid_y][grid_x] = tool
@@ -531,6 +531,8 @@ tile_to_tower_type :: proc(tile: constants.Tile) -> constants.Tower_Type {
 		return .LASER
 	case .TOWER_ICE:
 		return .ICE
+	case .TOWER_ENHANCE:
+		return .ENHANCE
 	case:
 		return .ARCHER  // Default
 	}

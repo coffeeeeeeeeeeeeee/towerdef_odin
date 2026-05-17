@@ -28,8 +28,9 @@ Tile :: enum i32 {
 	TOWER_LASER     = 8,
 	OBSTACLE        = 9,
 	ACCESSORY_TREE  = 10,
-	ACCESSORY_BLOCK = 11,
-	TOWER_ICE       = 12,
+	ACCESSORY_BLOCK  = 11,
+	TOWER_ICE        = 12,
+	TOWER_ENHANCE    = 13,
 }
 
 Tower_Type :: enum {
@@ -39,6 +40,7 @@ Tower_Type :: enum {
 	MISSILE,
 	LASER,
 	ICE,
+	ENHANCE,
 }
 
 Target_Strategy :: enum {
@@ -158,6 +160,15 @@ TOWER_SPECS := [Tower_Type]Tower_Spec {
 		cost     = 45,
 		color    = raylib.SKYBLUE,
 	},
+	.ENHANCE = {
+		type     = .ENHANCE,
+		range    = 3.0,
+		damage   = 0,
+		cooldown = 20.0,  // seconds between boost pulses
+		aoe      = 0,
+		cost     = 90,
+		color    = raylib.GOLD,
+	},
 }
 
 // =============================================================================
@@ -166,6 +177,8 @@ TOWER_SPECS := [Tower_Type]Tower_Spec {
 
 TOWER_UPGRADE_MULTIPLIER :: f32(1.75)  // Multiplier applied to damage and range per upgrade; cooldown is divided
 TOWER_SELL_REFUND        :: f32(0.75)  // Fraction of total investment returned when selling a tower
+
+ENHANCE_MAX_LEVEL :: i32(5)  // Maximum level a tower can reach via ENHANCE boosts
 
 CRIT_BASE_CHANCE     :: f32(0.10)  // Base critical hit chance (10%) for all towers
 CRIT_DAMAGE_MULTIPLIER :: f32(2.0) // Damage multiplier on a critical hit
@@ -448,6 +461,9 @@ TOWER_ARCHER_WOOD       :: raylib.Color{180, 110,  50, 255}
 TOWER_ARCHER_STRING     :: raylib.Color{220, 220, 220, 255}
 TOWER_ICE_BASE          :: raylib.Color{160, 220, 245, 255}
 TOWER_ICE_STROKE        :: raylib.Color{ 70, 160, 210, 255}
+TOWER_ENHANCE_BASE      :: raylib.Color{230, 180,  40, 255}
+TOWER_ENHANCE_STROKE    :: raylib.Color{180, 130,  20, 255}
+TOWER_ENHANCE_GLOW      :: raylib.Color{255, 230, 100, 200}
 
 // =============================================================================
 // UI layout
