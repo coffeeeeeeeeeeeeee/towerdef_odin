@@ -63,8 +63,9 @@ main :: proc() {
 	systems.audio_init()
 	defer systems.audio_cleanup()
 
-	// Set UI volume from settings (combined with master volume)
+	// Set UI and SFX volume from settings (combined with master volume)
 	systems.set_ui_volume(initial_settings.master_volume, initial_settings.ui_volume)
+	systems.set_sfx_volume(initial_settings.master_volume, initial_settings.sfx_volume)
 
 	// Initialize game
 	app_init(initial_settings)
@@ -296,6 +297,7 @@ load_settings :: proc() -> entities.Settings {
 		language            = .ENGLISH,
 		master_volume       = 1.0,
 		ui_volume           = 1.0,
+		sfx_volume          = 1.0,
 		fullscreen          = false,
 		vsync               = true,
 		antialiasing        = 2, // 4x default

@@ -31,11 +31,8 @@ Tower :: struct {
 	angle: f32,
 	turn_speed: f32,
 	
-	// Upgrade levels
+	// Upgrade level (empieza en 1, se incrementa con cada upgrade)
 	level: i32,
-	damage_level: i32,
-	rate_level: i32,
-	critical_level: i32,
 	
 	// Missile system
 	missile_side: i32,
@@ -68,9 +65,6 @@ tower_init :: proc(tile_type: constants.Tower_Type, row, col: i32) -> Tower {
 		angle = 0,
 		turn_speed = 6,
 		level = 1,
-		damage_level = 1,
-		rate_level = 1,
-		critical_level = 1,
 		missile_side = 0,
 		_laser_accum = 0,
 		_laser_accum_timer = 0,
@@ -83,70 +77,43 @@ tower_get_base_cost :: proc(t: ^Tower) -> i32 {
 	return spec.cost
 }
 
-// Suma el dinero total gastado en upgrades para llegar a un nivel dado.
-// Nivel 1 = sin upgrades = 0. Cada paso i→i+1 cuesta UPGRADE_COST_BASE + (i-1)*INCREMENT.
-tower_get_total_upgrade_cost :: proc(level: i32) -> i32 {
-	total := i32(0)
-	for i in i32(1)..<level {
-		total += constants.UPGRADE_COST_BASE + (i - 1) * constants.UPGRADE_COST_INCREMENTVEL
-	}
-	return total
+// Costo del próximo upgrade: base_cost * 2^(level-1)
+tower_get_upgrade_cost :: proc(t: ^Tower) -> i32 {
+	base_cost := tower_get_base_cost(t)
+	multiplier := i32(1) << uint(t.level - 1) // 2^(level-1)
+	return base_cost * multiplier
 }
 
-// Calculate sell refund: (base_cost + total_upgrades_spent) * SELL_REFUND
+// Suma del dinero gastado en upgrades: base_cost * (2^(level-1) - 1)
+// (suma geométrica: 1 + 2 + 4 + ... + 2^(level-2))
+tower_get_total_upgrade_spent :: proc(t: ^Tower) -> i32 {
+	if t.level <= 1 { return 0 }
+	base_cost := tower_get_base_cost(t)
+	multiplier := i32(1) << uint(t.level - 1) // 2^(level-1)
+	return base_cost * (multiplier - 1)
+}
+
+// Sell refund: (base_cost + total_upgrades_spent) * TOWER_SELL_REFUND
 tower_get_sell_refund :: proc(t: ^Tower) -> i32 {
 	base_cost := tower_get_base_cost(t)
-
-	upgrades_spent :=
-		tower_get_total_upgrade_cost(t.damage_level) +
-		tower_get_total_upgrade_cost(t.rate_level) +
-		tower_get_total_upgrade_cost(t.critical_level)
-
-	return i32(f32(base_cost + upgrades_spent) * constants.SELL_REFUND)
+	upgrades_spent := tower_get_total_upgrade_spent(t)
+	return i32(f32(base_cost + upgrades_spent) * constants.TOWER_SELL_REFUND)
 }
 
-// Upgrade damage
-tower_upgrade_damage :: proc(t: ^Tower) -> bool {
-	cost := constants.UPGRADE_COST_BASE + (t.damage_level - 1) * constants.UPGRADE_COST_INCREMENTVEL
-	// Money check should be done externally
-	t.damage_level += 1
-	t.damage *= (1.0 + constants.LASER_DAMAGE_MULTIPLIER_PER_LEVEL)
-	t.level = (t.damage_level - 1) + (t.rate_level - 1) + (t.critical_level - 1) + 1
-	return true
+// Upgrade: multiplica damage por TOWER_UPGRADE_MULTIPLIER; divide cooldown; incrementa level.
+// Range y AoE nunca escalan con el nivel.
+tower_upgrade :: proc(t: ^Tower) {
+	t.damage   *= constants.TOWER_UPGRADE_MULTIPLIER
+	t.cooldown /= constants.TOWER_UPGRADE_MULTIPLIER
+	t.level += 1
 }
 
-// Upgrade rate (cooldown reduction)
-tower_upgrade_rate :: proc(t: ^Tower) -> bool {
-	cost := constants.UPGRADE_COST_BASE + (t.rate_level - 1) * constants.UPGRADE_COST_INCREMENTVEL
-	// Money check should be done externally
-	t.rate_level += 1
-	t.cooldown *= (1.0 - constants.LASER_COOLDOWN_REDUCTION_PER_LEVEL)
-	t.level = (t.damage_level - 1) + (t.rate_level - 1) + (t.critical_level - 1) + 1
-	return true
-}
-
-// Upgrade critical chance
-tower_upgrade_critical :: proc(t: ^Tower) -> bool {
-	cost := constants.UPGRADE_COST_BASE + (t.critical_level - 1) * constants.UPGRADE_COST_INCREMENTVEL
-	// Money check should be done externally
-	t.critical_level += 1
-	t.level = (t.damage_level - 1) + (t.rate_level - 1) + (t.critical_level - 1) + 1
-	return true
-}
-
-// Get critical chance
+// Get critical chance (fijo en base, no escala con upgrades)
 tower_get_critical_chance :: proc(t: ^Tower) -> f32 {
-	return constants.CRIT_BASE_CHANCE + f32(t.critical_level - 1) * constants.CRIT_PER_LEVEL
+	return constants.CRIT_BASE_CHANCE
 }
 
-// Get damage multiplier from damage level
-// t.damage is already modified by tower_upgrade_damage, so return 1.0
-tower_get_damage_multiplier :: proc(t: ^Tower) -> f32 {
-	return 1.0
-}
-
-// Get cooldown with rate upgrade applied
-// t.cooldown is already modified by tower_upgrade_rate, so return it directly
+// Get effective cooldown (t.cooldown ya refleja los upgrades aplicados)
 tower_get_effective_cooldown :: proc(t: ^Tower) -> f32 {
 	return t.cooldown
 }

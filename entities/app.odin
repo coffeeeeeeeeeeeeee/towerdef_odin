@@ -45,7 +45,22 @@ Simulation :: struct {
 	is_wave_blue:  bool,
 	is_wave_split: bool,
 	is_wave_bonus: bool,
+
+	// Pre-rolled bonus status for the next 3 upcoming waves (index 0 = wave+1).
+	// Shifts forward each time start_next_wave is called.
+	lookahead_bonus: [3]bool,
 	
+	// Deck builder
+	deck:    [dynamic]Card,
+	hand:    [dynamic]Card,
+	discard: [dynamic]Card,
+	hand_size:         i32,  // cartas robadas por refresco (empieza en DECK_HAND_SIZE)
+	selected_card_idx: int,  // índice en hand, -1 = ninguna carta seleccionada
+
+	// Selección de carta (cada DECK_SELECTION_INTERVAL oleadas)
+	card_selection_active:  bool,
+	card_selection_choices: [3]Card,
+
 	// Stats
 	enemies_killed: i32,
 	money_earned: i32,
@@ -119,7 +134,8 @@ Settings :: struct {
 	
 	// Audio
 	master_volume: f32,
-	ui_volume: f32, // inicializar en 1.0
+	ui_volume:     f32, // inicializar en 1.0
+	sfx_volume:    f32, // inicializar en 1.0
 	
 	// Display
 	fullscreen: bool,

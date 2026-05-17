@@ -61,3 +61,34 @@ my_map[compound_key] = value
 ```
 
 El `init_translations` en `translations.odin` sigue este patrón: usa `fmt.aprintf` para las claves del map `TRANSLATIONS` y `strings.clone` para los valores.
+
+## render_tower_ranges (systems/rendering.odin)
+
+Dibuja los círculos de rango de torres como capa separada, entre `render_map` y `render_map_objects`. Se llama desde `render_game` cada frame.
+
+### Dos modos
+
+1. **Todas las torres** (cuando `app.settings.show_tower_range` está activo): dibuja solo el relleno semitransparente (`TOWER_RANGE_PREVIEW`, alpha=30) para cada torre.
+
+2. **Torre seleccionada** (siempre, independientemente del setting): dibuja relleno sutil + **outline nítido** (`DrawCircleLines`, alpha=200). El outline es la parte visualmente dominante — sin él, el rango es prácticamente invisible.
+
+### ⚠️ Trampa conocida
+
+Al editar el bloque de la torre seleccionada, es fácil perder el `DrawCircleLines` si se reemplaza solo parte del bloque. **Siempre verificar que existan ambas llamadas**:
+
+```odin
+// Torre seleccionada — ambas líneas son necesarias
+raylib.DrawCircle(cx_i, cy_i, range_px, constants.TOWER_RANGE_PREVIEW)       // relleno (alpha=30, casi invisible solo)
+raylib.DrawCircleLines(cx_i, cy_i, range_px, raylib.Color{255, 255, 255, 200}) // outline (es lo que el usuario ve)
+```
+
+Si solo queda `DrawCircle` con `TOWER_RANGE_PREVIEW`, el círculo existe pero el usuario no lo ve.
+
+### Variables de color (constants.odin)
+
+```odin
+TOWER_RANGE_PREVIEW :: raylib.Color{255, 255, 255, 30}  // relleno muy tenue
+TOWER_RANGE_OUTLINE :: raylib.Color{255, 255, 255, 60}  // outline para el modo "todas las torres" (no se usa en selección)
+```
+
+El modo selección usa `Color{255, 255, 255, 200}` directamente (más visible que `TOWER_RANGE_OUTLINE`).

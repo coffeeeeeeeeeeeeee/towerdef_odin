@@ -89,24 +89,36 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 					entities.app_deselect_tower(app)
 					app.selected_obstacle.valid = false
 
-					// Place selected tower if one is selected
+					// Place selected card if one is selected
 					if app.sim.selected_build_tower != .EMPTY {
-						// Get tower spec for cost
-						tower_type := tile_to_tower_type(app.sim.selected_build_tower)
-						spec := constants.TOWER_SPECS[tower_type]
+						if app.sim.selected_build_tower == .OBSTACLE {
+							// Colocar obstáculo (carta de tipo OBSTACLE)
+							if app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY &&
+							   app.sim.money >= constants.OBSTACLE_BASE_COST {
+								app.editor.game_map.obstacle_grid[grid_y][grid_x] = .OBSTACLE
+								app.sim.money -= constants.OBSTACLE_BASE_COST
+								entities.card_play(&app.sim, app.sim.selected_card_idx)
+								app.sim.selected_build_tower = .EMPTY
+								app.sim.selected_card_idx    = -1
+								play_sound(.CLICK)
+							}
+						} else {
+							// Colocar torre (carta de tipo TOWER)
+							tower_type := tile_to_tower_type(app.sim.selected_build_tower)
+							spec := constants.TOWER_SPECS[tower_type]
 
-						if app.sim.money >= spec.cost {
-							// Place the tower
-							app.editor.game_map.grid[grid_y][grid_x] = app.sim.selected_build_tower
-							app.sim.money -= spec.cost
-
-							// Create tower entity
-							tower := entities.tower_init(tower_type, grid_y, grid_x)
-							append(&app.sim.towers, tower)
-
-							// Deselect after placing
-							app.sim.selected_build_tower = .EMPTY
-							play_sound(.CLICK)
+							if app.sim.money >= spec.cost &&
+							   tile == .EMPTY &&
+							   app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY {
+								app.editor.game_map.grid[grid_y][grid_x] = app.sim.selected_build_tower
+								app.sim.money -= spec.cost
+								tower := entities.tower_init(tower_type, grid_y, grid_x)
+								append(&app.sim.towers, tower)
+								entities.card_play(&app.sim, app.sim.selected_card_idx)
+								app.sim.selected_build_tower = .EMPTY
+								app.sim.selected_card_idx    = -1
+								play_sound(.CLICK)
+							}
 						}
 					}
 				}
@@ -118,6 +130,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 	if raylib.IsMouseButtonPressed(.RIGHT) {
 		if app.sim.selected_build_tower != .EMPTY {
 			app.sim.selected_build_tower = .EMPTY
+			app.sim.selected_card_idx    = -1
 		} else {
 			entities.app_deselect_tower(app)
 			app.selected_obstacle.valid = false

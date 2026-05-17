@@ -22,7 +22,6 @@ Projectile :: struct {
 	damage: f32,
 	type: constants.Tower_Type,
 	aoe: f32,
-	critical_level: i32,
 
 	// Source tower grid position (for damage stats attribution)
 	source_r: i32,
@@ -41,7 +40,6 @@ projectile_init :: proc(
 	target_strategy: constants.Target_Strategy,
 	type: constants.Tower_Type,
 	aoe: f32,
-	critical_level: i32,
 	source_r: i32 = -1,
 	source_c: i32 = -1,
 ) -> Projectile {
@@ -57,7 +55,6 @@ projectile_init :: proc(
 		damage = damage,
 		type = type,
 		aoe = aoe,
-		critical_level = critical_level,
 		source_r = source_r,
 		source_c = source_c,
 	}
@@ -65,17 +62,11 @@ projectile_init :: proc(
 
 // Move projectile towards target
 projectile_move :: proc(p: ^Projectile, dt: f32) -> bool {
-	// Calculate target position
-	target_x := p.target_last_x
-	target_y := p.target_last_y
-
-	if p.target != nil {
-		// Update last known position while target is alive
-		p.target_last_x = p.target.x
-		p.target_last_y = p.target.y
-		target_x = p.target.x
-		target_y = p.target.y
-	}
+	// Always travel to the position where the target was at fire time.
+	// Never re-home onto the target's current position; this avoids
+	// the projectile changing direction mid-flight.
+	target_x := p.target_orig_x
+	target_y := p.target_orig_y
 
 	dx := target_x - p.x
 	dy := target_y - p.y
@@ -106,11 +97,13 @@ projectile_check_hit :: proc(p: ^Projectile) -> bool {
 	if p.target == nil {
 		return true // Target dead, projectile should be removed
 	}
-	
-	dx := p.target.x - p.x
-	dy := p.target.y - p.y
+
+	// Compare against the fire-time position, since the projectile travels
+	// toward target_orig_x/y and never re-homes.
+	dx := p.target_orig_x - p.x
+	dy := p.target_orig_y - p.y
 	dist := math.sqrt(dx * dx + dy * dy)
-	
+
 	return dist < 0.3 // Within hit radius
 }
 

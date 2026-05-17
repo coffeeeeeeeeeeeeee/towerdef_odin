@@ -57,10 +57,8 @@ laser_tower_update :: proc(t: ^Tower, dt: f32) -> (damage_dealt: f32, beam_activ
 	if t.firing_timer > 0 {
 		t.firing_timer -= dt
 		
-		// Calculate DPS based on damage level
-		damage_multiplier := 1.0 + f32(t.damage_level - 1) * constants.LASER_DAMAGE_MULTIPLIER_PER_LEVEL
-		dps := t.damage * damage_multiplier
-		frame_damage := dps * dt
+		// DPS directo: t.damage ya refleja los upgrades aplicados
+		frame_damage := t.damage * dt
 		
 		// Keep beam visible while firing
 		t.laser_beam_duration = 0.1
@@ -75,7 +73,6 @@ laser_tower_update :: proc(t: ^Tower, dt: f32) -> (damage_dealt: f32, beam_activ
 		// Burst finished: enter cooldown
 		if t.firing_timer <= 0 {
 			t.firing_timer = 0
-			// t.cooldown is already reduced by tower_upgrade_rate upgrades
 			t.cooldown_timer = t.cooldown
 		}
 	}
@@ -86,8 +83,7 @@ laser_tower_update :: proc(t: ^Tower, dt: f32) -> (damage_dealt: f32, beam_activ
 // Check if laser accumulated damage should be displayed
 laser_should_show_damage :: proc(t: ^Tower) -> (should_show: bool, damage: f32, is_critical: bool) {
 	if t._laser_accum_timer >= constants.LASER_ACCUMULATION_TIME {
-		critical_chance := constants.CRIT_BASE_CHANCE + f32(t.critical_level - 1) * constants.CRIT_PER_LEVEL
-		is_crit := rand.float32() < critical_chance
+		is_crit := rand.float32() < constants.CRIT_BASE_CHANCE
 		
 		final_damage := t._laser_accum
 		if is_crit {

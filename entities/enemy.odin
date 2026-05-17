@@ -88,7 +88,7 @@ enemy_init :: proc(
 		is_green = is_green,
 		is_blue = is_blue,
 		boss_color = boss_color,
-		heal_cooldown = 1.0,
+		heal_cooldown = constants.ENEMY_HEAL_COOLDOWN_BLUE,
 		obstacle_damage = make(map[string]bool),
 		is_split = false,
 		is_bonus = is_bonus,
@@ -177,9 +177,9 @@ enemy_update_healing :: proc(e: ^Enemy, dt: f32) {
 	
 	e.heal_cooldown -= dt
 	if e.heal_cooldown <= 0 {
-		heal_amount := e.max_hp * 0.05
+		heal_amount := e.max_hp * constants.ENEMY_HEAL_RATE_BLUE
 		e.hp = min(e.hp + heal_amount, e.max_hp)
-		e.heal_cooldown = 1.0 // Reset to 1 second
+		e.heal_cooldown = constants.ENEMY_HEAL_COOLDOWN_BLUE
 	}
 }
 
@@ -196,7 +196,7 @@ enemy_apply_obstacle_damage :: proc(e: ^Enemy, grid_x, grid_y, obstacle_level: i
 		return 0 // Already damaged by this obstacle
 	}
 	
-	damage := f32(5 * obstacle_level)
+	damage := constants.OBSTACLE_DAMAGE_PER_LEVEL * f32(obstacle_level)
 	e.hp -= damage
 	e.obstacle_damage[key] = true
 	
@@ -213,7 +213,7 @@ enemy_get_color :: proc(e: ^Enemy) -> raylib.Color {
 	case e.is_blue:
 		return constants.ENEMY_BLUE
 	case e.is_flying:
-		return constants.ENEMY_FLYING
+		return constants.COLOR_ENEMY_FLYING
 	case e.is_split:
 		return constants.COLOR_ENEMY_SPLIT
 	case:
