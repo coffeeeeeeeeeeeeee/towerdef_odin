@@ -2,6 +2,7 @@ package entities
 
 import "core:math"
 import "vendor:raylib"
+import "../constants"
 
 // Explosion structure
 Explosion :: struct {
@@ -51,7 +52,7 @@ Damage_Number :: struct {
 damage_number_init :: proc(x, y, value: f32, is_critical: bool) -> Damage_Number {
 	color := raylib.WHITE
 	if is_critical {
-		color = raylib.Color{255, 68, 68, 255} // Red for critical
+		color = constants.TOWER_LASER_COLOR // Red for critical (mismo rojo que el láser)
 	}
 	
 	return Damage_Number{

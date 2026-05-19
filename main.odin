@@ -59,13 +59,17 @@ main :: proc() {
 	constants.load_fonts()
 	defer constants.unload_fonts()
 
+	// Load icon textures
+	constants.load_icons()
+	defer constants.unload_icons()
+
 	// Initialize audio system
 	systems.audio_init()
 	defer systems.audio_cleanup()
 
-	// Set UI and SFX volume from settings (combined with master volume)
-	systems.set_ui_volume(initial_settings.master_volume, initial_settings.ui_volume)
-	systems.set_sfx_volume(initial_settings.master_volume, initial_settings.sfx_volume)
+	// Set per-layer volumes from settings
+	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
+	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)
 
 	// Initialize game
 	app_init(initial_settings)
@@ -103,9 +107,9 @@ main :: proc() {
 		if current_maximized != app.settings.window_maximized {
 			app.settings.window_maximized = current_maximized
 			if current_maximized {
-				systems.play_sound(.MAXIMIZE)
+				systems.play_sound(.MAXIMIZE, .UI)
 			} else {
-				systems.play_sound(.MINIMIZE)
+				systems.play_sound(.MINIMIZE, .UI)
 			}
 		}
 

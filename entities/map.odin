@@ -137,21 +137,6 @@ map_clear :: proc(m: ^Map) {
 }
 
 // Check if tile is a path tile
-map_is_path :: proc(m: ^Map, row, col: i32) -> bool {
-	tile := map_get_tile(m, row, col)
-	return tile == .PATH || tile == .SPAWN || tile == .GOAL
-}
-
-// Check if position has a tower
-map_has_tower :: proc(m: ^Map, row, col: i32) -> bool {
-	tile := map_get_tile(m, row, col)
-	#partial switch tile {
-	case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE:
-		return true
-	}
-	return false
-}
-
 // Find all spawn points
 map_find_spawns :: proc(m: ^Map) -> [dynamic]Spawn_Point {
 	spawns := make([dynamic]Spawn_Point)

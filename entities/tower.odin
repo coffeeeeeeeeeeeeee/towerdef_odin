@@ -9,34 +9,40 @@ Tower :: struct {
 	// Position (grid coordinates)
 	r: i32,
 	c: i32,
-	
+
 	// Tower properties
 	type: constants.Tower_Type,
 	range: f32,
 	damage: f32,
 	cooldown: f32,
 	aoe: f32,
-	
+
+	// Base stats (immutable, from TOWER_SPECS at creation)
+	base_damage:   f32,
+	base_cooldown: f32,
+
 	// Timers
 	timer: f32,
 	cooldown_timer: f32,
 	firing_timer: f32,
 	laser_beam_duration: f32,
-	
+
 	// Target
 	target: ^Enemy,
 	target_strategy: constants.Target_Strategy,
-	
+
 	// Visual
 	angle: f32,
 	turn_speed: f32,
-	
+
 	// Upgrade level (empieza en 1, se incrementa con cada upgrade)
 	level: i32,
-	
+	// Niveles otorgados por torres ENHANCE (recalculado cada frame)
+	enhance_bonus: i32,
+
 	// Missile system
 	missile_side: i32,
-		
+
 	// Laser accumulation for damage display
 	_laser_accum: f32,
 	_laser_accum_timer: f32,
@@ -49,25 +55,41 @@ Tower :: struct {
 tower_init :: proc(tile_type: constants.Tower_Type, row, col: i32) -> Tower {
 	spec := constants.TOWER_SPECS[tile_type]
 	return Tower{
-		r = row,
-		c = col,
-		type = spec.type,
-		range = spec.range,
-		damage = spec.damage,
-		cooldown = spec.cooldown,
-		aoe = spec.aoe,
-		timer = 0,
+		r             = row,
+		c             = col,
+		type          = spec.type,
+		range         = spec.range,
+		damage        = spec.damage,
+		cooldown      = spec.cooldown,
+		aoe           = spec.aoe,
+		base_damage   = spec.damage,
+		base_cooldown = spec.cooldown,
+		timer         = 0,
 		cooldown_timer = 0,
-		firing_timer = 0,
+		firing_timer  = 0,
 		laser_beam_duration = 0,
-		target = nil,
+		target        = nil,
 		target_strategy = .FIRST,
-		angle = 0,
-		turn_speed = 6,
-		level = 1,
-		missile_side = 0,
-		_laser_accum = 0,
+		angle         = 0,
+		turn_speed    = 6,
+		level         = 1,
+		missile_side  = 0,
+		_laser_accum  = 0,
 		_laser_accum_timer = 0,
+	}
+}
+
+// Recomputa damage y cooldown desde base stats según el nivel total (escalado lineal).
+// damage   = base × (1 + TOWER_DAMAGE_PER_LEVEL × (level-1))
+// cooldown = base / (1 + TOWER_SPEED_PER_LEVEL  × (level-1))
+// Llamar siempre que level o enhance_bonus cambien.
+tower_recompute_stats :: proc(t: ^Tower) {
+	n := f32(t.level - 1)
+	t.damage   = t.base_damage   * (1 + constants.TOWER_DAMAGE_PER_LEVEL * n)
+	t.cooldown = t.base_cooldown / (1 + constants.TOWER_SPEED_PER_LEVEL  * n)
+	min_cd := constants.TOWER_SPECS[t.type].min_cooldown
+	if min_cd > 0 && t.cooldown < min_cd {
+		t.cooldown = min_cd
 	}
 }
 
@@ -77,20 +99,22 @@ tower_get_base_cost :: proc(t: ^Tower) -> i32 {
 	return spec.cost
 }
 
-// Costo del próximo upgrade: base_cost * 2^(level-1)
+// Costo del próximo upgrade: base_cost * base_level (lineal).
+// El nivel de enhance no cuenta para el precio.
+// Ejemplos arquera (base 20): Nv2→$20, Nv10→$180, Nv20→$380
 tower_get_upgrade_cost :: proc(t: ^Tower) -> i32 {
-	base_cost := tower_get_base_cost(t)
-	multiplier := i32(1) << uint(t.level - 1) // 2^(level-1)
-	return base_cost * multiplier
+	base_cost  := tower_get_base_cost(t)
+	base_level := t.level - t.enhance_bonus
+	return base_cost * base_level
 }
 
-// Suma del dinero gastado en upgrades: base_cost * (2^(level-1) - 1)
-// (suma geométrica: 1 + 2 + 4 + ... + 2^(level-2))
+// Total gastado en upgrades hasta el nivel actual: base_cost * level * (level-1) / 2
+// (suma aritmética: 1 + 2 + ... + (level-1))
 tower_get_total_upgrade_spent :: proc(t: ^Tower) -> i32 {
 	if t.level <= 1 { return 0 }
-	base_cost := tower_get_base_cost(t)
-	multiplier := i32(1) << uint(t.level - 1) // 2^(level-1)
-	return base_cost * (multiplier - 1)
+	base_cost  := tower_get_base_cost(t)
+	base_level := t.level - t.enhance_bonus
+	return base_cost * base_level * (base_level - 1) / 2
 }
 
 // Sell refund: (base_cost + total_upgrades_spent) * TOWER_SELL_REFUND
@@ -100,17 +124,21 @@ tower_get_sell_refund :: proc(t: ^Tower) -> i32 {
 	return i32(f32(base_cost + upgrades_spent) * constants.TOWER_SELL_REFUND)
 }
 
-// Upgrade: multiplica damage por TOWER_UPGRADE_MULTIPLIER; divide cooldown; incrementa level.
-// Range y AoE nunca escalan con el nivel.
+// Upgrade manual: incrementa level y recomputa stats desde base.
+// No aplica si ya se alcanzó el tope correspondiente al tipo de torre.
 tower_upgrade :: proc(t: ^Tower) {
-	t.damage   *= constants.TOWER_UPGRADE_MULTIPLIER
-	t.cooldown /= constants.TOWER_UPGRADE_MULTIPLIER
+	if t.level >= constants.TOWER_MAX_LEVEL { return }
 	t.level += 1
+	tower_recompute_stats(t)
 }
 
-// Get critical chance (fijo en base, no escala con upgrades)
+// Get critical chance: escala linealmente con el nivel
+// crit = CRIT_BASE_CHANCE + TOWER_CRIT_PER_LEVEL × (level-1), máximo 75%
 tower_get_critical_chance :: proc(t: ^Tower) -> f32 {
-	return constants.CRIT_BASE_CHANCE
+	n := f32(t.level - 1)
+	chance := constants.CRIT_BASE_CHANCE + constants.TOWER_CRIT_PER_LEVEL * n
+	if chance > 0.75 { chance = 0.75 }
+	return chance
 }
 
 // Get effective cooldown (t.cooldown ya refleja los upgrades aplicados)

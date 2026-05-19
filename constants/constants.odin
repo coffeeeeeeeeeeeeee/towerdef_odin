@@ -62,13 +62,14 @@ Biome :: enum {
 // =============================================================================
 
 Tower_Spec :: struct {
-	type:     Tower_Type,
-	range:    f32,
-	damage:   f32,
-	cooldown: f32,
-	aoe:      f32,
-	cost:     i32,
-	color:    raylib.Color,
+	type:        Tower_Type,
+	range:       f32,
+	damage:      f32,
+	cooldown:    f32,
+	aoe:         f32,
+	cost:        i32,
+	color:       raylib.Color,
+	min_cooldown: f32,  // Floor for cooldown after upgrades (0 = no floor)
 }
 
 Tile_Data :: struct {
@@ -97,7 +98,7 @@ GRID_SIZE    :: 20
 CELL_SIZE    :: 32
 MAX_FPS      :: 60
 DEFAULT_MONEY  :: 120
-DEFAULT_HEALTH :: 30
+DEFAULT_HEALTH :: 40
 
 PATH_WIDTH_RATIO :: 0.4  // Path draw width as a fraction of cell size
 
@@ -127,7 +128,7 @@ TOWER_SPECS := [Tower_Type]Tower_Spec {
 	.SNIPER = {
 		type     = .SNIPER,
 		range    = 6.0,
-		damage   = 16.0,
+		damage   = 18.0,
 		cooldown = 2.0,
 		aoe      = 0,
 		cost     = 60,
@@ -136,35 +137,36 @@ TOWER_SPECS := [Tower_Type]Tower_Spec {
 	.MISSILE = {
 		type     = .MISSILE,
 		range    = 3.0,
-		damage   = 4.0,
-		cooldown = 0.4,
+		damage   = 3.0,
+		cooldown = 0.6,
 		aoe      = 1.0,
-		cost     = 50,
+		cost     = 35,
 		color    = raylib.RED,
 	},
 	.LASER = {
 		type     = .LASER,
 		range    = 2.5,
 		damage   = 8.0,
-		cooldown = 0.5,
+		cooldown = 0.7,
 		aoe      = 0,
 		cost     = 80,
 		color    = raylib.MAGENTA,
 	},
 	.ICE = {
-		type     = .ICE,
-		range    = 2.0,
-		damage   = 1.0,
-		cooldown = 3.0,
-		aoe      = 0,
-		cost     = 45,
-		color    = raylib.SKYBLUE,
+		type         = .ICE,
+		range        = 2.5,
+		damage       = 0.5,
+		cooldown     = 3.0,
+		aoe          = 0,
+		cost         = 45,
+		color        = raylib.SKYBLUE,
+		min_cooldown = 0.5,
 	},
 	.ENHANCE = {
 		type     = .ENHANCE,
 		range    = 3.0,
 		damage   = 0,
-		cooldown = 20.0,  // seconds between boost pulses
+		cooldown = 10.0,  // seconds between boost pulses
 		aoe      = 0,
 		cost     = 90,
 		color    = raylib.GOLD,
@@ -175,10 +177,24 @@ TOWER_SPECS := [Tower_Type]Tower_Spec {
 // Tower balance
 // =============================================================================
 
-TOWER_UPGRADE_MULTIPLIER :: f32(1.75)  // Multiplier applied to damage and range per upgrade; cooldown is divided
+// Escalado lineal por nivel: stat = base × (1 + FACTOR × (level-1))
+// A nivel 20: daño ×3.85, velocidad ×2.52, críticos +9.5%
+TOWER_DAMAGE_PER_LEVEL :: f32(0.15)   // +15% del daño base por nivel
+TOWER_SPEED_PER_LEVEL  :: f32(0.08)   // +8% de la velocidad base por nivel
+TOWER_CRIT_PER_LEVEL   :: f32(0.005)  // +0.5% de probabilidad de crítico por nivel
 TOWER_SELL_REFUND        :: f32(0.75)  // Fraction of total investment returned when selling a tower
+TOWER_MAX_MANUAL_LEVEL   :: i32(20)   // Max level reachable via manual upgrades alone
+TOWER_MAX_LEVEL          :: i32(25)   // Absolute hard cap (manual + enhance combined)
 
-ENHANCE_MAX_LEVEL :: i32(5)  // Maximum level a tower can reach via ENHANCE boosts
+ENHANCE_MAX_LEVEL :: i32(5)  // Maximum levels a tower can receive via ENHANCE boosts
+
+WEAKEN_HP_MULTIPLIER :: f32(0.70)  // HP multiplier applied to enemies when WEAKEN card is active
+DIVIDEND_RATE        :: f32(0.15)  // Fraction of wave spending returned per DIVIDEND stack
+
+CARD_REROLL_COST     :: i32(50)    // Gold cost to reroll the 3-card selection
+CARD_REROLL_MIN_WAVE :: i32(10)    // Earliest wave at which rerolling is available
+CARD_SELL_PRICE      :: i32(25)    // Gold received when selling a card from hand to discard
+HAND_REDEAL_COST     :: i32(40)    // Gold cost to redeal the hand once the game has started (free before first wave)
 
 CRIT_BASE_CHANCE     :: f32(0.10)  // Base critical hit chance (10%) for all towers
 CRIT_DAMAGE_MULTIPLIER :: f32(2.0) // Damage multiplier on a critical hit
@@ -210,11 +226,11 @@ AOE_DAMAGE_MULTIPLIER :: f32(0.5)  // Splash damage is this fraction of the dire
 // Enemy base stats
 // =============================================================================
 
-ENEMY_BASE_HP             :: f32(25.0)
-ENEMY_GROWTH_RATE         :: f32(1.15)    // HP multiplier per wave (exponential scaling)
+ENEMY_BASE_HP             :: f32(10.0)
+ENEMY_GROWTH_RATE         :: f32(1.07)    // HP multiplier per wave (exponential scaling)
 ENEMY_SPEED_GROWTH_RATE   :: f32(1.012)   // Speed multiplier per wave (~+1.2% per wave)
-ENEMY_GLOBAL_HP_MULTIPLIER    :: f32(0.9) // Global scalar applied to all enemy HP
-ENEMY_GLOBAL_SPEED_MULTIPLIER :: f32(0.5) // Global scalar applied to all enemy speeds
+ENEMY_GLOBAL_HP_MULTIPLIER    :: f32(0.85) // Global scalar applied to all enemy HP
+ENEMY_GLOBAL_SPEED_MULTIPLIER :: f32(0.45) // Global scalar applied to all enemy speeds
 
 // Enemy speed (cells per second, further scaled by ENEMY_GLOBAL_SPEED_MULTIPLIER)
 ENEMY_SPEED_DEFAULT :: f32(1.0)  // Normal enemies
@@ -253,7 +269,7 @@ SPLIT_HP_RATIO   :: f32(0.30)  // Child HP = 30% of parent max_hp
 SPLIT_SPEED_MULT :: f32(1.30)  // Child speed = parent speed × 1.30
 
 // Obstacle damage
-OBSTACLE_DAMAGE_PER_LEVEL :: f32(5.0)  // Damage dealt = OBSTACLE_DAMAGE_PER_LEVEL × obstacle_level
+OBSTACLE_DAMAGE_PER_LEVEL :: f32(5.0)  // Base damage; actual = OBSTACLE_DAMAGE_PER_LEVEL × 2^(level-1)
 
 // =============================================================================
 // Enemy rewards and goal damage
@@ -276,6 +292,7 @@ WAVE_ENEMIES_BASE  :: i32(5)
 WAVE_ENEMIES_SCALE :: i32(2)
 
 BOSS_WAVE_INTERVAL :: i32(10)  // A boss wave occurs every N waves (wave 10, 20, 30…)
+MAX_WAVE           :: i32(100) // Game ends (victory) after completing this wave
 
 // Bonus waves
 BONUS_WAVE_CHANCE      :: f32(0.25)  // Probability of a bonus wave on any non-boss wave
@@ -290,18 +307,18 @@ MIXED_WAVE_MIN_WAVE :: i32(20)  // Mixed waves begin at this wave number
 // =============================================================================
 
 DECK_HAND_SIZE          :: i32(3)     // Cards dealt to hand at the start of each wave
-DECK_CARD_DROP_CHANCE   :: f32(0.001) // Probability of a card drop on each enemy kill (0.1%)
+DECK_CARD_DROP_CHANCE   :: f32(0.004) // Probability of a card drop on each enemy kill
 DECK_SELECTION_INTERVAL :: i32(10)    // Every N waves the player selects a new card to add to the deck
 
 OBSTACLE_BASE_COST              :: i32(25)  // Gold cost to place an obstacle card from hand
-OBSTACLE_UPGRADE_COST_BASE      :: 50       // Base cost for first obstacle level upgrade
-OBSTACLE_UPGRADE_COST_INCREMENT :: 25       // Additional cost per subsequent upgrade level
+OBSTACLE_UPGRADE_COST_BASE :: 50  // Base cost; doubles each level: 50, 100, 200, 400…
 
 // =============================================================================
 // Money
 // =============================================================================
 
-MONEY_WAVE_CLEAR :: i32(100)   // Gold awarded for completing a wave
+MONEY_WAVE_CLEAR_BASE     :: i32(50)   // Base gold per wave clear
+MONEY_WAVE_CLEAR_PER_WAVE :: i32(3)    // Extra gold per wave number (ola 1→53, ola 50→200, ola 100→350)
 INTEREST_RATE    :: f32(0.05)  // Fraction of current gold awarded as interest at wave start
 
 // =============================================================================
@@ -314,9 +331,9 @@ COLOR_SPAWN      :: raylib.Color{100, 200, 100, 255}
 COLOR_GOAL       :: raylib.Color{200, 100, 100, 255}
 COLOR_TREE_TRUNK :: raylib.Color{139,  69,  19, 255}
 COLOR_TREE_LEAVES :: raylib.Color{ 34, 139,  34, 255}
-COLOR_BLOCK      :: raylib.Color{128, 128, 128, 255}
-COLOR_OBSTACLE   :: raylib.Color{160,  82,  45, 255}
-COLOR_LASER_BEAM :: raylib.Color{255,  68,  68, 255}
+COLOR_BLOCK    :: raylib.Color{128, 128, 128, 255}
+COLOR_OBSTACLE :: raylib.Color{160,  82,  45, 255}
+// COLOR_LASER_BEAM eliminado — usar TOWER_LASER_COLOR (mismo valor {255,68,68,255})
 
 // =============================================================================
 // Enemy colors
@@ -492,9 +509,11 @@ UI_PANEL_WIDTH       :: 200
 UI_PANEL_HEIGHT      :: 295
 UI_PANEL_MARGIN      :: 10
 UI_PANEL_Y_POSITION  :: 150
+UI_PANEL_ROUNDNESS   :: 0.2
 
 UI_MARGIN_X :: 10  // Screen-edge horizontal margin for panels
 UI_MARGIN_Y :: 8   // Screen-edge vertical margin for panels
+UI_PANEL_PADDING :: 14  // Internal padding inside panels (both axes)
 
 TOOLTIP_MARGIN_X      :: i32(6)
 TOOLTIP_MARGIN_Y      :: i32(4)
@@ -521,6 +540,24 @@ UI_BUTTON_COLOR         :: raylib.Color{255, 255, 255, 255}
 UI_BUTTON_HOVER_COLOR   :: raylib.Color{220, 220, 220, 255}
 UI_BUTTON_PRESSED_COLOR :: raylib.Color{255, 255,   0, 255}
 UI_BUTTON_SHADOW_COLOR  :: raylib.Color{  0,   0,   0,  30}
+
+// Botones de acción positiva (Iniciar oleada, velocidad activa)
+UI_BUTTON_ACTION_COLOR  :: raylib.Color{ 40, 167,  69, 255}
+UI_BUTTON_ACTION_HOVER  :: raylib.Color{ 30, 140,  55, 255}
+UI_BUTTON_ACTION_PRESS  :: raylib.Color{ 20, 110,  40, 255}
+
+// Botones de venta (vender carta, vender torre/obstáculo)
+UI_BUTTON_SELL_COLOR    :: raylib.Color{180,  40,  40, 255}
+UI_BUTTON_SELL_HOVER    :: raylib.Color{210,  60,  60, 255}
+UI_BUTTON_SELL_PRESS    :: raylib.Color{150,  20,  20, 255}
+
+// Botón de pausa activo (amarillo cuando el juego está pausado)
+UI_BUTTON_PAUSE_COLOR   :: raylib.Color{220, 170,   0, 255}
+UI_BUTTON_PAUSE_HOVER   :: raylib.Color{190, 145,   0, 255}
+UI_BUTTON_PAUSE_PRESS   :: raylib.Color{160, 120,   0, 255}
+
+// Transparente — usado como valor nulo en parámetros de color de botones
+COLOR_NONE              :: raylib.Color{  0,   0,   0,   0}
 
 UI_TEXT_COLOR            :: raylib.Color{ 20,  20,  20, 255}
 UI_OVERLAY_COLOR         :: raylib.Color{  0,   0,   0, 200}

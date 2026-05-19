@@ -288,33 +288,6 @@ render_grid_lines :: proc(app: ^entities.App_State, cs: f32, map_w, map_h: i32) 
 	}
 }
 
-// Render tower upgrades (small dots) - arranged in rows of 5 above the tower
-render_tower_upgrades :: proc(tower: ^entities.Tower, x, y, cs: f32) {
-	// Un pip dorado por cada nivel de upgrade (level - 1 pips)
-	tower_pips := []Tooltip_Pip{
-		{color = raylib.GOLD, shape = .CIRCLE, count = tower.level - 1},
-	}
-	render_pips_tooltip("", tower_pips, {x, y, cs, cs})
-}
-
-// Render obstacle level pips (similar to tower upgrades)
-render_obstacle_pips :: proc(level: i32, x, y, cs: f32) {
-	// Tooltip con pips de nivel del obstáculo (solo si hay mejoras)
-	obs_pips := []Tooltip_Pip{
-		{color = raylib.ORANGE, shape = .CIRCLE, count = level - 1},
-	}
-	render_pips_tooltip("", obs_pips, {x, y, cs, cs})
-}
-
-// Forma de cada pip en un tooltip
-Pip_Shape :: enum { CIRCLE, TRIANGLE, SQUARE }
-
-// Grupo de pips del mismo tipo (color + forma + cantidad)
-Tooltip_Pip :: struct {
-	color: raylib.Color,
-	shape: Pip_Shape,
-	count: i32,
-}
 
 // Dibuja el fondo base de un tooltip: clampea a pantalla, sombra + rect redondeado RAYWHITE.
 // Devuelve el rect final (ya clampeado) para que el caller posicione su contenido.
@@ -344,115 +317,7 @@ render_tooltip :: proc(rect: raylib.Rectangle) -> raylib.Rectangle {
 	return r
 }
 
-// Render tooltip con pips encadenados en filas de 5, centrado encima de trigger_rect.
-// Estética idéntica a render_panel: fondo RAYWHITE, sombra oscura, título en bold.
-render_pips_tooltip :: proc(title: string, pips: []Tooltip_Pip, trigger_rect: raylib.Rectangle) {
-	mouse := raylib.GetMousePosition()
-	if !raylib.CheckCollisionPointRec(mouse, trigger_rect) {
-		return
-	}
-
-	pip_r        := f32(5)
-	pip_gap      := f32(14)
-	row_h        := pip_r*2 + 8
-	pad          := f32(10)
-	title_sz     := f32(13)
-	pips_per_row := i32(5)
-
-	has_title := title != ""
-
-	// Contar total de pips encadenados
-	total_pips := i32(0)
-	for p in pips {
-		if p.count > 0 { total_pips += p.count }
-	}
-	if total_pips == 0 { return }
-
-	num_rows         := (total_pips + pips_per_row - 1) / pips_per_row
-	pips_in_last_row := total_pips % pips_per_row
-	if pips_in_last_row == 0 { pips_in_last_row = pips_per_row }
-	max_cols         := min(total_pips, pips_per_row)
-
-	title_area := f32(0)
-	title_w    := f32(0)
-	title_cstr : cstring
-	if has_title {
-		title_cstr = strings.clone_to_cstring(title, context.temp_allocator)
-		title_w    = raylib.MeasureTextEx(constants.game_fonts.bold, title_cstr, title_sz, 0).x
-		title_area = 28
-	}
-
-	// Altura real del contenido de pips (sin gap al final de la última fila)
-	pip_content_h := f32(num_rows) * row_h - 8
-	pip_row_w     := f32(max_cols) * pip_gap
-	tip_w := max(title_w + pad*2, pip_row_w + pad*2)
-	tip_h := title_area + pip_content_h + pad
-
-	// Posición ideal: centrado sobre el trigger, a distancia fija por encima
-	tip_x := trigger_rect.x + trigger_rect.width/2 - tip_w/2
-	tip_y := trigger_rect.y - tip_h - f32(constants.UI_TOOLTIP_OFFSET)
-
-	// render_tooltip clampea a pantalla con TOOLTIP_MARGIN_X/Y y devuelve el rect final
-	r := render_tooltip({tip_x, tip_y, tip_w, tip_h})
-	tip_x = r.x
-	tip_y = r.y
-
-	// Título y separador solo si hay título
-	if has_title {
-		raylib.DrawTextEx(
-			constants.game_fonts.bold, title_cstr,
-			{tip_x + pad, tip_y + 8},
-			title_sz, 0, constants.UI_PANEL_TEXT_COLOR,
-		)
-		sep_y := tip_y + title_area - 2
-		raylib.DrawLineEx(
-			{tip_x + 4, sep_y}, {tip_x + tip_w - 4, sep_y},
-			1, raylib.Color{180, 180, 180, 180},
-		)
-	}
-
-	// Centro vertical del área de pips: pad/2 encima del contenido
-	pip_start_y := tip_y + title_area + pad/2 + pip_r
-
-	// Dibujar pips encadenados en secuencia, wrapping cada 5
-	global_idx := i32(0)
-	for p in pips {
-		if p.count <= 0 { continue }
-		for _ in 0 ..< p.count {
-			row := global_idx / pips_per_row
-			col := global_idx % pips_per_row
-
-			// Centrar la fila según cuántos pips contiene (última fila puede ser parcial)
-			pips_this_row := pips_per_row if row < num_rows - 1 else pips_in_last_row
-			row_w   := f32(pips_this_row) * pip_gap
-			start_x := tip_x + tip_w/2 - row_w/2 + pip_gap/2
-
-			cx := start_x + f32(col) * pip_gap
-			cy := pip_start_y + f32(row) * row_h
-
-			switch p.shape {
-			case .CIRCLE:
-				raylib.DrawCircle(i32(cx), i32(cy), pip_r, p.color)
-			case .TRIANGLE:
-				raylib.DrawTriangle(
-					{cx, cy - pip_r},
-					{cx - pip_r, cy + pip_r},
-					{cx + pip_r, cy + pip_r},
-					p.color,
-				)
-			case .SQUARE:
-				raylib.DrawRectangle(
-					i32(cx - pip_r), i32(cy - pip_r),
-					i32(pip_r * 2), i32(pip_r * 2),
-					p.color,
-				)
-			}
-			global_idx += 1
-		}
-	}
-}
-
-// Tooltip de texto simple (solo label, sin pips). Mismo estilo que render_pips_tooltip.
+// Tooltip de texto simple.
 render_label_tooltip :: proc(label: string, trigger_rect: raylib.Rectangle) {
 	mouse := raylib.GetMousePosition()
 	if !raylib.CheckCollisionPointRec(mouse, trigger_rect) {
@@ -804,7 +669,7 @@ render_obstacles :: proc(
 				}
 
 				level := entities.map_get_obstacle_level(m, row, col)
-				render_obstacle_pips(level, x, y, cs)
+				_ = level
 			}
 		}
 	}
@@ -1406,8 +1271,8 @@ render_game_ui :: proc(app: ^entities.App_State) {
 
 	// HUD info panels — 4 paneles separados, alineados a la izquierda
 	hud_panel_w   : f32 = 110
-	hud_panel_h   : f32 = 72
-	hud_panel_gap : f32 = 6
+	hud_panel_h   : f32 = constants.UI_PANEL_HEADER_SIZE + constants.UI_PANEL_PADDING * 2  // 32 + 28 = 60
+	hud_panel_gap : f32 = constants.UI_MARGIN_Y / 2
 	hud_px        := f32(constants.UI_MARGIN_X)
 	hud_py        := f32(constants.UI_MARGIN_Y)
 
@@ -1416,6 +1281,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		{hud_px, hud_py, hud_panel_w, hud_panel_h},
 		constants.get_text("UI_MONEY"),
 		fmt.tprintf("%d", app.sim.money),
+		constants.game_icons.money,
 	)
 
 	// Health
@@ -1424,6 +1290,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		{hud_px, hud_py, hud_panel_w, hud_panel_h},
 		constants.get_text("UI_HEALTH"),
 		fmt.tprintf("%d", app.sim.health),
+		constants.game_icons.health,
 	)
 
 	// Wave
@@ -1435,14 +1302,14 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			{hud_px, hud_py, hud_panel_w, hud_panel_h},
 			constants.get_text("UI_WAVE"),
 			fmt.tprintf("%d", display_wave),
+			constants.game_icons.wave,
 		)
 	}
 
 	// Upcoming waves preview — 3 icons horizontal
 	hud_py += hud_panel_h + hud_panel_gap
 	{
-		upcoming_panel_h : f32 = 68
-		c := render_info_panel({hud_px, hud_py, hud_panel_w, upcoming_panel_h}, constants.get_text("UI_UPCOMING"))
+		c := render_info_panel({hud_px, hud_py, hud_panel_w, hud_panel_h}, constants.get_text("UI_UPCOMING"))
 
 		base_wave := app.sim.wave_number
 		icon_r    : f32 = 9
@@ -1488,7 +1355,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			// Color primario
 			wave_color: raylib.Color
 			switch {
-			case is_boss:   wave_color = constants.COLOR_ENEMY
+			case is_boss:   wave_color = constants.COLOR_ENEMY_BOSS
 			case is_bonus:  wave_color = constants.COLOR_ENEMY_BONUS
 			case is_green:  wave_color = constants.COLOR_ENEMY_GREEN
 			case is_flying: wave_color = constants.COLOR_ENEMY_FLYING
@@ -1573,7 +1440,8 @@ render_game_ui :: proc(app: ^entities.App_State) {
 
 	// Calculate positions from right to left
 	is_between_waves := app.sim.enemies_spawned >= app.sim.enemies_to_spawn && len(app.sim.enemies) == 0
-	can_start_wave := is_between_waves || !app.sim.started
+	wave_limit_reached := app.sim.wave_number >= constants.MAX_WAVE
+	can_start_wave := (is_between_waves || !app.sim.started) && !wave_limit_reached
 	show_next_wave_button := !app.settings.auto_start_wave
 
 	next_wave_text := constants.get_text("UI_NEXT_WAVE")
@@ -1608,13 +1476,13 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	speed3_x := speed2_x + speed2_width + gap
 
 	// Active-state colors
-	active_green        := raylib.Color{40,  167, 69,  255}
-	active_green_hover  := raylib.Color{30,  140, 55,  255}
-	active_green_press  := raylib.Color{20,  110, 40,  255}
-	active_yellow       := raylib.Color{220, 170, 0,   255}
-	active_yellow_hover := raylib.Color{190, 145, 0,   255}
-	active_yellow_press := raylib.Color{160, 120, 0,   255}
-	no_color            := raylib.Color{0,   0,   0,   0  }
+	active_green        := constants.UI_BUTTON_ACTION_COLOR
+	active_green_hover  := constants.UI_BUTTON_ACTION_HOVER
+	active_green_press  := constants.UI_BUTTON_ACTION_PRESS
+	active_yellow       := constants.UI_BUTTON_PAUSE_COLOR
+	active_yellow_hover := constants.UI_BUTTON_PAUSE_HOVER
+	active_yellow_press := constants.UI_BUTTON_PAUSE_PRESS
+	no_color            := constants.COLOR_NONE
 
 	// Start button (appears before first wave or between waves)
 	if render_button(
@@ -1623,9 +1491,9 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		1,
 		can_start_wave,
 		constants.UI_TEXT_COLOR,
-		raylib.GREEN,
-		raylib.Color{0, 180, 0, 255},
-		raylib.Color{0, 150, 0, 255},
+		constants.UI_BUTTON_ACTION_COLOR,
+		constants.UI_BUTTON_ACTION_HOVER,
+		constants.UI_BUTTON_ACTION_PRESS,
 	) {
 		if can_start_wave {
 			simulation_set_pause(app, false)
@@ -1813,8 +1681,6 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 				render_goal(preview_x, preview_y, preview_size)
 			}
 
-			// Tooltip con nombre del tool
-			render_label_tooltip(tool.name, btn_rect)
 		}
 	}
 }
@@ -1905,7 +1771,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 			app.editor.current_biome = app.editor.game_map.biome
 			app.editor.current_map_name = "last_saved.map"
 			entities.add_toast(app, "Map loaded!", .SUCCESS, 2.0)
-			play_sound(.CONFIRMATION)
+			play_sound(.CONFIRMATION, .UI)
 		} else {
 			// Roll back the undo push since nothing changed
 			if len(app.editor.undo_stack) > 0 {
@@ -1915,7 +1781,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 				entities.map_snapshot_destroy(&snap)
 			}
 			entities.add_toast(app, "No quick save found", .WARNING, 3.0)
-			play_sound(.ERROR)
+			play_sound(.ERROR, .UI)
 		}
 	}
 
@@ -1937,7 +1803,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 			app.editor.map_browser_files = entities.map_list_saved()
 			app.editor.map_browser_scroll = 0
 			app.editor.show_map_browser = true
-			play_sound(.OPEN)
+			play_sound(.OPEN, .UI)
 		}
 	}
 
@@ -1954,10 +1820,10 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 		if entities.map_save(&app.editor.game_map, filename) {
 			app.editor.current_map_name = filename
 			entities.add_toast(app, fmt.tprintf("Map saved: %s", filename), .SUCCESS, 2.5)
-			play_sound(.CONFIRMATION)
+			play_sound(.CONFIRMATION, .UI)
 		} else {
 			entities.add_toast(app, "Failed to save map", .ERROR, 3.0)
-			play_sound(.ERROR)
+			play_sound(.ERROR, .UI)
 		}
 		entities.map_save(&app.editor.game_map, "last_saved.map")
 	}
@@ -2064,7 +1930,7 @@ render_map_browser :: proc(app: ^entities.App_State) {
 				app.editor.current_biome    = app.editor.game_map.biome
 				app.editor.current_map_name = strings.clone(fname)
 				entities.add_toast(app, fmt.tprintf("Loaded: %s", fname), .SUCCESS, 2.0)
-				play_sound(.CONFIRMATION)
+				play_sound(.CONFIRMATION, .UI)
 			} else {
 				// Roll back the undo push since nothing changed
 				if len(app.editor.undo_stack) > 0 {
@@ -2074,7 +1940,7 @@ render_map_browser :: proc(app: ^entities.App_State) {
 					entities.map_snapshot_destroy(&snap)
 				}
 				entities.add_toast(app, fmt.tprintf("Failed to load: %s", fname), .ERROR, 3.0)
-				play_sound(.ERROR)
+				play_sound(.ERROR, .UI)
 			}
 			app.editor.show_map_browser = false
 		}
@@ -2114,7 +1980,7 @@ render_map_browser :: proc(app: ^entities.App_State) {
 		{f32(close_x), f32(close_y), f32(close_w), f32(close_h)},
 	) {
 		app.editor.show_map_browser = false
-		play_sound(.CLOSE)
+		play_sound(.CLOSE, .UI)
 	}
 }
 
@@ -2211,22 +2077,6 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 		raylib.RED,
 	)
 
-	// --- Subtitle ---
-	wave_text := constants.get_text_f("GAME_OVER_WAVES_SURVIVED", app.sim.wave_number)
-	wave_cstr := strings.clone_to_cstring(wave_text, context.temp_allocator)
-	sub_size := f32(18)
-	wave_width := raylib.MeasureTextEx(constants.game_fonts.semibold, wave_cstr, sub_size, 0).x
-	wave_x := f32(screen_width) / 2 - wave_width / 2
-	sub_y := title_y + title_size + 6
-	raylib.DrawTextEx(
-		constants.game_fonts.semibold,
-		wave_cstr,
-		{wave_x, sub_y},
-		sub_size,
-		0,
-		raylib.WHITE,
-	)
-
 	// ============================================================
 	//  GRAPH PANEL
 	// ============================================================
@@ -2235,7 +2085,7 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 	graph_panel_h := i32(f32(screen_height) * 0.35)
 	if graph_panel_h > 220 {graph_panel_h = 220}
 	graph_panel_x := f32(screen_width) / 2 - f32(graph_panel_w) / 2
-	graph_panel_y := sub_y + sub_size + 12
+	graph_panel_y := title_y + title_size + 12
 
 	graph_rect := raylib.Rectangle {
 		graph_panel_x,
@@ -2374,7 +2224,7 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 	num_stats :: 5
 	stat_height := i32(font_size) + 4
 	stats_inner := i32(num_stats) * (stat_height + spacing) - spacing
-	stats_total := stats_inner + 30
+	stats_total := stats_inner + constants.UI_PANEL_PADDING * 2
 	stats_x := graph_panel_x
 	stats_y := graph_panel_y + f32(graph_panel_h) + f32(spacing)
 
@@ -2407,6 +2257,17 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 			constants.UI_PANEL_TEXT_COLOR,
 		)
 	}
+
+	// Waves Survived
+	draw_stat(
+		constants.get_text("GAME_OVER_WAVES_SURVIVED"),
+		fmt.tprintf("%d", app.sim.wave_number),
+		scx,
+		scw,
+		sy,
+		font_size,
+	)
+	sy += stat_height + spacing
 
 	// Play Time
 	total_secs := i32(app.sim.play_time)
@@ -2530,8 +2391,8 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	if new_master != app.settings.master_volume {
 		app.settings.master_volume = new_master
 		raylib.SetMasterVolume(new_master)
-		set_ui_volume(new_master, app.settings.ui_volume)
-		set_sfx_volume(new_master, app.settings.sfx_volume)
+		set_volume(.UI,  new_master * app.settings.ui_volume)
+		set_volume(.SFX, new_master * app.settings.sfx_volume)
 	}
 
 	item_y += item_height + spacing
@@ -2556,7 +2417,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	)
 	if new_ui_vol != app.settings.ui_volume {
 		app.settings.ui_volume = new_ui_vol
-		set_ui_volume(app.settings.master_volume, new_ui_vol)
+		set_volume(.UI, app.settings.master_volume * new_ui_vol)
 	}
 
 	item_y += item_height + spacing
@@ -2581,7 +2442,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	)
 	if new_sfx_vol != app.settings.sfx_volume {
 		app.settings.sfx_volume = new_sfx_vol
-		set_sfx_volume(app.settings.master_volume, new_sfx_vol)
+		set_volume(.SFX, app.settings.master_volume * new_sfx_vol)
 	}
 
 	item_y += item_height + spacing
@@ -2984,7 +2845,7 @@ render_select :: proc(
 					selected_index^ = i32(i)
 					changed = true
 					ui_active_dropdown_id = "" // Close after selection
-					play_sound(.CLICK)
+					play_sound(.CLICK, .UI)
 				}
 			}
 
@@ -3147,7 +3008,7 @@ render_button_with_color :: proc(
 
 	// Click check
 	if hovered && raylib.IsMouseButtonPressed(.LEFT) {
-		play_sound(.CLICK)
+		play_sound(.CLICK, .UI)
 		return true
 	}
 
@@ -3233,11 +3094,21 @@ render_button :: proc(
 	rect: raylib.Rectangle,
 	text_lines: i32 = 1,
 	enabled: bool = true,
-	text_color: raylib.Color = constants.UI_TEXT_COLOR,
-	button_color: raylib.Color = raylib.Color{0, 0, 0, 0},
-	button_hover_color: raylib.Color = raylib.Color{0, 0, 0, 0},
-	button_pressed_color: raylib.Color = raylib.Color{0, 0, 0, 0},
+	text_color: raylib.Color = constants.COLOR_NONE,
+	button_color: raylib.Color = constants.COLOR_NONE,
+	button_hover_color: raylib.Color = constants.COLOR_NONE,
+	button_pressed_color: raylib.Color = constants.COLOR_NONE,
 ) -> bool {
+	// Resolve text color: explicit > white-when-colored > default UI text
+	resolved_text_color := text_color
+	if resolved_text_color.a == 0 {
+		if button_color.a != 0 {
+			resolved_text_color = raylib.WHITE
+		} else {
+			resolved_text_color = constants.UI_TEXT_COLOR
+		}
+	}
+
 	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
 	text_width := f32(
 		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text, context.temp_allocator), font_size, 0).x,
@@ -3325,13 +3196,13 @@ render_button :: proc(
 			{line_x, line_y},
 			font_size,
 			0,
-			text_color,
+			resolved_text_color,
 		)
 	}
 
 	// Click check
 	if hovered && raylib.IsMouseButtonPressed(.LEFT) {
-		play_sound(.CLICK)
+		play_sound(.CLICK, .UI)
 		return true
 	}
 
@@ -3661,8 +3532,6 @@ draw_tower_tile :: proc(
 render_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, x, y, cs: f32) {
 	// Draw tower
 	draw_tower_tile(x, y, cs, tower.type, tower.angle, false)
-	// Draw upgrade indicators on top (only on hover)
-	render_tower_upgrades(tower, x, y, cs)
 }
 
 // Render reticle for selected cell (corner brackets style like JS)
@@ -3798,8 +3667,8 @@ render_panel :: proc(rect: raylib.Rectangle, title: string = "") -> raylib.Recta
 		constants.UI_PANEL_COLOR
 	)
 
-	margin_x := i32(constants.UI_MARGIN_X / 2)
-	margin_y := i32(constants.UI_MARGIN_Y / 2)
+	margin_x := i32(constants.UI_PANEL_PADDING)
+	margin_y := i32(constants.UI_PANEL_PADDING)
 
 	// Draw title inside panel margins if provided
 	title_height: i32 = 0
@@ -3817,10 +3686,10 @@ render_panel :: proc(rect: raylib.Rectangle, title: string = "") -> raylib.Recta
 	}
 
 	// Calculate content area (below title with margin)
-	content_x := x + margin_x
-	content_y := y + margin_y + title_height
-	content_width := width - constants.UI_MARGIN_X
-	content_height := height - constants.UI_MARGIN_X - title_height
+	content_x      := x + margin_x
+	content_y      := y + margin_y + title_height
+	content_width  := width  - margin_x * 2
+	content_height := height - margin_y * 2 - title_height
 
 	return raylib.Rectangle {
 		x = f32(content_x),
@@ -3830,43 +3699,48 @@ render_panel :: proc(rect: raylib.Rectangle, title: string = "") -> raylib.Recta
 	}
 }
 
-// Render info panel: small title at top, large bold value centered below.
+// Render info panel: icon + large bold value filling the panel, tooltip on hover.
 // Delegates shadow + background + click-blocking to render_panel (called with no title).
-// Returns the content rectangle so callers can draw additional content (e.g. icons).
-render_info_panel :: proc(rect: raylib.Rectangle, label: string, value: string = "") -> raylib.Rectangle {
+// Returns the content rectangle so callers can draw additional content.
+render_info_panel :: proc(rect: raylib.Rectangle, tooltip: string, value: string = "", icon: raylib.Texture2D = {}) -> raylib.Rectangle {
 	// render_panel handles: drop shadow, rounded background, ui_click_blocks registration.
 	_ = render_panel(rect)
 
-	x := rect.x
-	y := rect.y
+	margin    : f32 = constants.UI_PANEL_PADDING
+	content_x := rect.x + margin
+	content_y := rect.y + margin
+	content_w := rect.width  - margin * 2
+	content_h := rect.height - margin * 2
 
-	// Small label at top-left
-	label_font_size : f32 = constants.UI_PANEL_LABEL_SIZE
-	label_margin    : f32 = constants.UI_MARGIN_X / 2
-	if label != "" {
-		raylib.DrawTextEx(
-			constants.game_fonts.bold,
-			strings.clone_to_cstring(label, context.temp_allocator),
-			{x + label_margin, y + label_margin},
-			label_font_size, 0,
-			constants.UI_PANEL_LABEL_COLOR,
-		)
-	}
-	label_area_h : f32 = label_font_size + label_margin * 2
-
-	// Content area below label
-	content_x := x + label_margin
-	content_y := y + label_area_h
-	content_w := rect.width - label_margin * 2
-	content_h := rect.height - label_area_h - label_margin
-
-	// Large bold value centered inside content area
+	// Large bold value + optional icon, left-aligned and vertically centered
 	if value != "" {
 		value_font_size : f32 = constants.UI_PANEL_HEADER_SIZE
 		value_cstr  := strings.clone_to_cstring(value, context.temp_allocator)
 		value_size  := raylib.MeasureTextEx(constants.game_fonts.bold, value_cstr, value_font_size, 0)
-		value_x     := content_x + (content_w - value_size.x) / 2
-		value_y     := content_y + (content_h - value_size.y) / 2
+
+		icon_gap : f32 = 6
+		icon_w   : f32 = 0
+		icon_h   : f32 = value_size.y * 0.75  // slightly smaller than the text
+
+		if icon.id != 0 && icon.height > 0 {
+			aspect := f32(icon.width) / f32(icon.height)
+			icon_w  = icon_h * aspect
+		}
+
+		center_y := content_y + (content_h - icon_h) / 2
+
+		if icon.id != 0 && icon_w > 0 {
+			raylib.DrawTexturePro(
+				icon,
+				{0, 0, f32(icon.width), f32(icon.height)},
+				{content_x, center_y, icon_w, icon_h},
+				{0, 0}, 0,
+				raylib.WHITE,
+			)
+		}
+
+		value_x := content_x + icon_w + (icon_gap if icon_w > 0 else 0)
+		value_y := content_y + (content_h - value_size.y) / 2
 		raylib.DrawTextEx(
 			constants.game_fonts.bold,
 			value_cstr,
@@ -3874,6 +3748,11 @@ render_info_panel :: proc(rect: raylib.Rectangle, label: string, value: string =
 			value_font_size, 0,
 			constants.UI_TEXT_COLOR,
 		)
+	}
+
+	// Tooltip on hover
+	if tooltip != "" {
+		render_label_tooltip(tooltip, rect)
 	}
 
 	return raylib.Rectangle{content_x, content_y, content_w, content_h}
@@ -3893,13 +3772,23 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	strategy_height: i32 = 30
 	spacing        : i32 = constants.UI_PANEL_MARGIN / 2
 	font_size      : f32 = constants.UI_PANEL_TEXT_SIZE
-	info_height    : i32 = constants.UI_PANEL_TEXT_SIZE
-	line_height    : i32 = i32(font_size) + 5         // 19px per stat line
-	stats_height   : i32 = 4 * line_height - 5        // 4 lines (damage, speed, crit, total damage)
-	// gaps: info→stats, stats→upgrade, upgrade→strategy, strategy→sell
-	num_gaps       : i32 = 4
-	inner_height   := info_height + stats_height + 2 * button_height + strategy_height + num_gaps * spacing
-	panel_height   := inner_height + 20 // 10px top + 10px bottom padding
+	info_height    : i32 = i32(constants.UI_PANEL_LABEL_SIZE) + 4  // coincide con current_y += UI_PANEL_LABEL_SIZE + 4
+	line_height    : i32 = i32(font_size) + 10         // más espacio entre líneas de stats
+	stats_height   : i32 = 3 * line_height             // 3 líneas: daño, velocidad, críticos
+	is_enhance    := tower.type == .ENHANCE
+	show_stats    := !is_enhance
+	show_strategy := !is_enhance
+
+	// Alto del contenido = suma exacta de lo que se renderiza + gaps entre secciones
+	// Orden: info → [stats+gap] → upgrade+gap → [strategy+gap] → sell
+	content_height := info_height + button_height + spacing  // upgrade + gap
+	if show_stats    { content_height += stats_height    + spacing }
+	if show_strategy { content_height += strategy_height + spacing }
+	content_height += button_height  // sell (último, sin gap)
+
+	// render_panel consume: margin_y + title(30) + margin_y = UI_PANEL_PADDING*2 + 30
+	PANEL_OVERHEAD :: i32(constants.UI_PANEL_PADDING * 2 + 30)
+	panel_height   := content_height + PANEL_OVERHEAD
 
 	// Panel dimensions and position
 	panel_rect := raylib.Rectangle {
@@ -3928,77 +3817,124 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 		type_name = constants.get_text("TOWER_ENHANCE_NAME")
 	}
 
-	info_text := constants.get_text_f("PANEL_TOWER_INFO", type_name, tower.level)
+	// Level subtitle — separate from type_name so the title doesn't overflow at size 22
+	level_text: string
+	if tower.enhance_bonus > 0 {
+		base_level := tower.level - tower.enhance_bonus
+		level_text = fmt.tprintf("%s %d + %d", constants.get_text("PANEL_LEVEL_ABBREV"), base_level, tower.enhance_bonus)
+	} else {
+		level_text = fmt.tprintf("%s %d", constants.get_text("PANEL_LEVEL_ABBREV"), tower.level)
+	}
 
-	// Render panel background and get content area
-	content_area  := render_panel(panel_rect, info_text)
+	// Render panel background and get content area (title = type name only)
+	content_area  := render_panel(panel_rect, type_name)
 	content_x     := i32(content_area.x)
 	content_y     := i32(content_area.y)
 	content_width := i32(content_area.width)
 	button_width  := content_width
-	
+
 	current_y := content_y
 
-	// Stats — single column
-	crit_pct := entities.tower_get_critical_chance(tower) * 100
-	stat_lines := [4]string {
-		fmt.tprintf("Daño: %.1f",        tower.damage),
-		fmt.tprintf("Velocidad: %.2fs",  tower.cooldown),
-		fmt.tprintf("Críticos: %.0f%%",  crit_pct),
-		fmt.tprintf("Total: %.0f dmg",   tower.total_damage),
-	}
-	for line, i in stat_lines {
-		raylib.DrawTextEx(
-			constants.game_fonts.semibold,
-			strings.clone_to_cstring(line, context.temp_allocator),
-			{f32(content_x), f32(current_y + i32(i) * line_height)},
-			font_size,
-			0,
-			constants.UI_PANEL_TEXT_COLOR,
-		)
-	}
-	current_y += stats_height + spacing
+	// Level line (below type name, above stats)
+	raylib.DrawTextEx(
+		constants.game_fonts.semibold,
+		strings.clone_to_cstring(level_text, context.temp_allocator),
+		{f32(content_x), f32(current_y)},
+		f32(constants.UI_PANEL_LABEL_SIZE),
+		0,
+		constants.UI_PANEL_LABEL_COLOR,
+	)
+	current_y += i32(constants.UI_PANEL_LABEL_SIZE) + 4
 
-	// Upgrade button (duplica todos los stats)
+	// Stats — no se muestran para el Potenciador
+	if show_stats {
+		icon_size := f32(line_height - 2)
+
+		ICON_SLOT  :: f32(20)  // ancho fijo reservado para el ícono (todos los iconos caben aquí)
+		ICON_GAP   :: f32(6)   // margen fijo entre la columna del ícono y el texto
+
+		draw_icon_stat :: proc(icon: raylib.Texture2D, value: string, x, y: i32, icon_sz, font_sz: f32) {
+			// Ícono centrado dentro del slot fijo
+			aspect := f32(icon.width) / f32(icon.height) if icon.height > 0 else 1
+			draw_w := icon_sz * aspect
+			icon_x := f32(x) + (ICON_SLOT - draw_w) / 2  // centrado horizontalmente en el slot
+			raylib.DrawTexturePro(
+				icon,
+				{0, 0, f32(icon.width), f32(icon.height)},
+				{icon_x, f32(y), draw_w, icon_sz},
+				{0, 0},
+				0,
+				raylib.WHITE,
+			)
+			// Texto siempre a ICON_SLOT + ICON_GAP del origen — gap constante en los tres stats
+			val_cstr := strings.clone_to_cstring(value, context.temp_allocator)
+			raylib.DrawTextEx(
+				constants.game_fonts.semibold,
+				val_cstr,
+				{f32(x) + ICON_SLOT + ICON_GAP, f32(y) + (icon_sz - font_sz) / 2},
+				font_sz,
+				0,
+				constants.UI_PANEL_TEXT_COLOR,
+			)
+		}
+
+		crit_pct := entities.tower_get_critical_chance(tower) * 100
+		draw_icon_stat(constants.game_icons.damage, fmt.tprintf("%.1f",  tower.damage),   content_x, current_y + 0 * line_height, icon_size, font_size)
+		draw_icon_stat(constants.game_icons.speed,  fmt.tprintf("%.2fs", tower.cooldown), content_x, current_y + 1 * line_height, icon_size, font_size)
+		draw_icon_stat(constants.game_icons.crit,   fmt.tprintf("%.0f%%", crit_pct),      content_x, current_y + 2 * line_height, icon_size, font_size)
+		current_y += stats_height + spacing
+	}
+
+	// Upgrade button — ENHANCE se limita a nivel 5; resto se limita a nivel 20
+	base_level      := tower.level - tower.enhance_bonus
+	manual_cap      := constants.TOWER_MAX_MANUAL_LEVEL if tower.type != .ENHANCE else constants.ENHANCE_MAX_LEVEL
+	at_max_manual   := base_level >= manual_cap
+	at_max_absolute := tower.level >= constants.TOWER_MAX_LEVEL
+	at_max          := at_max_manual || at_max_absolute
 	upgrade_cost      := entities.tower_get_upgrade_cost(tower)
-	upgrade_text      := constants.get_text_f("PANEL_BUTTON_UPGRADE", upgrade_cost)
-	can_afford_upgrade := app.sim.money >= upgrade_cost
+	upgrade_text      := at_max \
+		? constants.get_text("PANEL_BUTTON_MAX_LEVEL") \
+		: constants.get_text_f("PANEL_BUTTON_UPGRADE", upgrade_cost)
+	can_afford_upgrade := !at_max && app.sim.money >= upgrade_cost
 
 	if render_button(
 		   upgrade_text,
 		   {f32(content_x), f32(current_y), f32(button_width), f32(button_height)},
+		   enabled = !at_max,
 	   ) &&
 	   can_afford_upgrade {
 		entities.tower_upgrade(tower)
 		app.sim.money -= upgrade_cost
 		app.sim.upgrades_bought += 1
-		play_sound(.CONFIRMATION)
+		play_sound(.CONFIRMATION, .UI)
 	}
 	current_y += button_height + spacing
 
-	// Strategy section with dropdown
-	strategy_names := []string {
-		constants.get_text("PANEL_STRATEGY_FIRST"),
-		constants.get_text("PANEL_STRATEGY_LAST"),
-		constants.get_text("PANEL_STRATEGY_STRONG"),
-		constants.get_text("PANEL_STRATEGY_WEAK"),
-	}
-	strategy_index := i32(tower.target_strategy)
+	// Strategy section — no aplica para el Potenciador (no tiene objetivo)
+	if show_strategy {
+		strategy_names := []string {
+			constants.get_text("PANEL_STRATEGY_FIRST"),
+			constants.get_text("PANEL_STRATEGY_LAST"),
+			constants.get_text("PANEL_STRATEGY_STRONG"),
+			constants.get_text("PANEL_STRATEGY_WEAK"),
+		}
+		strategy_index := i32(tower.target_strategy)
 
-	if render_select(
-		"strategy",
-		constants.get_text("PANEL_STRATEGY_LABEL"),
-		strategy_names,
-		&strategy_index,
-		content_x,
-		current_y,
-		button_width,
-		strategy_height,
-		true,
-	) {
-		tower.target_strategy = constants.Target_Strategy(strategy_index)
+		if render_select(
+			"strategy",
+			constants.get_text("PANEL_STRATEGY_LABEL"),
+			strategy_names,
+			&strategy_index,
+			content_x,
+			current_y,
+			button_width,
+			strategy_height,
+			true,
+		) {
+			tower.target_strategy = constants.Target_Strategy(strategy_index)
+		}
+		current_y += strategy_height + spacing
 	}
-	current_y += strategy_height + spacing
 
 	// Delete/Sell button at the bottom
 	refund := entities.tower_get_sell_refund(tower)
@@ -4010,12 +3946,12 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 		1,
 		true,
 		constants.UI_TEXT_COLOR,
-		raylib.RED,
-		raylib.Color{200, 0, 0, 255},
-		raylib.Color{170, 0, 0, 255},
+		constants.UI_BUTTON_SELL_COLOR,
+		constants.UI_BUTTON_SELL_HOVER,
+		constants.UI_BUTTON_SELL_PRESS,
 	) {
 		simulation_remove_tower_at(app, tower.r, tower.c)
-		play_sound(.CONFIRMATION)
+		play_sound(.CONFIRMATION, .UI)
 		return // Tower removed, exit panel
 	}
 }
@@ -4070,8 +4006,8 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 	)
 	current_y += info_height + spacing
 
-	// Stat: Daño (5 × nivel, igual que enemy_apply_obstacle_damage)
-	damage_stat := 5 * level
+	// Stat: Daño exponencial — base × 2^(level-1), igual que enemy_apply_obstacle_damage
+	damage_stat := i32(constants.OBSTACLE_DAMAGE_PER_LEVEL * f32(i32(1) << uint(level - 1)))
 	raylib.DrawTextEx(
 		constants.game_fonts.semibold,
 		fmt.ctprintf("Daño: %d", damage_stat),
@@ -4083,8 +4019,7 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 	current_y += stat_height + spacing
 
 	// Upgrade Level button
-	level_cost :=
-		constants.OBSTACLE_UPGRADE_COST_BASE + (level - 1) * constants.OBSTACLE_UPGRADE_COST_INCREMENT
+	level_cost := constants.OBSTACLE_UPGRADE_COST_BASE * i32(i32(1) << uint(level - 1))
 	level_text := constants.get_text_f("PANEL_BUTTON_UPGRADE_LEVEL", level_cost)
 	can_afford_level := app.sim.money >= level_cost
 
@@ -4096,7 +4031,7 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 		entities.map_set_obstacle_level(&app.editor.game_map, row, col, level + 1)
 		app.sim.money -= level_cost
 		app.sim.upgrades_bought += 1
-		play_sound(.CONFIRMATION)
+		play_sound(.CONFIRMATION, .UI)
 	}
 	current_y += button_height + spacing
 
@@ -4110,9 +4045,9 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 		1,
 		true,
 		constants.UI_TEXT_COLOR,
-		raylib.RED,
-		raylib.Color{200, 0, 0, 255},
-		raylib.Color{170, 0, 0, 255},
+		constants.UI_BUTTON_SELL_COLOR,
+		constants.UI_BUTTON_SELL_HOVER,
+		constants.UI_BUTTON_SELL_PRESS,
 	) {
 		app.editor.game_map.obstacle_grid[row][col] = .EMPTY
 		// Clear level data so a new obstacle placed here starts at level 1
@@ -4122,7 +4057,7 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 		}
 		app.sim.money += sell_cost
 		app.selected_obstacle.valid = false
-		play_sound(.CONFIRMATION)
+		play_sound(.CONFIRMATION, .UI)
 	}
 }
 
@@ -4160,18 +4095,52 @@ render_card :: proc(
 	card_rect := raylib.Rectangle{x, y, CARD_W, CARD_H}
 	raylib.DrawRectangleRounded(card_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, bg)
 
-	// Preview (torre u obstáculo) — ocupa el tercio superior
+	// Preview — ocupa el tercio superior
 	preview_size : f32 = 58
 	preview_x := x + (CARD_W - preview_size) / 2
 	preview_y := y + 12
-	if card.kind == .OBSTACLE {
+	icon_cx   := x + CARD_W / 2
+	icon_cy   := preview_y + preview_size / 2
+	switch card.kind {
+	case .OBSTACLE:
 		draw_obstacle_preview(preview_x, preview_y, preview_size)
-	} else {
+	case .TOWER:
 		dummy := entities.tower_init(card.tower_type, 0, 0)
 		old_show_range := app.settings.show_tower_range
 		app.settings.show_tower_range = false
 		render_tower(app, &dummy, preview_x, preview_y, preview_size)
 		app.settings.show_tower_range = old_show_range
+	case .INTEREST_BOOST:
+		raylib.DrawCircle(i32(icon_cx), i32(icon_cy), 20, raylib.Color{200, 160, 20, 255})
+		raylib.DrawCircle(i32(icon_cx), i32(icon_cy), 16, raylib.Color{240, 200, 40, 255})
+		lbl   := cstring("x2")
+		lbl_w := raylib.MeasureTextEx(constants.game_fonts.semibold, lbl, 16, 0).x
+		raylib.DrawTextEx(constants.game_fonts.semibold, lbl, {icon_cx - lbl_w / 2, icon_cy - 9}, 16, 0, raylib.Color{80, 40, 0, 255})
+	case .EXTRA_DRAW:
+		raylib.DrawRectangleRounded({icon_cx - 14, icon_cy - 16, 26, 18}, 0.2, 4, raylib.Color{80, 140, 220, 255})
+		raylib.DrawRectangleRounded({icon_cx - 12, icon_cy - 4,  26, 18}, 0.2, 4, raylib.Color{110, 170, 255, 255})
+		raylib.DrawRectangleRoundedLinesEx({icon_cx - 12, icon_cy - 4, 26, 18}, 0.2, 4, 1.5, raylib.Color{180, 210, 255, 255})
+		lbl2   := cstring("?")
+		lbl2_w := raylib.MeasureTextEx(constants.game_fonts.semibold, lbl2, 14, 0).x
+		raylib.DrawTextEx(constants.game_fonts.semibold, lbl2, {icon_cx - lbl2_w / 2 + 1, icon_cy - 3}, 14, 0, raylib.WHITE)
+	case .WEAKEN:
+		raylib.DrawCircle(i32(icon_cx), i32(icon_cy) - 8, 14, raylib.Color{200, 60, 60, 255})
+		raylib.DrawCircle(i32(icon_cx), i32(icon_cy) - 8, 10, raylib.Color{240, 100, 80, 255})
+		skull  := cstring("↓")
+		sk_w   := raylib.MeasureTextEx(constants.game_fonts.semibold, skull, 18, 0).x
+		raylib.DrawTextEx(constants.game_fonts.semibold, skull, {icon_cx - sk_w / 2, icon_cy - 20}, 18, 0, raylib.WHITE)
+		pct    := cstring("30%")
+		pct_w  := raylib.MeasureTextEx(constants.game_fonts.regular, pct, 11, 0).x
+		raylib.DrawTextEx(constants.game_fonts.regular, pct, {icon_cx - pct_w / 2, icon_cy + 8}, 11, 0, raylib.Color{255, 160, 160, 255})
+	case .DIVIDEND:
+		raylib.DrawCircle(i32(icon_cx), i32(icon_cy) - 6, 15, raylib.Color{60, 180, 100, 255})
+		raylib.DrawCircle(i32(icon_cx), i32(icon_cy) - 6, 11, raylib.Color{80, 220, 120, 255})
+		dlbl   := cstring("$")
+		dlbl_w := raylib.MeasureTextEx(constants.game_fonts.semibold, dlbl, 16, 0).x
+		raylib.DrawTextEx(constants.game_fonts.semibold, dlbl, {icon_cx - dlbl_w / 2, icon_cy - 16}, 16, 0, raylib.Color{10, 60, 20, 255})
+		pct2   := cstring("15%")
+		pct2_w := raylib.MeasureTextEx(constants.game_fonts.regular, pct2, 11, 0).x
+		raylib.DrawTextEx(constants.game_fonts.regular, pct2, {icon_cx - pct2_w / 2, icon_cy + 10}, 11, 0, raylib.Color{160, 255, 180, 255})
 	}
 
 	// Nombre de la carta
@@ -4226,51 +4195,98 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		CARD_H + panel_pad * 2,
 	}
 
-	// Botón de re-reparto — solo visible antes de la primera oleada
-	if !app.sim.started {
-		btn_w  : f32 = 130
+	// Botón de re-reparto — gratis antes de iniciar, cuesta HAND_REDEAL_COST después
+	{
+		game_started := app.sim.started
+		can_redeal   := !game_started || app.sim.money >= constants.HAND_REDEAL_COST
+		btn_label    := game_started \
+			? fmt.tprintf("%s ($%d)", constants.get_text("DECK_REDEAL_BUTTON"), constants.HAND_REDEAL_COST) \
+			: constants.get_text("DECK_REDEAL_BUTTON")
+		btn_w  : f32 = 150
 		btn_h  : f32 = 28
 		btn_x  := (screen_w - btn_w) / 2
 		btn_y  := card_y - panel_pad - btn_h - 6
 		btn_rect := raylib.Rectangle{btn_x, btn_y, btn_w, btn_h}
-		append(&ui_click_blocks, btn_rect)
-		if render_button(
-			constants.get_text("DECK_REDEAL_BUTTON"),
-			btn_rect,
-		) {
+		if render_button(btn_label, btn_rect, enabled = can_redeal) {
+			if game_started {
+				app.sim.money -= constants.HAND_REDEAL_COST
+			}
 			entities.hand_redeal(&app.sim)
 			app.sim.selected_build_tower = .EMPTY
 			app.sim.selected_card_idx    = -1
-			play_sound(.SELECT)
+			play_sound(.SELECT, .UI)
 		}
 	}
 
+	sold_this_frame := false
 	for i := 0; i < len(app.sim.hand); i += 1 {
 		card       := app.sim.hand[i]
 		cx         := start_x + f32(i) * (CARD_W + CARD_GAP)
 		can_afford := app.sim.money >= entities.card_cost(card)
 		is_selected := app.sim.selected_card_idx == i
 
-		// Hover: elevación leve
+		// Hover: detectar si el mouse está sobre la carta o el botón de venta debajo
+		SELL_BTN_H :: f32(22)
+		HOVER_LIFT  :: f32(28) // levantada extra para dejar espacio al botón debajo
 		mouse_x := f32(raylib.GetMouseX())
 		mouse_y := f32(raylib.GetMouseY())
+		// Zona de hover incluye la carta levantada + el espacio del botón debajo
 		is_hovered := mouse_x >= cx && mouse_x <= cx + CARD_W &&
-		              mouse_y >= card_y && mouse_y <= card_y + CARD_H
+		              mouse_y >= card_y - HOVER_LIFT && mouse_y <= card_y + CARD_H
 		draw_y := card_y
 		if is_hovered && !is_selected {
-			draw_y -= 6
+			draw_y -= HOVER_LIFT
 		}
 		if is_selected {
-			draw_y -= 10
+			draw_y -= HOVER_LIFT
 		}
 
 		render_card(app, card, cx, draw_y, is_selected, can_afford)
 
-		// Click en la carta
+		// Botón de venta — aparece debajo de la carta solo al hacer hover
+		if is_hovered {
+			sell_btn_rect := raylib.Rectangle{cx, draw_y + CARD_H + 2, CARD_W, SELL_BTN_H}
+			sell_label := fmt.tprintf("%s $%d", constants.get_text("CARD_SELL_BUTTON"), constants.CARD_SELL_PRICE)
+			if render_button(
+				sell_label,
+				sell_btn_rect,
+				button_color         = constants.UI_BUTTON_SELL_COLOR,
+				button_hover_color   = constants.UI_BUTTON_SELL_HOVER,
+				button_pressed_color = constants.UI_BUTTON_SELL_PRESS,
+			) && !sold_this_frame {
+				if app.sim.selected_card_idx == i {
+					app.sim.selected_build_tower = .EMPTY
+					app.sim.selected_card_idx    = -1
+				}
+				entities.card_sell(&app.sim, i)
+				entities.app_add_money(app, constants.CARD_SELL_PRICE)
+				sold_this_frame = true
+				i -= 1
+				continue
+			}
+		}
+
+		// Click en la carta completa
 		card_rect := raylib.Rectangle{cx, draw_y, CARD_W, CARD_H}
 		append(&ui_click_blocks, card_rect)
 		if raylib.IsMouseButtonPressed(.LEFT) && is_hovered && can_afford {
-			if is_selected {
+			if card.kind == .INTEREST_BOOST {
+				app.sim.interest_multiplier *= 2
+				entities.card_play(&app.sim, i)
+				play_sound(.CONFIRMATION, .UI)
+			} else if card.kind == .EXTRA_DRAW {
+				draw_random_card(&app.sim)
+				entities.card_play(&app.sim, i)
+				play_sound(.CONFIRMATION, .UI)
+			} else if card.kind == .WEAKEN {
+				app.sim.next_wave_weakened = true
+				entities.card_play(&app.sim, i)
+				play_sound(.CONFIRMATION, .UI)
+			} else if card.kind == .DIVIDEND {
+				app.sim.dividend_stacks += 1
+				entities.card_play(&app.sim, i)
+				play_sound(.CONFIRMATION, .UI)
+			} else if is_selected {
 				// Deseleccionar
 				app.sim.selected_build_tower = .EMPTY
 				app.sim.selected_card_idx    = -1
@@ -4281,8 +4297,6 @@ render_card_hand :: proc(app: ^entities.App_State) {
 			}
 		}
 
-		// Tooltip con nombre
-		render_label_tooltip(entities.card_name(card), card_rect)
 	}
 }
 
@@ -4294,97 +4308,38 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 	// Fondo oscuro
 	raylib.DrawRectangle(0, 0, i32(screen_w), i32(screen_h), raylib.Color{0, 0, 0, 170})
 
-	// Panel central
-	panel_w : f32 = 440
-	panel_h : f32 = 260
-	panel_x := (screen_w - panel_w) / 2
-	panel_y := (screen_h - panel_h) / 2
-	panel_rect := raylib.Rectangle{panel_x, panel_y, panel_w, panel_h}
-	raylib.DrawRectangleRounded(panel_rect, 0.08, 8, raylib.Color{18, 20, 30, 245})
-	raylib.DrawRectangleRoundedLinesEx(panel_rect, 0.08, 8, 2, raylib.Color{100, 120, 200, 200})
+	// Las 3 cartas centradas en pantalla
+	CARD_GAP_OVERLAY :: f32(16)
+	cards_total_w := f32(3) * CARD_W + f32(2) * CARD_GAP_OVERLAY
 
-	// Título
-	title     := strings.clone_to_cstring(constants.get_text("DECK_CHOOSE_CARD"), context.temp_allocator)
+	// Título y subtítulo centrados sobre las cartas
+	title      := strings.clone_to_cstring(constants.get_text("DECK_CHOOSE_CARD"), context.temp_allocator)
 	title_size : f32 = 20
-	title_w   := raylib.MeasureTextEx(constants.game_fonts.semibold, title, title_size, 0).x
-	raylib.DrawTextEx(
-		constants.game_fonts.semibold,
-		title,
-		{panel_x + (panel_w - title_w) / 2, panel_y + 14},
-		title_size, 0, raylib.WHITE,
-	)
+	title_w    := raylib.MeasureTextEx(constants.game_fonts.semibold, title, title_size, 0).x
+	title_x    := (screen_w - title_w) / 2
+	title_y    := screen_h / 2 - CARD_H / 2 - 52
+	raylib.DrawTextEx(constants.game_fonts.semibold, title, {title_x, title_y}, title_size, 0, raylib.WHITE)
 
-	// Subtítulo
-	sub     := strings.clone_to_cstring(constants.get_text("DECK_CHOOSE_CARD_SUB"), context.temp_allocator)
-	sub_size : f32 = 11
-	sub_w   := raylib.MeasureTextEx(constants.game_fonts.regular, sub, sub_size, 0).x
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		sub,
-		{panel_x + (panel_w - sub_w) / 2, panel_y + 40},
-		sub_size, 0, raylib.Color{160, 160, 200, 220},
-	)
-
-	// Las 3 cartas opcionales (más grandes que en la mano)
-	BIG_W : f32 = 100
-	BIG_H : f32 = 140
-	cards_total_w := f32(3) * BIG_W + f32(2) * 16
-	cx := panel_x + (panel_w - cards_total_w) / 2
-	cy := panel_y + 60
+	cx := (screen_w - cards_total_w) / 2
+	cy := screen_h / 2 - CARD_H / 2
 
 	for i in 0 ..< 3 {
 		choice := app.sim.card_selection_choices[i]
-		card_x := cx + f32(i) * (BIG_W + 16)
+		card_x := cx + f32(i) * (CARD_W + CARD_GAP_OVERLAY)
 
-		big_rect := raylib.Rectangle{card_x, cy, BIG_W, BIG_H}
-		raylib.DrawRectangleRounded(big_rect, 0.12, 8, constants.UI_PANEL_COLOR)
-		raylib.DrawRectangleRoundedLinesEx(big_rect, 0.12, 8, 2, raylib.Color{160, 160, 180, 200})
+		can_afford := app.sim.money >= entities.card_cost(choice)
+		render_card(app, choice, card_x, cy, false, can_afford)
 
-		// Preview (torre u obstáculo)
-		preview_size : f32 = 48
-		preview_x := card_x + (BIG_W - preview_size) / 2
-		preview_y := cy + 12
-		if choice.kind == .OBSTACLE {
-			draw_obstacle_preview(preview_x, preview_y, preview_size)
-		} else {
-			dummy := entities.tower_init(choice.tower_type, 0, 0)
-			old_show_range := app.settings.show_tower_range
-			app.settings.show_tower_range = false
-			render_tower(app, &dummy, preview_x, preview_y, preview_size)
-			app.settings.show_tower_range = old_show_range
-		}
-
-		// Nombre
-		name   := entities.card_name(choice)
-		name_s : f32 = 11
-		name_w := raylib.MeasureTextEx(constants.game_fonts.regular, strings.clone_to_cstring(name, context.temp_allocator), name_s, 0).x
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring(name, context.temp_allocator),
-			{card_x + (BIG_W - name_w) / 2, cy + 68},
-			name_s, 0, raylib.Color{220, 220, 220, 255},
-		)
-
-		// Costo
-		cost_str  := fmt.ctprintf("$%d", entities.card_cost(choice))
-		cost_size : f32 = 13
-		cost_w := raylib.MeasureTextEx(constants.game_fonts.semibold, cost_str, cost_size, 0).x
-		raylib.DrawTextEx(
-			constants.game_fonts.semibold,
-			cost_str,
-			{card_x + (BIG_W - cost_w) / 2, cy + 84},
-			cost_size, 0, raylib.Color{80, 220, 100, 255},
-		)
-
-		// Hover / click
+		// Hover highlight + click
 		mouse_x := f32(raylib.GetMouseX())
 		mouse_y := f32(raylib.GetMouseY())
-		is_hovered := mouse_x >= card_x && mouse_x <= card_x + BIG_W &&
-		              mouse_y >= cy     && mouse_y <= cy + BIG_H
+		card_rect := raylib.Rectangle{card_x, cy, CARD_W, CARD_H}
+		is_hovered := mouse_x >= card_rect.x && mouse_x <= card_rect.x + card_rect.width &&
+		              mouse_y >= card_rect.y && mouse_y <= card_rect.y + card_rect.height
 		if is_hovered {
-			raylib.DrawRectangleRoundedLinesEx(big_rect, 0.12, 8, 3, raylib.Color{60, 220, 80, 255})
+			raylib.DrawRectangleRoundedLinesEx(card_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 3, raylib.Color{60, 220, 80, 255})
 		}
-		append(&ui_click_blocks, big_rect)
+		append(&ui_click_blocks, card_rect)
 
 		if raylib.IsMouseButtonPressed(.LEFT) && is_hovered {
 			entities.card_add_to_hand(&app.sim, choice)
@@ -4396,6 +4351,24 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 			)
 			app.sim.card_selection_active = false
 			simulation_set_pause(app, false)
+		}
+	}
+
+	// Botón de reroll — disponible desde la oleada CARD_REROLL_MIN_WAVE
+	if app.sim.wave_number >= constants.CARD_REROLL_MIN_WAVE {
+		can_reroll := app.sim.money >= constants.CARD_REROLL_COST
+		reroll_label := fmt.tprintf("%s ($%d)", constants.get_text("DECK_REROLL_BUTTON"), constants.CARD_REROLL_COST)
+		btn_rect := raylib.Rectangle{
+			(screen_w - 160) / 2,
+			cy + CARD_H + 20,
+			160, 30,
+		}
+		col     := raylib.Color{80, 100, 180, 220} if can_reroll else raylib.Color{60, 60, 60, 180}
+		hov_col := raylib.Color{100, 130, 220, 255} if can_reroll else raylib.Color{60, 60, 60, 180}
+		if render_button(reroll_label, btn_rect, button_color = col, button_hover_color = hov_col) && can_reroll {
+			app.sim.money -= constants.CARD_REROLL_COST
+			generate_card_selection(&app.sim)
+			play_sound(.SELECT, .UI)
 		}
 	}
 }

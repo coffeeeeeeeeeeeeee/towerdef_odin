@@ -5,8 +5,12 @@ import "core:math/rand"
 
 // Tipo de carta
 Card_Kind :: enum {
-	TOWER,    // valor cero → compatible con código existente
+	TOWER,          // valor cero → compatible con código existente
 	OBSTACLE,
+	INTEREST_BOOST, // duplica el multiplicador de interés entre oleadas
+	EXTRA_DRAW,     // aumenta permanentemente el tamaño de la mano en +1
+	WEAKEN,         // la próxima oleada tiene enemigos con -30% HP
+	DIVIDEND,       // al final de cada oleada devuelve un % del dinero gastado
 }
 
 // Una carta del mazo
@@ -74,6 +78,16 @@ card_play :: proc(sim: ^Simulation, hand_idx: int) {
 	ordered_remove(&sim.hand, hand_idx)
 }
 
+// Vende una carta de la mano: la mueve al descarte y devuelve CARD_SELL_PRICE al jugador.
+card_sell :: proc(sim: ^Simulation, hand_idx: int) {
+	if hand_idx < 0 || hand_idx >= len(sim.hand) {
+		return
+	}
+	card := sim.hand[hand_idx]
+	append(&sim.discard, card)
+	ordered_remove(&sim.hand, hand_idx)
+}
+
 // Añade una carta directamente a la mano.
 card_add_to_hand :: proc(sim: ^Simulation, card: Card) {
 	append(&sim.hand, card)
@@ -106,6 +120,18 @@ card_name :: proc(card: Card) -> string {
 	if card.kind == .OBSTACLE {
 		return constants.get_text("CARD_OBSTACLE_NAME")
 	}
+	if card.kind == .INTEREST_BOOST {
+		return constants.get_text("CARD_INTEREST_BOOST_NAME")
+	}
+	if card.kind == .EXTRA_DRAW {
+		return constants.get_text("CARD_EXTRA_DRAW_NAME")
+	}
+	if card.kind == .WEAKEN {
+		return constants.get_text("CARD_WEAKEN_NAME")
+	}
+	if card.kind == .DIVIDEND {
+		return constants.get_text("CARD_DIVIDEND_NAME")
+	}
 	switch card.tower_type {
 	case .ARCHER:  return constants.get_text("TOWER_ARCHER_NAME")
 	case .CANNON:  return constants.get_text("TOWER_CANNON_NAME")
@@ -128,6 +154,10 @@ card_to_tile :: proc(card: Card) -> constants.Tile {
 	if card.kind == .OBSTACLE {
 		return .OBSTACLE
 	}
+	if card.kind == .INTEREST_BOOST || card.kind == .EXTRA_DRAW ||
+	   card.kind == .WEAKEN        || card.kind == .DIVIDEND {
+		return .EMPTY  // efectos instantáneos, sin colocación en el mapa
+	}
 	switch card.tower_type {
 	case .ARCHER:  return .TOWER_ARCHER
 	case .CANNON:  return .TOWER_CANNON
@@ -149,6 +179,10 @@ card_tower_type_to_tile :: proc(tower_type: constants.Tower_Type) -> constants.T
 card_cost :: proc(card: Card) -> i32 {
 	if card.kind == .OBSTACLE {
 		return constants.OBSTACLE_BASE_COST
+	}
+	if card.kind == .INTEREST_BOOST || card.kind == .EXTRA_DRAW ||
+	   card.kind == .WEAKEN        || card.kind == .DIVIDEND {
+		return 0  // sin costo: son beneficios estratégicos
 	}
 	return constants.TOWER_SPECS[card.tower_type].cost
 }

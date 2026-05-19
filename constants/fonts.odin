@@ -4,14 +4,27 @@ import raylib "vendor:raylib"
 
 // Font resources
 Fonts :: struct {
-	regular: raylib.Font,
-	light: raylib.Font,
+	regular:  raylib.Font,
+	light:    raylib.Font,
 	semibold: raylib.Font,
-	bold: raylib.Font,
+	bold:     raylib.Font,
+}
+
+// Icon textures
+Icons :: struct {
+	damage: raylib.Texture2D,
+	speed:  raylib.Texture2D,
+	crit:   raylib.Texture2D,
+	health: raylib.Texture2D,
+	wave:   raylib.Texture2D,
+	money:  raylib.Texture2D,
 }
 
 // Global fonts instance
 game_fonts: Fonts
+
+// Global icons instance
+game_icons: Icons
 
 // Font paths
 FONT_REGULAR_PATH :: "fonts/Orbitron-SemiBold.ttf"
@@ -60,6 +73,41 @@ load_fonts :: proc() {
 	raylib.SetTextureFilter(game_fonts.light.texture, .TRILINEAR)
 	raylib.SetTextureFilter(game_fonts.semibold.texture, .TRILINEAR)
 	raylib.SetTextureFilter(game_fonts.bold.texture, .TRILINEAR)
+}
+
+// Load all icon textures
+load_icons :: proc() {
+	game_icons.damage = raylib.LoadTexture("images/icon_damage.png")
+	game_icons.speed  = raylib.LoadTexture("images/icon_speed.png")
+	game_icons.crit   = raylib.LoadTexture("images/icon_crit.png")
+	game_icons.health = raylib.LoadTexture("images/icon_health.png")
+	game_icons.wave   = raylib.LoadTexture("images/icon_wave.png")
+	game_icons.money  = raylib.LoadTexture("images/icon_money.png")
+
+	// Generate mipmaps and enable trilinear filtering for smooth downscaling
+	raylib.GenTextureMipmaps(&game_icons.damage)
+	raylib.GenTextureMipmaps(&game_icons.speed)
+	raylib.GenTextureMipmaps(&game_icons.crit)
+	raylib.GenTextureMipmaps(&game_icons.health)
+	raylib.GenTextureMipmaps(&game_icons.wave)
+	raylib.GenTextureMipmaps(&game_icons.money)
+
+	raylib.SetTextureFilter(game_icons.damage, .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.speed,  .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.crit,   .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.health, .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.wave,   .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.money,  .TRILINEAR)
+}
+
+// Unload all icon textures
+unload_icons :: proc() {
+	raylib.UnloadTexture(game_icons.damage)
+	raylib.UnloadTexture(game_icons.speed)
+	raylib.UnloadTexture(game_icons.crit)
+	raylib.UnloadTexture(game_icons.health)
+	raylib.UnloadTexture(game_icons.wave)
+	raylib.UnloadTexture(game_icons.money)
 }
 
 // Unload all fonts

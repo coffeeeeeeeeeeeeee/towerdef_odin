@@ -61,6 +61,19 @@ Simulation :: struct {
 	card_selection_active:  bool,
 	card_selection_choices: [3]Card,
 
+	// Multiplicador de interés (se duplica por cada carta INTEREST_BOOST jugada)
+	interest_multiplier: f32,
+
+	// EXTRA_DRAW: mano ya modificada vía hand_size, no necesita campo extra
+
+	// WEAKEN: pending = carta jugada fuera de oleada; active = oleada en curso debilitada
+	next_wave_weakened: bool,
+	is_wave_weakened:   bool,
+
+	// DIVIDEND: stacks = cartas jugadas; wave_start_money = snapshot al inicio de oleada
+	dividend_stacks:    i32,
+	wave_start_money:   i32,
+
 	// Stats
 	enemies_killed: i32,
 	money_earned: i32,

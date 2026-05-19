@@ -38,6 +38,9 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 	// Update enemies
 	update_enemies(app, s_dt)
 
+	// Recalcular bonus de torres ENHANCE (inmediato, aditivo, sin cooldown)
+	update_enhance_bonuses(app)
+
 	// Update towers
 	update_towers(app, s_dt)
 
@@ -65,7 +68,9 @@ update_wave :: proc(app: ^entities.App_State, dt: f32) {
 	// and enemies_to_spawn > 0 to avoid triggering before the first wave is launched.
 	if sim.started && sim.enemies_to_spawn > 0 &&
 	   sim.enemies_spawned >= sim.enemies_to_spawn && len(sim.enemies) == 0 {
-		if app.settings.auto_start_wave {
+		if sim.wave_number >= constants.MAX_WAVE {
+			entities.app_set_state(app, .GAME_OVER)
+		} else if app.settings.auto_start_wave {
 			start_next_wave(app)
 		}
 	}
@@ -76,26 +81,46 @@ start_next_wave :: proc(app: ^entities.App_State) {
 
 	// Wave complete SFX (not on the very first wave start)
 	if sim.wave_number > 0 {
-		play_sfx(.WAVE_COMPLETE)
+		play_sound(.WAVE_COMPLETE, .SFX)
 	}
 
-	// Interest bonus: reward the player for saving money between waves
 	if sim.wave_number > 0 {
-		interest := i32(f32(sim.money) * constants.INTEREST_RATE)
+		// Dividend: devuelve un % del dinero gastado durante la oleada anterior
+		if sim.dividend_stacks > 0 {
+			spent    := max(0, sim.wave_start_money - sim.money)
+			dividend := i32(f32(spent) * constants.DIVIDEND_RATE * f32(sim.dividend_stacks))
+			if dividend > 0 {
+				entities.app_add_money(app, dividend)
+				entities.add_toast(app, fmt.tprintf("+$%d dividendo", dividend), .INFO)
+			}
+		}
+
+		// Interest bonus: reward the player for saving money between waves
+		interest := i32(f32(sim.money) * constants.INTEREST_RATE * sim.interest_multiplier)
 		if interest > 0 {
 			entities.app_add_money(app, interest)
 			entities.add_toast(app, fmt.tprintf("+$%d interés", interest), .INFO)
 		}
 	}
 
+	// Wave clear bonus: escala con el número de oleada completada
+	if sim.wave_number > 0 {
+		wave_reward := constants.MONEY_WAVE_CLEAR_BASE + sim.wave_number * constants.MONEY_WAVE_CLEAR_PER_WAVE
+		entities.app_add_money(app, wave_reward)
+		entities.add_toast(app, fmt.tprintf("+$%d oleada", wave_reward), .SUCCESS)
+	}
+
+	// Snapshot de dinero para calcular el dividendo de la próxima oleada
+	sim.wave_start_money = sim.money
+
+	// Transferir el flag de debilitamiento: la carta jugada afecta la oleada que empieza
+	sim.is_wave_weakened   = sim.next_wave_weakened
+	sim.next_wave_weakened = false
+
 	sim.started = true  // Mark game as started
 	sim.wave_number += 1
 	sim.enemies_spawned = 0
 	sim.wave_time = 0
-
-	// La mano persiste entre oleadas; solo se deselecciona la carta activa
-	sim.selected_build_tower = .EMPTY
-	sim.selected_card_idx    = -1
 
 	// Determine wave type based on wave number.
 	sim.is_wave_boss  = sim.wave_number % constants.BOSS_WAVE_INTERVAL == 0
@@ -185,22 +210,57 @@ start_next_wave :: proc(app: ^entities.App_State) {
 
 	// Selección de carta cada DECK_SELECTION_INTERVAL oleadas (pausa el juego)
 	if sim.wave_number % constants.DECK_SELECTION_INTERVAL == 0 {
-		selection_pool := [9]entities.Card{
-			{kind = .TOWER, tower_type = .ARCHER},
-			{kind = .TOWER, tower_type = .CANNON},
-			{kind = .TOWER, tower_type = .SNIPER},
-			{kind = .TOWER, tower_type = .MISSILE},
-			{kind = .TOWER, tower_type = .LASER},
-			{kind = .TOWER, tower_type = .ICE},
-			{kind = .TOWER, tower_type = .ENHANCE},
-			{kind = .OBSTACLE},
-			{kind = .OBSTACLE},
-		}
-		for i in 0 ..< 3 {
-			sim.card_selection_choices[i] = selection_pool[rand.int_max(9)]
-		}
+		generate_card_selection(sim)
 		sim.card_selection_active = true
 		simulation_set_pause(app, true)
+	}
+}
+
+// Agrega una carta aleatoria del pool completo directamente a la mano.
+draw_random_card :: proc(sim: ^entities.Simulation) {
+	pool := [13]entities.Card{
+		{kind = .TOWER, tower_type = .ARCHER},
+		{kind = .TOWER, tower_type = .CANNON},
+		{kind = .TOWER, tower_type = .SNIPER},
+		{kind = .TOWER, tower_type = .MISSILE},
+		{kind = .TOWER, tower_type = .LASER},
+		{kind = .TOWER, tower_type = .ICE},
+		{kind = .TOWER, tower_type = .ENHANCE},
+		{kind = .OBSTACLE},
+		{kind = .OBSTACLE},
+		{kind = .INTEREST_BOOST},
+		{kind = .EXTRA_DRAW},
+		{kind = .WEAKEN},
+		{kind = .DIVIDEND},
+	}
+	entities.card_add_to_hand(sim, pool[rand.int_max(13)])
+}
+
+// Rellena sim.card_selection_choices con 3 cartas distintas del pool.
+// Puede llamarse desde start_next_wave o desde el botón de reroll.
+generate_card_selection :: proc(sim: ^entities.Simulation) {
+	selection_pool := [13]entities.Card{
+		{kind = .TOWER, tower_type = .ARCHER},
+		{kind = .TOWER, tower_type = .CANNON},
+		{kind = .TOWER, tower_type = .SNIPER},
+		{kind = .TOWER, tower_type = .MISSILE},
+		{kind = .TOWER, tower_type = .LASER},
+		{kind = .TOWER, tower_type = .ICE},
+		{kind = .TOWER, tower_type = .ENHANCE},
+		{kind = .OBSTACLE},
+		{kind = .OBSTACLE},
+		{kind = .INTEREST_BOOST},
+		{kind = .EXTRA_DRAW},
+		{kind = .WEAKEN},
+		{kind = .DIVIDEND},
+	}
+	available := [13]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	n := 13
+	for i in 0 ..< 3 {
+		j := rand.int_max(n)
+		sim.card_selection_choices[i] = selection_pool[available[j]]
+		available[j] = available[n - 1]
+		n -= 1
 	}
 }
 
@@ -220,7 +280,7 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 		spawn.wave_time += dt
 		if spawn.wave_time >= spawn.next_spawn_delay {
 			spawn.wave_time = 0
-			spawn.next_spawn_delay = get_next_spawn_spawn_delay()
+			spawn.next_spawn_delay = get_next_spawn_delay()
 			spawn.enemies_spawned += 1
 			sim.enemies_spawned += 1 // Increment global counter
 
@@ -243,11 +303,13 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 				multiplier = constants.ENEMY_HEALTH_DEFAULT
 			}
 
+			weaken := constants.WEAKEN_HP_MULTIPLIER if sim.is_wave_weakened else 1.0
 			hp :=
 				constants.ENEMY_BASE_HP *
 				math.pow(constants.ENEMY_GROWTH_RATE, f32(sim.wave_number - 1)) *
 				multiplier *
-				constants.ENEMY_GLOBAL_HP_MULTIPLIER
+				constants.ENEMY_GLOBAL_HP_MULTIPLIER *
+				weaken
 
 			// Speed — bonus enemies use their own speed constant
 			speed: f32
@@ -283,13 +345,9 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			entities.enemy_set_path(&enemy, spawn.path)
 
 			append(&sim.enemies, enemy)
-			play_sfx(.ENEMY_SPAWN)
+			play_sound(.ENEMY_SPAWN, .SFX)
 		}
 	}
-}
-
-get_next_spawn_spawn_delay :: proc() -> f32 {
-	return 0.5 + rand.float32() * 1.0
 }
 
 // Limpia las referencias de proyectiles que apuntaban a un enemigo que va a ser removido.
@@ -327,7 +385,7 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 				damage = constants.ENEMY_GOAL_DAMAGE_BOSS
 			}
 			entities.app_take_damage(app, damage)
-			play_sfx(.ENEMY_REACH_GOAL)
+			play_sound(.ENEMY_REACH_GOAL, .SFX)
 
 			// Invalida punteros de proyectiles antes de remover
 			nullify_projectile_targets(sim, enemy)
@@ -363,7 +421,7 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 
 		// Check death
 		if enemy.hp <= 0 {
-			play_sfx(.ENEMY_DEATH)
+			play_sound(.ENEMY_DEATH, .SFX)
 
 			// Enemy died - give reward
 			reward := constants.ENEMY_REWARD_DEFAULT
@@ -381,7 +439,7 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 
 			// 0.1% de probabilidad de obtener una carta aleatoria al matar
 			if rand.float32() < constants.DECK_CARD_DROP_CHANCE {
-				drop_pool := [8]entities.Card{
+				drop_pool := [12]entities.Card{
 					{kind = .TOWER, tower_type = .ARCHER},
 					{kind = .TOWER, tower_type = .CANNON},
 					{kind = .TOWER, tower_type = .SNIPER},
@@ -390,8 +448,12 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 					{kind = .TOWER, tower_type = .ICE},
 					{kind = .OBSTACLE},
 					{kind = .OBSTACLE},
+					{kind = .INTEREST_BOOST},
+					{kind = .EXTRA_DRAW},
+					{kind = .WEAKEN},
+					{kind = .DIVIDEND},
 				}
-				dropped := drop_pool[rand.int_max(8)]
+				dropped := drop_pool[rand.int_max(12)]
 				entities.card_add_to_hand(sim, dropped)
 				entities.add_toast(
 					app,
@@ -399,7 +461,7 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 					.SUCCESS,
 					4.0,
 				)
-				play_sfx(.CARD_GAINED)
+				play_sound(.CARD_GAINED, .SFX)
 			}
 
 			// Split: parent has is_split=true; children are created with is_split=false so they don't split again.
@@ -459,9 +521,8 @@ update_towers :: proc(app: ^entities.App_State, dt: f32) {
 			continue
 		}
 
-		// ENHANCE tower: periodic boost pulse — no targeting needed
+		// ENHANCE tower: el bonus se recalcula en update_enhance_bonuses, no necesita update propio
 		if tower.type == .ENHANCE {
-			update_enhance_tower(app, &tower)
 			continue
 		}
 
@@ -528,31 +589,37 @@ update_ice_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 		tower.range,
 	)
 	append(&app.sim.ice_pulses, pulse)
-	play_sfx(.TOWER_ICE)
+	play_sound(.TOWER_ICE, .SFX)
 }
 
-// Update enhance tower — periodically upgrades nearby towers by one level
-update_enhance_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
-	if tower.timer > 0 {
-		return
-	}
-	tower.timer = entities.tower_get_effective_cooldown(tower)
-
+// Recalcula el enhance_bonus de cada torre según los Potenciadores activos en rango.
+// Se llama cada frame. El bonus es la suma de niveles de todos los ENHANCE en rango,
+// acotado por ENHANCE_MAX_LEVEL y por el espacio hasta TOWER_MAX_LEVEL.
+update_enhance_bonuses :: proc(app: ^entities.App_State) {
 	for &t in app.sim.towers {
-		// Don't boost itself or other ENHANCE towers
-		if t.type == .ENHANCE {
-			continue
+		if t.type == .ENHANCE { continue }
+
+		new_bonus: i32 = 0
+		for &et in app.sim.towers {
+			if et.type != .ENHANCE { continue }
+			dx := f32(t.c - et.c)
+			dy := f32(t.r - et.r)
+			dist := math.sqrt_f32(dx * dx + dy * dy)
+			if dist <= et.range {
+				new_bonus += et.level
+			}
 		}
-		// Cap at ENHANCE_MAX_LEVEL
-		if t.level >= constants.ENHANCE_MAX_LEVEL {
-			continue
-		}
-		// Check distance (center to center)
-		dx := f32(t.c) - f32(tower.c)
-		dy := f32(t.r) - f32(tower.r)
-		dist := math.sqrt_f32(dx * dx + dy * dy)
-		if dist <= tower.range {
-			entities.tower_upgrade(&t)
+
+		manual_level := t.level - t.enhance_bonus
+		max_bonus    := constants.TOWER_MAX_LEVEL - manual_level
+		if new_bonus > max_bonus                   { new_bonus = max_bonus }
+		if new_bonus > constants.ENHANCE_MAX_LEVEL { new_bonus = constants.ENHANCE_MAX_LEVEL }
+		if new_bonus < 0                           { new_bonus = 0 }
+
+		if new_bonus != t.enhance_bonus {
+			t.enhance_bonus = new_bonus
+			t.level         = manual_level + new_bonus
+			entities.tower_recompute_stats(&t)
 		}
 	}
 }
@@ -582,7 +649,7 @@ update_laser_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, dt:
 				is_crit,
 			)
 			entities.laser_reset_accumulation(tower)
-			play_sfx(.TOWER_LASER)
+			play_sound(.TOWER_LASER, .SFX)
 		}
 	}
 
@@ -649,10 +716,10 @@ update_projectile_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower
 
 		// SFX: play tower fire sound
 		switch tower.type {
-		case .ARCHER:  play_sfx(.TOWER_ARCHER)
-		case .CANNON:  play_sfx(.TOWER_CANNON)
-		case .SNIPER:  play_sfx(.TOWER_SNIPER)
-		case .MISSILE: play_sfx(.TOWER_MISSILE)
+		case .ARCHER:  play_sound(.TOWER_ARCHER, .SFX)
+		case .CANNON:  play_sound(.TOWER_CANNON, .SFX)
+		case .SNIPER:  play_sound(.TOWER_SNIPER, .SFX)
+		case .MISSILE: play_sound(.TOWER_MISSILE, .SFX)
 		case .LASER, .ICE, .ENHANCE: // handled separately
 		}
 	}
@@ -774,14 +841,14 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 				proj.target.hp -= damage
 				if source_tower != nil { source_tower.total_damage += damage }
 				spawn_damage_number(app, proj.target.x + 0.5, proj.target.y + 0.5, damage, is_crit)
-				play_sfx(.PROJECTILE_HIT)
+				play_sound(.PROJECTILE_HIT, .SFX)
 			}
 
 			// AoE: se activa siempre al impactar, haya o no objetivo vivo.
 			// Esto genera la explosión "en el suelo" cuando el objetivo murió antes de ser alcanzado.
 			if proj.aoe > 0 {
 				spawn_explosion(app, proj.x, proj.y, proj.aoe)
-				play_sfx(.EXPLOSION)
+				play_sound(.EXPLOSION, .SFX)
 
 				for &enemy in sim.enemies {
 					if proj.target != nil && &enemy == proj.target {
@@ -973,6 +1040,11 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		selected_card_idx = -1,
 		card_selection_active  = false,
 		card_selection_choices = {},
+		interest_multiplier    = 1.0,
+		next_wave_weakened     = false,
+		is_wave_weakened       = false,
+		dividend_stacks        = 0,
+		wave_start_money       = 0,
 
 		enemies_killed   = 0,
 		money_earned     = 0,

@@ -74,7 +74,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 				// Select tower for upgrade
 				select_tower_at(app, grid_y, grid_x)
 				app.selected_obstacle.valid = false // Deselect obstacle
-				play_sound(.SELECT)
+				play_sound(.SELECT, .UI)
 			case:
 				// Not a tower - check if it's an obstacle
 				if obstacle == .OBSTACLE {
@@ -83,7 +83,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 					app.selected_obstacle.col = grid_x
 					app.selected_obstacle.valid = true
 					entities.app_deselect_tower(app) // Deselect tower
-					play_sound(.SELECT)
+					play_sound(.SELECT, .UI)
 				} else {
 					// Deselect both tower and obstacle
 					entities.app_deselect_tower(app)
@@ -100,7 +100,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 								entities.card_play(&app.sim, app.sim.selected_card_idx)
 								app.sim.selected_build_tower = .EMPTY
 								app.sim.selected_card_idx    = -1
-								play_sound(.CLICK)
+								play_sound(.CLICK, .UI)
 							}
 						} else {
 							// Colocar torre (carta de tipo TOWER)
@@ -117,7 +117,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 								entities.card_play(&app.sim, app.sim.selected_card_idx)
 								app.sim.selected_build_tower = .EMPTY
 								app.sim.selected_card_idx    = -1
-								play_sound(.CLICK)
+								play_sound(.CLICK, .UI)
 							}
 						}
 					}
@@ -489,7 +489,7 @@ editor_undo :: proc(app: ^entities.App_State) {
 	entities.map_snapshot_destroy(&snap)
 	app.editor.current_biome = app.editor.game_map.biome
 	entities.add_toast(app, "Undo", .INFO, 0.8)
-	play_sound(.TICK)
+	play_sound(.TICK, .UI)
 }
 
 // Redo: reapply the next state.
@@ -511,7 +511,7 @@ editor_redo :: proc(app: ^entities.App_State) {
 	entities.map_snapshot_destroy(&snap)
 	app.editor.current_biome = app.editor.game_map.biome
 	entities.add_toast(app, "Redo", .INFO, 0.8)
-	play_sound(.TICK)
+	play_sound(.TICK, .UI)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
