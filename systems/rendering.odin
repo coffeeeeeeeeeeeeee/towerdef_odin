@@ -160,8 +160,16 @@ render_map :: proc(app: ^entities.App_State) {
 			sx := f32(app.selected_cell.col) * cs + f32(app.camera_offset_x)
 			sy := f32(app.selected_cell.row) * cs + f32(app.camera_offset_y)
 			if app.sim.selected_build_tower == .OBSTACLE {
-				// Ghost de obstáculo: preview semi-transparente
-				draw_obstacle_preview(sx, sy, cs)
+				// Ghost de obstáculo: rojo si está en esquina/unión, normal si es válido
+				forbidden := entities.map_is_path_corner_or_junction(
+					&app.editor.game_map,
+					app.selected_cell.row, app.selected_cell.col,
+				)
+				if forbidden {
+					draw_obstacle_preview_invalid(sx, sy, cs, &app.editor.game_map, app.selected_cell.row, app.selected_cell.col)
+				} else {
+					draw_obstacle_preview(sx, sy, cs, &app.editor.game_map, app.selected_cell.row, app.selected_cell.col)
+				}
 			} else {
 				tower_type := tile_to_tower_type(app.sim.selected_build_tower)
 				draw_tower_tile(sx, sy, cs, tower_type, 0, true) // is_ghost = true
@@ -578,11 +586,38 @@ render_block :: proc(x, y, cs: f32) {
 	)
 }
 
+// Calcula las dimensiones (bar_w, bar_h) de un obstáculo según la orientación del camino
+// en (row, col). Igual lógica que render_obstacles para mantener coherencia visual.
+obstacle_bar_dims :: proc(m: ^entities.Map, row, col: i32, cs: f32) -> (bar_w, bar_h: f32) {
+	is_path_like :: proc(m: ^entities.Map, r, c: i32) -> bool {
+		if r < 0 || r >= m.height || c < 0 || c >= m.width { return false }
+		t := m.grid[r][c]
+		return t == .PATH || t == .SPAWN || t == .GOAL
+	}
+	has_v := is_path_like(m, row-1, col) || is_path_like(m, row+1, col)
+	has_h := is_path_like(m, row, col-1) || is_path_like(m, row, col+1)
+	if has_v && !has_h {
+		// Camino vertical → barrera horizontal
+		bar_w = cs * constants.OBSTACLE_BARRIER_LENGTH
+		bar_h = cs * constants.OBSTACLE_BARRIER_THICKNESS
+	} else {
+		// Camino horizontal (o por defecto) → barrera vertical
+		bar_w = cs * constants.OBSTACLE_BARRIER_THICKNESS
+		bar_h = cs * constants.OBSTACLE_BARRIER_LENGTH
+	}
+	return
+}
+
 // Draw a single obstacle at specific position (for toolbar preview)
-draw_obstacle_preview :: proc(x, y, cs: f32) {
-	// Preview: barrera vertical (orientación por defecto)
-	bar_w := cs * constants.OBSTACLE_BARRIER_THICKNESS
-	bar_h := cs * constants.OBSTACLE_BARRIER_LENGTH
+draw_obstacle_preview :: proc(x, y, cs: f32, m: ^entities.Map = nil, row: i32 = -1, col: i32 = -1) {
+	bar_w, bar_h: f32
+	if m != nil && row >= 0 {
+		bar_w, bar_h = obstacle_bar_dims(m, row, col, cs)
+	} else {
+		// Orientación por defecto (toolbar)
+		bar_w = cs * constants.OBSTACLE_BARRIER_THICKNESS
+		bar_h = cs * constants.OBSTACLE_BARRIER_LENGTH
+	}
 	bar_x := x + cs/2 - bar_w/2
 	bar_y := y + cs/2 - bar_h/2
 	rect  := raylib.Rectangle{bar_x, bar_y, bar_w, bar_h}
@@ -590,6 +625,29 @@ draw_obstacle_preview :: proc(x, y, cs: f32) {
 	raylib.DrawRectangleRounded(shadow, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.COLOR_OBSTACLE_SHADOW)
 	raylib.DrawRectangleRounded(rect,   constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.COLOR_OBSTACLE_FILL)
 	raylib.DrawRectangleRoundedLines(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.OBSTACLE_BARRIER_BORDER_THICK, constants.COLOR_OBSTACLE_BORDER)
+}
+
+// Preview de obstáculo inválido (esquina/unión): tinte rojo semitransparente
+draw_obstacle_preview_invalid :: proc(x, y, cs: f32, m: ^entities.Map = nil, row: i32 = -1, col: i32 = -1) {
+	bar_w, bar_h: f32
+	if m != nil && row >= 0 {
+		bar_w, bar_h = obstacle_bar_dims(m, row, col, cs)
+	} else {
+		bar_w = cs * constants.OBSTACLE_BARRIER_THICKNESS
+		bar_h = cs * constants.OBSTACLE_BARRIER_LENGTH
+	}
+	bar_x := x + cs/2 - bar_w/2
+	bar_y := y + cs/2 - bar_h/2
+	rect  := raylib.Rectangle{bar_x, bar_y, bar_w, bar_h}
+	raylib.DrawRectangleRounded(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, raylib.Color{220, 50, 50, 160})
+	raylib.DrawRectangleRoundedLines(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.OBSTACLE_BARRIER_BORDER_THICK, raylib.Color{255, 80, 80, 220})
+	// Cruz para indicar que no es válido
+	cx := x + cs/2
+	cy := y + cs/2
+	arm := cs * 0.18
+	thick := f32(2)
+	raylib.DrawLineEx({cx - arm, cy - arm}, {cx + arm, cy + arm}, thick, raylib.Color{255, 255, 255, 200})
+	raylib.DrawLineEx({cx + arm, cy - arm}, {cx - arm, cy + arm}, thick, raylib.Color{255, 255, 255, 200})
 }
 
 // Render obstacles
@@ -1040,34 +1098,20 @@ draw_text_with_outline :: proc(
 	text_color: raylib.Color,
 	outline_color: raylib.Color,
 	outline_thickness: i32 = 1,
+	font: raylib.Font = {},
 ) {
+	f := font if font.baseSize > 0 else constants.game_fonts.bold
+
 	// Draw outline by drawing the text in outline color at offset positions
 	for y_offset in -outline_thickness ..= outline_thickness {
 		for x_offset in -outline_thickness ..= outline_thickness {
-			if x_offset == 0 && y_offset == 0 {
-				continue // Skip center position
-			}
-			offset_pos := raylib.Vector2{pos.x + f32(x_offset), pos.y + f32(y_offset)}
-			raylib.DrawTextEx(
-				constants.game_fonts.bold,
-				text,
-				offset_pos,
-				font_size,
-				spacing,
-				outline_color,
-			)
+			if x_offset == 0 && y_offset == 0 do continue
+			raylib.DrawTextEx(f, text, {pos.x + f32(x_offset), pos.y + f32(y_offset)}, font_size, spacing, outline_color)
 		}
 	}
 
 	// Draw main text on top
-	raylib.DrawTextEx(
-		constants.game_fonts.bold,
-		text,
-		pos,
-		font_size,
-		spacing,
-		text_color,
-	)
+	raylib.DrawTextEx(f, text, pos, font_size, spacing, text_color)
 }
 
 // Render damage numbers
@@ -1099,6 +1143,15 @@ render_damage_numbers :: proc(app: ^entities.App_State, cs: f32) {
 
 // Render UI
 render_ui :: proc(app: ^entities.App_State) {
+	// El shop es modal: bloquea toda la pantalla para que los botones de PLAYING
+	// no respondan mientras el overlay está activo. Usa ui_modal_blocks (separado
+	// de ui_click_blocks) para no interferir con los paneles normales.
+	if app.state == .PLAYING && app.sim.card_selection_active {
+		sw := f32(raylib.GetScreenWidth())
+		sh := f32(raylib.GetScreenHeight())
+		append(&ui_modal_blocks, raylib.Rectangle{0, 0, sw, sh})
+	}
+
 	switch app.state {
 	case .MENU:
 		render_menu_ui(app)
@@ -1106,10 +1159,8 @@ render_ui :: proc(app: ^entities.App_State) {
 		render_game_ui(app)
 		render_tower_control_panel(app)
 		render_obstacle_control_panel(app)
+		render_relic_tray(app)
 		render_card_hand(app)
-		if app.sim.card_selection_active {
-			render_card_selection_overlay(app)
-		}
 	case .PAUSED:
 		render_pause_menu(app)
 	case .EDITOR:
@@ -1118,6 +1169,11 @@ render_ui :: proc(app: ^entities.App_State) {
 		render_game_over_ui(app)
 	case .SETTINGS:
 		render_settings_menu(app)
+	}
+
+	// Shop — capa superior: siempre encima del resto de la UI de juego
+	if app.state == .PLAYING && app.sim.card_selection_active {
+		render_card_selection_overlay(app)
 	}
 
 	// Render toasts (always on top)
@@ -1442,7 +1498,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	is_between_waves := app.sim.enemies_spawned >= app.sim.enemies_to_spawn && len(app.sim.enemies) == 0
 	wave_limit_reached := app.sim.wave_number >= constants.MAX_WAVE
 	can_start_wave := (is_between_waves || !app.sim.started) && !wave_limit_reached
-	show_next_wave_button := !app.settings.auto_start_wave
+	show_next_wave_button := !app.settings.auto_start_wave && can_start_wave
 
 	next_wave_text := constants.get_text("UI_NEXT_WAVE")
 	next_wave_text_width := i32(
@@ -2062,7 +2118,9 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 	spacing := i32(constants.UI_PANEL_MARGIN)
 
 	// --- Title ---
-	title := constants.get_text("GAME_OVER_TITLE")
+	title_key := "GAME_VICTORY_TITLE" if app.sim.is_victory else "GAME_OVER_TITLE"
+	title_color := raylib.Color{50, 205, 50, 255} if app.sim.is_victory else raylib.RED
+	title := constants.get_text(title_key)
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 	title_size := f32(36)
 	title_width := raylib.MeasureTextEx(constants.game_fonts.bold, title_cstr, title_size, 0).x
@@ -2074,7 +2132,7 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 		{title_x, title_y},
 		title_size,
 		0,
-		raylib.RED,
+		title_color,
 	)
 
 	// ============================================================
@@ -2220,20 +2278,33 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 	// ============================================================
 	//  STATS PANEL
 	// ============================================================
-	stats_panel_w := graph_panel_w
-	num_stats :: 5
-	stat_height := i32(font_size) + 4
-	stats_inner := i32(num_stats) * (stat_height + spacing) - spacing
-	stats_total := stats_inner + constants.UI_PANEL_PADDING * 2
-	stats_x := graph_panel_x
-	stats_y := graph_panel_y + f32(graph_panel_h) + f32(spacing)
+	total_secs := i32(app.sim.play_time)
 
-	stats_rect := raylib.Rectangle{stats_x, stats_y, f32(stats_panel_w), f32(stats_total)}
+	// Para agregar un stat nuevo: solo añadir una línea al slice.
+	// El tamaño del panel se calcula automáticamente a partir de len(stats).
+	Stat_Row :: struct { label, value: string }
+	stats := []Stat_Row{
+		{constants.get_text("GAME_OVER_WAVES_SURVIVED"), fmt.tprintf("%d",      app.sim.wave_number)},
+		{constants.get_text("GAME_OVER_TIME"),           fmt.tprintf("%d:%02d", total_secs / 60, total_secs % 60)},
+		{constants.get_text("GAME_OVER_ENEMIES_KILLED"), fmt.tprintf("%d",      app.sim.enemies_killed)},
+		{constants.get_text("GAME_OVER_MONEY_EARNED"),   fmt.tprintf("$%d",     app.sim.money_earned)},
+		{constants.get_text("GAME_OVER_TOWERS_BUILT"),   fmt.tprintf("%d",      app.sim.towers_built)},
+		{constants.get_text("GAME_OVER_UPGRADES"),       fmt.tprintf("%d",      app.sim.upgrades_bought)},
+	}
+
+	stats_panel_w := graph_panel_w
+	stat_height   := i32(font_size) + 4
+	stats_inner   := i32(len(stats)) * (stat_height + spacing) - spacing
+	stats_total   := stats_inner + constants.UI_PANEL_PADDING * 2
+	stats_x       := graph_panel_x
+	stats_y       := graph_panel_y + f32(graph_panel_h) + f32(spacing)
+
+	stats_rect    := raylib.Rectangle{stats_x, stats_y, f32(stats_panel_w), f32(stats_total)}
 	stats_content := render_panel(stats_rect)
 
 	scx := i32(stats_content.x)
 	scw := i32(stats_content.width)
-	sy := i32(stats_content.y)
+	sy  := i32(stats_content.y)
 
 	// Helper: draw a stat row
 	draw_stat :: proc(label: string, value: string, cx, cw, y: i32, font_size: f32) {
@@ -2258,71 +2329,10 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 		)
 	}
 
-	// Waves Survived
-	draw_stat(
-		constants.get_text("GAME_OVER_WAVES_SURVIVED"),
-		fmt.tprintf("%d", app.sim.wave_number),
-		scx,
-		scw,
-		sy,
-		font_size,
-	)
-	sy += stat_height + spacing
-
-	// Play Time
-	total_secs := i32(app.sim.play_time)
-	draw_stat(
-		constants.get_text("GAME_OVER_TIME"),
-		fmt.tprintf("%d:%02d", total_secs / 60, total_secs % 60),
-		scx,
-		scw,
-		sy,
-		font_size,
-	)
-	sy += stat_height + spacing
-
-	// Enemies Killed
-	draw_stat(
-		constants.get_text("GAME_OVER_ENEMIES_KILLED"),
-		fmt.tprintf("%d", app.sim.enemies_killed),
-		scx,
-		scw,
-		sy,
-		font_size,
-	)
-	sy += stat_height + spacing
-
-	// Money Earned
-	draw_stat(
-		constants.get_text("GAME_OVER_MONEY_EARNED"),
-		fmt.tprintf("$%d", app.sim.money_earned),
-		scx,
-		scw,
-		sy,
-		font_size,
-	)
-	sy += stat_height + spacing
-
-	// Towers Built
-	draw_stat(
-		constants.get_text("GAME_OVER_TOWERS_BUILT"),
-		fmt.tprintf("%d", app.sim.towers_built),
-		scx,
-		scw,
-		sy,
-		font_size,
-	)
-	sy += stat_height + spacing
-
-	// Upgrades
-	draw_stat(
-		constants.get_text("GAME_OVER_UPGRADES"),
-		fmt.tprintf("%d", app.sim.upgrades_bought),
-		scx,
-		scw,
-		sy,
-		font_size,
-	)
+	for row in stats {
+		draw_stat(row.label, row.value, scx, scw, sy, font_size)
+		sy += stat_height + spacing
+	}
 
 	// --- Menu button ---
 	btn_width := i32(constants.UI_BUTTON_WIDTH) * 2
@@ -2935,9 +2945,6 @@ render_button_with_color :: proc(
 		actual_width = i32(text_width) + 20
 	}
 
-	// Register final button area to block grid clicks behind it
-	append(&ui_click_blocks, raylib.Rectangle{f32(x), f32(y), f32(actual_width), f32(actual_height)})
-
 	// Check hover
 	mouse_pos := raylib.GetMousePosition()
 	hovered := raylib.CheckCollisionPointRec(
@@ -3006,8 +3013,10 @@ render_button_with_color :: proc(
 		)
 	}
 
-	// Click check
-	if hovered && raylib.IsMouseButtonPressed(.LEFT) {
+	append(&ui_click_blocks, raylib.Rectangle{f32(x), f32(y), f32(actual_width), f32(actual_height)})
+
+	if hovered && raylib.IsMouseButtonPressed(.LEFT) &&
+	   !ui_is_modal_blocked(i32(mouse_pos.x), i32(mouse_pos.y)) {
 		play_sound(.CLICK, .UI)
 		return true
 	}
@@ -3125,9 +3134,6 @@ render_button :: proc(
 		actual_width = min_width
 	}
 
-	// Register button area to block grid clicks behind it
-	append(&ui_click_blocks, raylib.Rectangle{f32(x), f32(y), f32(actual_width), f32(height)})
-
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
 
@@ -3200,8 +3206,10 @@ render_button :: proc(
 		)
 	}
 
-	// Click check
-	if hovered && raylib.IsMouseButtonPressed(.LEFT) {
+	append(&ui_click_blocks, raylib.Rectangle{f32(x), f32(y), f32(actual_width), f32(height)})
+
+	if hovered && raylib.IsMouseButtonPressed(.LEFT) &&
+	   !ui_is_modal_blocked(i32(mouse_x), i32(mouse_y)) {
 		play_sound(.CLICK, .UI)
 		return true
 	}
@@ -3617,12 +3625,30 @@ ui_click_blocks: [dynamic]raylib.Rectangle
 
 ui_blocks_clear :: proc() {
 	clear(&ui_click_blocks)
+	clear(&ui_modal_blocks)
 }
 
 // Returns true if screen position (x, y) falls inside any registered UI rect.
 ui_is_click_blocked :: proc(x, y: i32) -> bool {
 	p := raylib.Vector2{f32(x), f32(y)}
 	for rect in ui_click_blocks {
+		if raylib.CheckCollisionPointRec(p, rect) {
+			return true
+		}
+	}
+	return false
+}
+
+// Modal blocking registry — exclusivo para overlays que deben bloquear todos los
+// botones de capas inferiores (ej. el shop). A diferencia de ui_click_blocks,
+// render_button consulta esta lista en vez de la de paneles/grilla.
+// Se limpia en ui_blocks_clear (inicio de frame) y también dentro del overlay
+// modal antes de renderizar sus propios botones.
+ui_modal_blocks: [dynamic]raylib.Rectangle
+
+ui_is_modal_blocked :: proc(x, y: i32) -> bool {
+	p := raylib.Vector2{f32(x), f32(y)}
+	for rect in ui_modal_blocks {
 		if raylib.CheckCollisionPointRec(p, rect) {
 			return true
 		}
@@ -3879,7 +3905,26 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 		}
 
 		crit_pct := entities.tower_get_critical_chance(tower) * 100
-		draw_icon_stat(constants.game_icons.damage, fmt.tprintf("%.1f",  tower.damage),   content_x, current_y + 0 * line_height, icon_size, font_size)
+		draw_icon_stat(constants.game_icons.damage, fmt.tprintf("%.1f", tower.damage), content_x, current_y + 0 * line_height, icon_size, font_size)
+
+		// Bonus de daño extra (Bloodlust + Formation): mostrar en verde junto al stat de daño
+		{
+			bloodlust_bonus := tower.damage * (app.sim.bloodlust_mult - 1.0)
+			formation_bonus : f32 = 0
+			if app.sim.formation_stacks > 0 && tower_is_in_formation(app, tower) {
+				formation_bonus = tower.damage * constants.FORMATION_BONUS * f32(app.sim.formation_stacks)
+			}
+			total_bonus := bloodlust_bonus + formation_bonus
+			if total_bonus >= 0.05 {
+				dmg_str      := fmt.tprintf("%.1f", tower.damage)
+				dmg_width    := raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(dmg_str, context.temp_allocator), font_size, 0).x
+				bonus_x      := f32(content_x) + ICON_SLOT + ICON_GAP + dmg_width + 4
+				bonus_y      := f32(current_y + 0 * line_height) + (icon_size - font_size) / 2
+				bonus_str    := fmt.ctprintf("(+%.1f)", total_bonus)
+				raylib.DrawTextEx(constants.game_fonts.semibold, bonus_str, {bonus_x, bonus_y}, font_size, 0, raylib.Color{80, 220, 80, 255})
+			}
+		}
+
 		draw_icon_stat(constants.game_icons.speed,  fmt.tprintf("%.2fs", tower.cooldown), content_x, current_y + 1 * line_height, icon_size, font_size)
 		draw_icon_stat(constants.game_icons.crit,   fmt.tprintf("%.0f%%", crit_pct),      content_x, current_y + 2 * line_height, icon_size, font_size)
 		current_y += stats_height + spacing
@@ -4069,7 +4114,133 @@ CARD_H  :: f32(155)
 CARD_GAP :: f32(10)
 CARD_BOTTOM_MARGIN :: f32(16)
 
-// Color de fondo de carta según tipo
+// Lista ordenada de todos los tipos de relicto (para iterar en tray y previews)
+RELIC_KINDS := []entities.Card_Kind{
+	.INTEREST_BOOST, .DIVIDEND, .STEAL, .WEAKEN, .AUTO_UPGRADE,
+	.BLOODLUST, .FLAWLESS, .FORMATION, .FROZEN_AMP,
+}
+
+// Muestra los relictos activos (stacks > 0) en la esquina inferior izquierda.
+// Cada relicto aparece como un slot cuadrado con icono y badge "x N".
+render_relic_tray :: proc(app: ^entities.App_State) {
+	ICON_SIZE    : f32 = 40  // tamaño del icono
+	BADGE_SIZE   : f32 = 16  // tamaño de fuente del número de stacks
+	SLOT_GAP     : f32 = 8   // separación entre iconos (vertical y horizontal)
+	MAX_PER_COL  : i32 = 5   // máximo de relictos por columna antes de abrir una nueva
+
+	screen_h := f32(raylib.GetScreenHeight())
+	base_x   := f32(constants.UI_MARGIN_X)
+
+	// Ancla inferior: justo encima de la zona de cartas
+	anchor_y := screen_h - CARD_H - CARD_BOTTOM_MARGIN - SLOT_GAP
+
+	slot_idx := i32(0)
+	for kind in RELIC_KINDS {
+		stacks := entities.relic_stacks(&app.sim, kind)
+		if stacks == 0 do continue
+
+		col := slot_idx / MAX_PER_COL  // columna (0 = izquierda, crece a la derecha)
+		row := slot_idx % MAX_PER_COL  // fila dentro de la columna (0 = abajo)
+
+		sx := base_x + f32(col) * (ICON_SIZE + SLOT_GAP)
+		sy := anchor_y - f32(row) * (ICON_SIZE + SLOT_GAP) - ICON_SIZE
+
+		// Icono sin fondo ni contorno
+		icon := entities.relic_icon(kind)
+		if icon.id != 0 {
+			src := raylib.Rectangle{0, 0, f32(icon.width), f32(icon.height)}
+			dst := raylib.Rectangle{sx, sy, ICON_SIZE, ICON_SIZE}
+			raylib.DrawTexturePro(icon, src, dst, {0, 0}, 0, raylib.WHITE)
+		}
+
+		// Número de stacks — solo si hay más de 1, sin "x"
+		if stacks > 1 {
+			badge   := fmt.ctprintf("%d", stacks)
+			badge_w := raylib.MeasureTextEx(constants.game_fonts.semibold, badge, BADGE_SIZE, 0).x
+			badge_x := sx + ICON_SIZE - badge_w
+			badge_y := sy + ICON_SIZE - BADGE_SIZE
+			draw_text_with_outline(badge, {badge_x, badge_y}, BADGE_SIZE, 0,
+				raylib.Color{255, 220, 80, 255}, raylib.Color{0, 0, 0, 220}, 1,
+				constants.game_fonts.semibold)
+		}
+
+		slot_idx += 1
+	}
+}
+
+// Renderiza el preview de un relicto: icono PNG centrado + badge de stacks.
+// Usado desde render_card para INTEREST_BOOST, DIVIDEND, STEAL y cualquier relicto futuro.
+render_relic_preview :: proc(
+	app: ^entities.App_State,
+	kind: entities.Card_Kind,
+	icon_cx: f32, preview_y: f32, preview_size: f32,
+) {
+	icon   := entities.relic_icon(kind)
+	stacks := entities.relic_stacks(&app.sim, kind)
+
+	if icon.id != 0 {
+		sz     := preview_size
+		aspect := f32(icon.width) / f32(icon.height) if icon.height > 0 else 1.0
+		iw     := sz * aspect
+		src    := raylib.Rectangle{0, 0, f32(icon.width), f32(icon.height)}
+		dst    := raylib.Rectangle{icon_cx - iw / 2, preview_y, iw, sz}
+		raylib.DrawTexturePro(icon, src, dst, {0, 0}, 0, raylib.WHITE)
+	}
+
+	// Badge con número de stacks acumulados
+	if stacks > 0 {
+		badge   := fmt.ctprintf("x%d", stacks)
+		badge_w := raylib.MeasureTextEx(constants.game_fonts.semibold, badge, 13, 0).x
+		badge_y := preview_y + preview_size - 2
+		raylib.DrawTextEx(constants.game_fonts.semibold, badge, {icon_cx - badge_w / 2, badge_y}, 13, 0, raylib.Color{255, 220, 100, 255})
+	}
+}
+
+// Aplica el efecto de un relicto e incrementa sus stacks.
+// Muestra un toast informativo. Llamar desde los click handlers de mano y overlay.
+apply_relic_card :: proc(app: ^entities.App_State, kind: entities.Card_Kind) {
+	entities.relic_apply(&app.sim, kind)
+	stacks := entities.relic_stacks(&app.sim, kind)
+	#partial switch kind {
+	case .INTEREST_BOOST:
+		entities.add_toast(app,
+			fmt.tprintf("Interés x%d (%.0f%%/oleada)", stacks, f32(stacks) * constants.INTEREST_RATE * 100),
+			.SUCCESS)
+	case .DIVIDEND:
+		entities.add_toast(app,
+			fmt.tprintf("Dividendo x%d (%.0f%%/oleada)", stacks, f32(stacks) * constants.DIVIDEND_RATE * 100),
+			.SUCCESS)
+	case .STEAL:
+		entities.add_toast(app,
+			fmt.tprintf("Ladrón x%d (+%d carta/oleada)", stacks, stacks),
+			.SUCCESS)
+	case .WEAKEN:
+		entities.add_toast(app,
+			fmt.tprintf("Debilitar x%d (-%.0f%% HP enemigos)", stacks, f32(stacks) * constants.WEAKEN_HP_REDUCTION * 100),
+			.SUCCESS)
+	case .AUTO_UPGRADE:
+		entities.add_toast(app,
+			fmt.tprintf("Auto-mejora x%d (cada %.0fs)", stacks, constants.AUTO_UPGRADE_INTERVAL),
+			.SUCCESS)
+	case .BLOODLUST:
+		entities.add_toast(app,
+			fmt.tprintf("Sed de sangre x%d (+%.1f%% daño/kill)", stacks, f32(stacks) * constants.BLOODLUST_BONUS_PER_KILL * 100),
+			.SUCCESS)
+	case .FLAWLESS:
+		entities.add_toast(app,
+			fmt.tprintf("Impecable x%d (+$%d/oleada perfecta)", stacks, constants.FLAWLESS_BONUS * stacks),
+			.SUCCESS)
+	case .FORMATION:
+		entities.add_toast(app,
+			fmt.tprintf("Formación x%d (+%.0f%% daño en línea de 3+)", stacks, f32(stacks) * constants.FORMATION_BONUS * 100),
+			.SUCCESS)
+	case .FROZEN_AMP:
+		entities.add_toast(app,
+			fmt.tprintf("Crioamplificador x%d (+%.0f%% daño a ralentizados)", stacks, f32(stacks) * constants.FROZEN_AMP_BONUS * 100),
+			.SUCCESS)
+	}
+}
+
 // Renderiza una sola carta en la posición dada
 render_card :: proc(
 	app: ^entities.App_State,
@@ -4110,37 +4281,10 @@ render_card :: proc(
 		app.settings.show_tower_range = false
 		render_tower(app, &dummy, preview_x, preview_y, preview_size)
 		app.settings.show_tower_range = old_show_range
-	case .INTEREST_BOOST:
-		raylib.DrawCircle(i32(icon_cx), i32(icon_cy), 20, raylib.Color{200, 160, 20, 255})
-		raylib.DrawCircle(i32(icon_cx), i32(icon_cy), 16, raylib.Color{240, 200, 40, 255})
-		lbl   := cstring("x2")
-		lbl_w := raylib.MeasureTextEx(constants.game_fonts.semibold, lbl, 16, 0).x
-		raylib.DrawTextEx(constants.game_fonts.semibold, lbl, {icon_cx - lbl_w / 2, icon_cy - 9}, 16, 0, raylib.Color{80, 40, 0, 255})
-	case .EXTRA_DRAW:
-		raylib.DrawRectangleRounded({icon_cx - 14, icon_cy - 16, 26, 18}, 0.2, 4, raylib.Color{80, 140, 220, 255})
-		raylib.DrawRectangleRounded({icon_cx - 12, icon_cy - 4,  26, 18}, 0.2, 4, raylib.Color{110, 170, 255, 255})
-		raylib.DrawRectangleRoundedLinesEx({icon_cx - 12, icon_cy - 4, 26, 18}, 0.2, 4, 1.5, raylib.Color{180, 210, 255, 255})
-		lbl2   := cstring("?")
-		lbl2_w := raylib.MeasureTextEx(constants.game_fonts.semibold, lbl2, 14, 0).x
-		raylib.DrawTextEx(constants.game_fonts.semibold, lbl2, {icon_cx - lbl2_w / 2 + 1, icon_cy - 3}, 14, 0, raylib.WHITE)
-	case .WEAKEN:
-		raylib.DrawCircle(i32(icon_cx), i32(icon_cy) - 8, 14, raylib.Color{200, 60, 60, 255})
-		raylib.DrawCircle(i32(icon_cx), i32(icon_cy) - 8, 10, raylib.Color{240, 100, 80, 255})
-		skull  := cstring("↓")
-		sk_w   := raylib.MeasureTextEx(constants.game_fonts.semibold, skull, 18, 0).x
-		raylib.DrawTextEx(constants.game_fonts.semibold, skull, {icon_cx - sk_w / 2, icon_cy - 20}, 18, 0, raylib.WHITE)
-		pct    := cstring("30%")
-		pct_w  := raylib.MeasureTextEx(constants.game_fonts.regular, pct, 11, 0).x
-		raylib.DrawTextEx(constants.game_fonts.regular, pct, {icon_cx - pct_w / 2, icon_cy + 8}, 11, 0, raylib.Color{255, 160, 160, 255})
-	case .DIVIDEND:
-		raylib.DrawCircle(i32(icon_cx), i32(icon_cy) - 6, 15, raylib.Color{60, 180, 100, 255})
-		raylib.DrawCircle(i32(icon_cx), i32(icon_cy) - 6, 11, raylib.Color{80, 220, 120, 255})
-		dlbl   := cstring("$")
-		dlbl_w := raylib.MeasureTextEx(constants.game_fonts.semibold, dlbl, 16, 0).x
-		raylib.DrawTextEx(constants.game_fonts.semibold, dlbl, {icon_cx - dlbl_w / 2, icon_cy - 16}, 16, 0, raylib.Color{10, 60, 20, 255})
-		pct2   := cstring("15%")
-		pct2_w := raylib.MeasureTextEx(constants.game_fonts.regular, pct2, 11, 0).x
-		raylib.DrawTextEx(constants.game_fonts.regular, pct2, {icon_cx - pct2_w / 2, icon_cy + 10}, 11, 0, raylib.Color{160, 255, 180, 255})
+	case .INTEREST_BOOST, .DIVIDEND, .STEAL, .WEAKEN, .AUTO_UPGRADE,
+	     .BLOODLUST, .FLAWLESS, .FORMATION, .FROZEN_AMP:
+		// Relictos: icono PNG + badge de stacks acumulados
+		render_relic_preview(app, card.kind, icon_cx, preview_y, preview_size)
 	}
 
 	// Nombre de la carta
@@ -4159,97 +4303,334 @@ render_card :: proc(
 	// Separador
 	raylib.DrawLineEx({x + 10, y + 96}, {x + CARD_W - 10, y + 96}, 1, raylib.Color{100, 100, 120, 120})
 
-	// Costo
-	cost_str  := fmt.ctprintf("$%d", entities.card_cost(card))
-	cost_size : f32 = 15
-	cost_w := raylib.MeasureTextEx(constants.game_fonts.semibold, cost_str, cost_size, 0).x
-	cost_color := can_afford ? raylib.Color{80, 220, 100, 255} : raylib.Color{200, 60, 60, 255}
-	raylib.DrawTextEx(
-		constants.game_fonts.bold,
-		cost_str,
-		{x + (CARD_W - cost_w) / 2, y + 102},
-		cost_size, 0, cost_color,
-	)
+	// Costo — solo para cartas que tienen precio (torres y obstáculos, no relictos)
+	if !entities.is_relic(card.kind) {
+		cost_str  := fmt.ctprintf("$%d", entities.card_cost(card))
+		cost_size : f32 = 15
+		cost_w    := raylib.MeasureTextEx(constants.game_fonts.semibold, cost_str, cost_size, 0).x
+		cost_color := can_afford ? raylib.Color{80, 220, 100, 255} : raylib.Color{200, 60, 60, 255}
+		raylib.DrawTextEx(
+			constants.game_fonts.bold,
+			cost_str,
+			{x + (CARD_W - cost_w) / 2, y + 102},
+			cost_size, 0, cost_color,
+		)
+	}
 }
 
-// Renderiza la mano de cartas en la parte inferior de la pantalla
-render_card_hand :: proc(app: ^entities.App_State) {
-	if len(app.sim.hand) == 0 {
-		return
+// Tooltip de carta — aparece al hacer hover sobre card_rect.
+// Usada tanto en la tienda como en la mano. Usa render_tooltip para el fondo.
+// Los valores numéricos vienen de constants.odin.
+draw_card_tooltip :: proc(card: entities.Card, card_rect: raylib.Rectangle) {
+	mouse := raylib.GetMousePosition()
+	if !raylib.CheckCollisionPointRec(mouse, card_rect) { return }
+
+	FONT_SIZE : f32 = f32(constants.UI_TOOLTIP_FONT_SIZE)
+	PAD       : f32 = 10
+	LINE_H    : f32 = FONT_SIZE + 4
+
+	// ── Construir líneas ─────────────────────────────────────────────────────
+	lines : [4]string
+	n     := 0
+
+	push :: proc(lines: ^[4]string, n: ^int, text: string) {
+		if n^ >= 4 { return }
+		lines[n^] = text
+		n^ += 1
 	}
+
+	// Línea 1: descripción (sin números)
+	desc_key : string
+	switch card.kind {
+	case .TOWER:
+		switch card.tower_type {
+		case .ARCHER:  desc_key = "TOOLTIP_ARCHER_DESC"
+		case .CANNON:  desc_key = "TOOLTIP_CANNON_DESC"
+		case .SNIPER:  desc_key = "TOOLTIP_SNIPER_DESC"
+		case .MISSILE: desc_key = "TOOLTIP_MISSILE_DESC"
+		case .LASER:   desc_key = "TOOLTIP_LASER_DESC"
+		case .ICE:     desc_key = "TOOLTIP_ICE_DESC"
+		case .ENHANCE: desc_key = "TOOLTIP_ENHANCE_DESC"
+		}
+	case .OBSTACLE:       desc_key = "TOOLTIP_OBSTACLE_DESC"
+	case .INTEREST_BOOST: desc_key = "TOOLTIP_INTEREST_BOOST_DESC"
+	case .DIVIDEND:       desc_key = "TOOLTIP_DIVIDEND_DESC"
+	case .STEAL:          desc_key = "TOOLTIP_STEAL_DESC"
+	case .WEAKEN:         desc_key = "TOOLTIP_WEAKEN_DESC"
+	case .AUTO_UPGRADE:   desc_key = "TOOLTIP_AUTO_UPGRADE_DESC"
+	case .BLOODLUST:      desc_key = "TOOLTIP_BLOODLUST_DESC"
+	case .FLAWLESS:       desc_key = "TOOLTIP_FLAWLESS_DESC"
+	case .FORMATION:      desc_key = "TOOLTIP_FORMATION_DESC"
+	case .FROZEN_AMP:     desc_key = "TOOLTIP_FROZEN_AMP_DESC"
+	}
+	push(&lines, &n, constants.get_text(desc_key))
+
+	// Línea 2+: valores numéricos desde constants.odin
+	switch card.kind {
+	case .TOWER:
+		spec := constants.TOWER_SPECS[card.tower_type]
+		push(&lines, &n, fmt.tprintf("DMG %.1f  CD %.2fs  RNG %.1f", spec.damage, spec.cooldown, spec.range))
+		if spec.aoe > 0 {
+			push(&lines, &n, fmt.tprintf("AoE %.1f", spec.aoe))
+		}
+	case .INTEREST_BOOST:
+		push(&lines, &n, fmt.tprintf("+%.0f%% por stack/oleada", constants.INTEREST_RATE * 100))
+	case .DIVIDEND:
+		push(&lines, &n, fmt.tprintf("+%.0f%% del oro ahorrado/stack", constants.DIVIDEND_RATE * 100))
+	case .STEAL:
+		push(&lines, &n, fmt.tprintf("+%d carta(s) por stack/oleada", constants.STEAL_CARDS_PER_STACK))
+	case .WEAKEN:
+		push(&lines, &n, fmt.tprintf("-%.0f%% HP enemigo por stack", constants.WEAKEN_HP_REDUCTION * 100))
+	case .AUTO_UPGRADE:
+		push(&lines, &n, fmt.tprintf("1 mejora cada %.0fs por stack", constants.AUTO_UPGRADE_INTERVAL))
+	case .BLOODLUST:
+		push(&lines, &n, fmt.tprintf("+%.1f%% dano por kill/stack", constants.BLOODLUST_BONUS_PER_KILL * 100))
+	case .FLAWLESS:
+		push(&lines, &n, fmt.tprintf("+$%d oro por stack (ola perfecta)", constants.FLAWLESS_BONUS))
+	case .FORMATION:
+		push(&lines, &n, fmt.tprintf("+%.0f%% dano por stack (3+ iguales)", constants.FORMATION_BONUS * 100))
+	case .FROZEN_AMP:
+		push(&lines, &n, fmt.tprintf("+%.0f%% dano por stack vs lentos", constants.FROZEN_AMP_BONUS * 100))
+	case .OBSTACLE:
+		// sin stat numérico
+	}
+
+	// ── Dimensiones y posición ───────────────────────────────────────────────
+	max_w : f32 = 0
+	for i in 0 ..< n {
+		w := raylib.MeasureTextEx(constants.game_fonts.bold,
+			strings.clone_to_cstring(lines[i], context.temp_allocator), FONT_SIZE, 0).x
+		if w > max_w { max_w = w }
+	}
+	tip_w := max_w + PAD * 2
+	tip_h := f32(n) * LINE_H + PAD * 2 - 4  // -4 quita espacio extra final
+	tip_x := card_rect.x + card_rect.width / 2 - tip_w / 2
+	tip_y := card_rect.y - tip_h - f32(constants.UI_TOOLTIP_OFFSET)
+
+	// ── Fondo via render_tooltip (clampea a pantalla automáticamente) ────────
+	r := render_tooltip({tip_x, tip_y, tip_w, tip_h})
+
+	// ── Texto ────────────────────────────────────────────────────────────────
+	for i in 0 ..< n {
+		col := constants.UI_PANEL_TEXT_COLOR if i == 0 else raylib.Color{60, 100, 160, 255}
+		raylib.DrawTextEx(
+			constants.game_fonts.bold,
+			strings.clone_to_cstring(lines[i], context.temp_allocator),
+			{r.x + PAD, r.y + PAD + f32(i) * LINE_H},
+			FONT_SIZE, 0, col,
+		)
+	}
+}
+
+// Renderiza la tienda (shop) al final de cada oleada.
+// Click sobre la carta para comprar. Tooltip al hacer hover.
+render_card_selection_overlay :: proc(app: ^entities.App_State) {
+	// Limpiar el bloqueo modal para que los botones del shop mismo funcionen.
+	// El bloqueo ya cumplió su función: impidió que los botones de PLAYING
+	// procesaran clicks antes de que llegáramos aquí.
+	clear(&ui_modal_blocks)
 
 	screen_w := f32(raylib.GetScreenWidth())
 	screen_h := f32(raylib.GetScreenHeight())
 
-	n      := f32(len(app.sim.hand))
-	total_w := n * CARD_W + (n - 1) * CARD_GAP
-	start_x := (screen_w - total_w) / 2
-	card_y  := screen_h - CARD_H - CARD_BOTTOM_MARGIN
+	// Fondo semitransparente oscuro
+	raylib.DrawRectangle(0, 0, i32(screen_w), i32(screen_h), raylib.Color{0, 0, 0, 180})
 
-	// Panel de fondo semitransparente detrás de las cartas
-	panel_pad : f32 = 8
-	panel_rect := raylib.Rectangle{
-		start_x - panel_pad,
-		card_y - panel_pad,
-		total_w + panel_pad * 2,
-		CARD_H + panel_pad * 2,
+	// Título
+	title     := strings.clone_to_cstring(constants.get_text("SHOP_TITLE"), context.temp_allocator)
+	title_sz  : f32 = 36
+	title_w   := raylib.MeasureTextEx(constants.game_fonts.bold, title, title_sz, 0).x
+	raylib.DrawTextEx(
+		constants.game_fonts.bold, title,
+		{screen_w / 2 - title_w / 2, screen_h * 0.08},
+		title_sz, 0, raylib.Color{255, 215, 0, 255},
+	)
+
+	// Cartas de la tienda
+	N       :: 3
+	gap     : f32 = 20
+	total_w := f32(N) * CARD_W + f32(N - 1) * gap
+	start_x := screen_w / 2 - total_w / 2
+	card_y  := screen_h / 2 - CARD_H / 2
+
+	mouse_x    := f32(raylib.GetMouseX())
+	mouse_y    := f32(raylib.GetMouseY())
+	hovered_idx := -1
+
+	for i in 0 ..< N {
+		card       := app.sim.card_selection_choices[i]
+		cx         := start_x + f32(i) * (CARD_W + gap)
+		cost       := entities.card_cost(card)
+		if entities.is_relic(card.kind) {
+			cost = constants.SHOP_RELIC_PRICE
+		}
+		can_afford := app.sim.money >= cost
+
+		// Hover: levantar ligeramente la carta
+		HOVER_LIFT :: f32(8)
+		card_rect  := raylib.Rectangle{cx, card_y, CARD_W, CARD_H}
+		is_hovered := mouse_x >= card_rect.x && mouse_x <= card_rect.x + card_rect.width &&
+		              mouse_y >= card_rect.y - HOVER_LIFT && mouse_y <= card_rect.y + card_rect.height
+		draw_y     := card_y - (HOVER_LIFT if is_hovered else 0)
+		if is_hovered { hovered_idx = i }
+
+		render_card(app, card, cx, draw_y, false, can_afford)
+
+		// Precio debajo de la carta
+		price_str := fmt.ctprintf("$%d", cost)
+		price_col := raylib.Color{255, 215, 0, 255} if can_afford else raylib.Color{180, 60, 60, 255}
+		price_sz  : f32 = 14
+		price_w   := raylib.MeasureTextEx(constants.game_fonts.bold, price_str, price_sz, 0).x
+		raylib.DrawTextEx(
+			constants.game_fonts.bold, price_str,
+			{cx + CARD_W / 2 - price_w / 2, draw_y + CARD_H + 6},
+			price_sz, 0, price_col,
+		)
+
+		// Click sobre la carta → comprar
+		if raylib.IsMouseButtonPressed(.LEFT) && is_hovered && can_afford {
+			app.sim.money -= cost
+			if entities.is_relic(card.kind) {
+				apply_relic_card(app, card.kind)
+			} else {
+				entities.card_add_to_hand(&app.sim, card)
+				entities.add_toast(app,
+					fmt.tprintf("%s %s", constants.get_text("DECK_CARD_ADDED"), entities.card_name(card)),
+					.SUCCESS)
+			}
+			app.sim.card_selection_active = false
+			simulation_set_pause(app, false)
+			return
+		}
+
+		// Feedback visual cuando no alcanza el dinero
+		if raylib.IsMouseButtonPressed(.LEFT) && is_hovered && !can_afford {
+			entities.add_toast(app, constants.get_text("SHOP_CANT_AFFORD"), .ERROR)
+		}
 	}
 
-	// Botón de re-reparto — gratis antes de iniciar, cuesta HAND_REDEAL_COST después
-	{
-		game_started := app.sim.started
-		can_redeal   := !game_started || app.sim.money >= constants.HAND_REDEAL_COST
-		btn_label    := game_started \
-			? fmt.tprintf("%s ($%d)", constants.get_text("DECK_REDEAL_BUTTON"), constants.HAND_REDEAL_COST) \
-			: constants.get_text("DECK_REDEAL_BUTTON")
-		btn_w  : f32 = 150
-		btn_h  : f32 = 28
-		btn_x  := (screen_w - btn_w) / 2
-		btn_y  := card_y - panel_pad - btn_h - 6
-		btn_rect := raylib.Rectangle{btn_x, btn_y, btn_w, btn_h}
-		if render_button(btn_label, btn_rect, enabled = can_redeal) {
-			if game_started {
-				app.sim.money -= constants.HAND_REDEAL_COST
-			}
-			entities.hand_redeal(&app.sim)
+	// Tooltip al hover (se dibuja al final para quedar encima de todo)
+	if hovered_idx >= 0 {
+		card      := app.sim.card_selection_choices[hovered_idx]
+		cx        := start_x + f32(hovered_idx) * (CARD_W + gap)
+		draw_card_tooltip(card, {cx, card_y, CARD_W, CARD_H})
+	}
+
+	// Botón Saltar
+	skip_w : f32 = 120
+	skip_h : f32 = 34
+	skip_x := screen_w / 2 - skip_w / 2
+	skip_y := card_y + CARD_H + 36
+	if render_button(
+		constants.get_text("SHOP_SKIP"),
+		{skip_x, skip_y, skip_w, skip_h},
+	) {
+		app.sim.card_selection_active = false
+		simulation_set_pause(app, false)
+	}
+}
+
+// Renderiza la mano de cartas en la parte inferior de la pantalla.
+// Si hay más de HAND_MAX_SPREAD_CARDS cartas, entra en modo compacto (overlap).
+// Al hacer hover sobre la zona de la mano en modo compacto, las cartas se expanden.
+render_card_hand :: proc(app: ^entities.App_State) {
+	if len(app.sim.hand) == 0 { return }
+
+	screen_w := f32(raylib.GetScreenWidth())
+	screen_h := f32(raylib.GetScreenHeight())
+
+	n_cards  := len(app.sim.hand)
+	n        := f32(n_cards)
+	card_y   := screen_h - CARD_H - CARD_BOTTOM_MARGIN
+
+	HOVER_LIFT :: f32(28)
+	SELL_BTN_H :: f32(22)
+
+	mouse_x := f32(raylib.GetMouseX())
+	mouse_y := f32(raylib.GetMouseY())
+
+	// ── Modo de layout ───────────────────────────────────────────────────────
+	// Hover sobre la zona inferior activa el modo expandido incluso con overlap.
+	hand_zone_hovered := mouse_y >= card_y - HOVER_LIFT && mouse_y <= card_y + CARD_H
+	use_compact       := n_cards > int(constants.HAND_MAX_SPREAD_CARDS) && !hand_zone_hovered
+
+	step    : f32
+	start_x : f32
+
+	if use_compact {
+		// Compacto: todas las cartas caben en el 65% central de la pantalla
+		max_w   := screen_w * 0.65
+		step     = (max_w - CARD_W) / max(n - 1, 1)
+		start_x  = screen_w / 2 - (CARD_W + step * (n - 1)) / 2
+	} else {
+		// Expandido: separación normal, limitada al 92% de pantalla si hay muchas
+		step = CARD_W + CARD_GAP
+		if n_cards > int(constants.HAND_MAX_SPREAD_CARDS) {
+			step = min(step, (screen_w * 0.92 - CARD_W) / max(n - 1, 1))
+		}
+		start_x = screen_w / 2 - (CARD_W + step * (n - 1)) / 2
+	}
+
+	// ── Hover por carta: de derecha a izquierda ──────────────────────────────
+	// En modo compacto las cartas se solapan; la más a la derecha queda encima.
+	// Iterar de derecha a izquierda garantiza que la carta visual superior gana.
+	hovered_idx := -1
+	for i := n_cards - 1; i >= 0; i -= 1 {
+		cx := start_x + f32(i) * step
+		if mouse_x >= cx && mouse_x <= cx + CARD_W &&
+		   mouse_y >= card_y - HOVER_LIFT && mouse_y <= card_y + CARD_H {
+			hovered_idx = i
+			break
+		}
+	}
+
+	// ── Botón de re-reparto ──────────────────────────────────────────────────
+	panel_pad   : f32 = 8
+	show_redeal := !app.sim.started && len(app.sim.hand) == 5
+	if show_redeal {
+		btn_w : f32 = 150
+		btn_h : f32 = 28
+		btn_x := (screen_w - btn_w) / 2
+		btn_y := card_y - panel_pad - btn_h - 6
+		if render_button(constants.get_text("DECK_REDEAL_BUTTON"), {btn_x, btn_y, btn_w, btn_h}) {
+			entities.deal_guaranteed_hand(&app.sim)
 			app.sim.selected_build_tower = .EMPTY
 			app.sim.selected_card_idx    = -1
 			play_sound(.SELECT, .UI)
 		}
 	}
 
-	sold_this_frame := false
+	// ── Dibujar cartas ───────────────────────────────────────────────────────
+	sold_this_frame            := false
+	relic_activated_this_frame := false
+	tooltip_card               : entities.Card
+	tooltip_rect               : raylib.Rectangle
+	has_tooltip                := false
+
 	for i := 0; i < len(app.sim.hand); i += 1 {
-		card       := app.sim.hand[i]
-		cx         := start_x + f32(i) * (CARD_W + CARD_GAP)
-		can_afford := app.sim.money >= entities.card_cost(card)
+		card        := app.sim.hand[i]
+		cx          := start_x + f32(i) * step
 		is_selected := app.sim.selected_card_idx == i
+		is_hovered  := hovered_idx == i
 
-		// Hover: detectar si el mouse está sobre la carta o el botón de venta debajo
-		SELL_BTN_H :: f32(22)
-		HOVER_LIFT  :: f32(28) // levantada extra para dejar espacio al botón debajo
-		mouse_x := f32(raylib.GetMouseX())
-		mouse_y := f32(raylib.GetMouseY())
-		// Zona de hover incluye la carta levantada + el espacio del botón debajo
-		is_hovered := mouse_x >= cx && mouse_x <= cx + CARD_W &&
-		              mouse_y >= card_y - HOVER_LIFT && mouse_y <= card_y + CARD_H
 		draw_y := card_y
-		if is_hovered && !is_selected {
-			draw_y -= HOVER_LIFT
-		}
-		if is_selected {
-			draw_y -= HOVER_LIFT
+		if is_hovered && !is_selected { draw_y -= HOVER_LIFT }
+		if is_selected                { draw_y -= HOVER_LIFT }
+
+		if is_hovered {
+			tooltip_card = card
+			tooltip_rect = {cx, draw_y, CARD_W, CARD_H}
+			has_tooltip  = true
 		}
 
-		render_card(app, card, cx, draw_y, is_selected, can_afford)
+		render_card(app, card, cx, draw_y, is_selected, true)
 
-		// Botón de venta — aparece debajo de la carta solo al hacer hover
+		// Botón de venta — aparece debajo al hacer hover
 		if is_hovered {
 			sell_btn_rect := raylib.Rectangle{cx, draw_y + CARD_H + 2, CARD_W, SELL_BTN_H}
-			sell_label := fmt.tprintf("%s $%d", constants.get_text("CARD_SELL_BUTTON"), constants.CARD_SELL_PRICE)
+			sell_label    := fmt.tprintf("%s $%d", constants.get_text("CARD_SELL_BUTTON"), constants.CARD_SELL_PRICE)
 			if render_button(
-				sell_label,
-				sell_btn_rect,
+				sell_label, sell_btn_rect,
 				button_color         = constants.UI_BUTTON_SELL_COLOR,
 				button_hover_color   = constants.UI_BUTTON_SELL_HOVER,
 				button_pressed_color = constants.UI_BUTTON_SELL_PRESS,
@@ -4266,109 +4647,30 @@ render_card_hand :: proc(app: ^entities.App_State) {
 			}
 		}
 
-		// Click en la carta completa
-		card_rect := raylib.Rectangle{cx, draw_y, CARD_W, CARD_H}
-		append(&ui_click_blocks, card_rect)
-		if raylib.IsMouseButtonPressed(.LEFT) && is_hovered && can_afford {
-			if card.kind == .INTEREST_BOOST {
-				app.sim.interest_multiplier *= 2
+		// Click en la carta
+		append(&ui_click_blocks, raylib.Rectangle{cx, draw_y, CARD_W, CARD_H})
+		if raylib.IsMouseButtonPressed(.LEFT) && is_hovered {
+			if entities.is_relic(card.kind) && !relic_activated_this_frame {
+				apply_relic_card(app, card.kind)
 				entities.card_play(&app.sim, i)
+				relic_activated_this_frame = true
 				play_sound(.CONFIRMATION, .UI)
-			} else if card.kind == .EXTRA_DRAW {
-				draw_random_card(&app.sim)
-				entities.card_play(&app.sim, i)
-				play_sound(.CONFIRMATION, .UI)
-			} else if card.kind == .WEAKEN {
-				app.sim.next_wave_weakened = true
-				entities.card_play(&app.sim, i)
-				play_sound(.CONFIRMATION, .UI)
-			} else if card.kind == .DIVIDEND {
-				app.sim.dividend_stacks += 1
-				entities.card_play(&app.sim, i)
-				play_sound(.CONFIRMATION, .UI)
-			} else if is_selected {
-				// Deseleccionar
-				app.sim.selected_build_tower = .EMPTY
-				app.sim.selected_card_idx    = -1
-			} else {
-				// Seleccionar esta carta
-				app.sim.selected_card_idx    = i
-				app.sim.selected_build_tower = entities.card_to_tile(card)
+				i -= 1
+				continue
+			} else if !entities.is_relic(card.kind) {
+				if is_selected {
+					app.sim.selected_build_tower = .EMPTY
+					app.sim.selected_card_idx    = -1
+				} else {
+					app.sim.selected_card_idx    = i
+					app.sim.selected_build_tower = entities.card_to_tile(card)
+				}
 			}
 		}
-
-	}
-}
-
-// Overlay de selección de carta (cada DECK_SELECTION_INTERVAL oleadas)
-render_card_selection_overlay :: proc(app: ^entities.App_State) {
-	screen_w := f32(raylib.GetScreenWidth())
-	screen_h := f32(raylib.GetScreenHeight())
-
-	// Fondo oscuro
-	raylib.DrawRectangle(0, 0, i32(screen_w), i32(screen_h), raylib.Color{0, 0, 0, 170})
-
-	// Las 3 cartas centradas en pantalla
-	CARD_GAP_OVERLAY :: f32(16)
-	cards_total_w := f32(3) * CARD_W + f32(2) * CARD_GAP_OVERLAY
-
-	// Título y subtítulo centrados sobre las cartas
-	title      := strings.clone_to_cstring(constants.get_text("DECK_CHOOSE_CARD"), context.temp_allocator)
-	title_size : f32 = 20
-	title_w    := raylib.MeasureTextEx(constants.game_fonts.semibold, title, title_size, 0).x
-	title_x    := (screen_w - title_w) / 2
-	title_y    := screen_h / 2 - CARD_H / 2 - 52
-	raylib.DrawTextEx(constants.game_fonts.semibold, title, {title_x, title_y}, title_size, 0, raylib.WHITE)
-
-	cx := (screen_w - cards_total_w) / 2
-	cy := screen_h / 2 - CARD_H / 2
-
-	for i in 0 ..< 3 {
-		choice := app.sim.card_selection_choices[i]
-		card_x := cx + f32(i) * (CARD_W + CARD_GAP_OVERLAY)
-
-		can_afford := app.sim.money >= entities.card_cost(choice)
-		render_card(app, choice, card_x, cy, false, can_afford)
-
-		// Hover highlight + click
-		mouse_x := f32(raylib.GetMouseX())
-		mouse_y := f32(raylib.GetMouseY())
-		card_rect := raylib.Rectangle{card_x, cy, CARD_W, CARD_H}
-		is_hovered := mouse_x >= card_rect.x && mouse_x <= card_rect.x + card_rect.width &&
-		              mouse_y >= card_rect.y && mouse_y <= card_rect.y + card_rect.height
-		if is_hovered {
-			raylib.DrawRectangleRoundedLinesEx(card_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 3, raylib.Color{60, 220, 80, 255})
-		}
-		append(&ui_click_blocks, card_rect)
-
-		if raylib.IsMouseButtonPressed(.LEFT) && is_hovered {
-			entities.card_add_to_hand(&app.sim, choice)
-			entities.add_toast(
-				app,
-				fmt.tprintf("%s %s", constants.get_text("DECK_CARD_ADDED"), entities.card_name(choice)),
-				.SUCCESS,
-				3.0,
-			)
-			app.sim.card_selection_active = false
-			simulation_set_pause(app, false)
-		}
 	}
 
-	// Botón de reroll — disponible desde la oleada CARD_REROLL_MIN_WAVE
-	if app.sim.wave_number >= constants.CARD_REROLL_MIN_WAVE {
-		can_reroll := app.sim.money >= constants.CARD_REROLL_COST
-		reroll_label := fmt.tprintf("%s ($%d)", constants.get_text("DECK_REROLL_BUTTON"), constants.CARD_REROLL_COST)
-		btn_rect := raylib.Rectangle{
-			(screen_w - 160) / 2,
-			cy + CARD_H + 20,
-			160, 30,
-		}
-		col     := raylib.Color{80, 100, 180, 220} if can_reroll else raylib.Color{60, 60, 60, 180}
-		hov_col := raylib.Color{100, 130, 220, 255} if can_reroll else raylib.Color{60, 60, 60, 180}
-		if render_button(reroll_label, btn_rect, button_color = col, button_hover_color = hov_col) && can_reroll {
-			app.sim.money -= constants.CARD_REROLL_COST
-			generate_card_selection(&app.sim)
-			play_sound(.SELECT, .UI)
-		}
+	// Tooltip al final para que quede encima de todas las cartas
+	if has_tooltip {
+		draw_card_tooltip(tooltip_card, tooltip_rect)
 	}
 }

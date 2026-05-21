@@ -61,18 +61,37 @@ Simulation :: struct {
 	card_selection_active:  bool,
 	card_selection_choices: [3]Card,
 
-	// Multiplicador de interés (se duplica por cada carta INTEREST_BOOST jugada)
-	interest_multiplier: f32,
+	// Stacks permanentes de relictos (se acumulan toda la partida)
+	interest_stacks:     i32,  // +INTEREST_RATE de interés por oleada × stacks
+	steal_stacks:        i32,  // roba steal_stacks cartas adicionales al inicio de oleada
+	weaken_stacks:       i32,  // enemigos tienen -WEAKEN_HP_REDUCTION × stacks de HP
+	auto_stacks:         i32,  // auto-upgradea auto_stacks torres cada AUTO_UPGRADE_INTERVAL
+	auto_upgrade_timer:  f32,  // tiempo restante hasta el próximo tick de auto-upgrade
+	interest_multiplier: f32,  // legacy, ya no se usa — mantener para no romper init
 
-	// EXTRA_DRAW: mano ya modificada vía hand_size, no necesita campo extra
-
-	// WEAKEN: pending = carta jugada fuera de oleada; active = oleada en curso debilitada
-	next_wave_weakened: bool,
-	is_wave_weakened:   bool,
-
-	// DIVIDEND: stacks = cartas jugadas; wave_start_money = snapshot al inicio de oleada
+	// DIVIDEND: stacks; wave_start_money = snapshot al inicio de oleada
 	dividend_stacks:    i32,
 	wave_start_money:   i32,
+
+	// STEAL: última oleada en la que ya se robaron cartas (evita disparos múltiples entre oleadas)
+	steal_last_wave: i32,
+
+	// BLOODLUST: micro-bonus de daño por kill (multiplicador acumulado durante la partida)
+	bloodlust_stacks: i32,
+	bloodlust_mult:   f32,  // empieza en 1.0; cada kill += BLOODLUST_BONUS_PER_KILL × stacks
+
+	// FLAWLESS: bono de oro por oleada sin perder vidas
+	flawless_stacks:    i32,
+	wave_start_health:  i32,  // salud al inicio de la oleada para comparar al final
+
+	// FORMATION: bonus de daño para torres del mismo tipo en línea de 3+
+	formation_stacks: i32,
+
+	// FROZEN_AMP: enemigos ralentizados reciben daño amplificado
+	frozen_amp_stacks: i32,
+
+	// Victory flag (set when wave MAX_WAVE is cleared with health > 0)
+	is_victory: bool,
 
 	// Stats
 	enemies_killed: i32,

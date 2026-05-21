@@ -125,9 +125,15 @@ tower_get_sell_refund :: proc(t: ^Tower) -> i32 {
 }
 
 // Upgrade manual: incrementa level y recomputa stats desde base.
-// No aplica si ya se alcanzó el tope correspondiente al tipo de torre.
+// Respeta dos límites:
+//   - base_level (level - enhance_bonus) < TOWER_MAX_MANUAL_LEVEL (20) para torres normales
+//   - base_level < ENHANCE_MAX_LEVEL (5) para el potenciador
+//   - level < TOWER_MAX_LEVEL (25) en cualquier caso
 tower_upgrade :: proc(t: ^Tower) {
 	if t.level >= constants.TOWER_MAX_LEVEL { return }
+	manual_cap := constants.ENHANCE_MAX_LEVEL if t.type == .ENHANCE else constants.TOWER_MAX_MANUAL_LEVEL
+	base_level := t.level - t.enhance_bonus
+	if base_level >= manual_cap { return }
 	t.level += 1
 	tower_recompute_stats(t)
 }

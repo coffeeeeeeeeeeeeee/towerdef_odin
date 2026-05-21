@@ -1,4 +1,4 @@
-Esta carpeta contiene los archivos necesarios para compilar un juego en el lenguaje Odin. El juego es un juego de defensa de torres minimalista. Contiene un archivo constants.odin donde se encuentran las principales variables de márgenes, colores, timers, etc. El juego se renderiza a través de rendering.odin y el audio desde audio.odin. Cada vez que agregues un texto que se lea en pantalla ten en cuenta que debes agregar una traducción en translations.txt
+Esta carpeta contiene los archivos necesarios para compilar un juego en el lenguaje Odin. El juego es un juego de defensa de torres minimalista con un sistema de mazo de cartas al estilo Balatro. Contiene un archivo constants.odin donde se encuentran las principales variables de márgenes, colores, timers, etc. El juego se renderiza a través de rendering.odin y el audio desde audio.odin. Cada vez que agregues un texto que se lea en pantalla ten en cuenta que debes agregar una traducción en translations.txt
 
 ## Conversión de strings a cstring (patrón estándar)
 
@@ -92,3 +92,77 @@ TOWER_RANGE_OUTLINE :: raylib.Color{255, 255, 255, 60}  // outline para el modo 
 ```
 
 El modo selección usa `Color{255, 255, 255, 200}` directamente (más visible que `TOWER_RANGE_OUTLINE`).
+
+## Sistema de reliquias
+
+Las reliquias son cartas especiales (`is_relic = true`) que aplican efectos permanentes acumulables. Están definidas en `entities/card.odin`.
+
+### Reliquias implementadas
+
+| Relic Kind       | Campo en Simulation      | Efecto                                                              |
+|------------------|--------------------------|---------------------------------------------------------------------|
+| INTEREST_BOOST   | `interest_stacks`        | +interés por oleada × stacks                                        |
+| DIVIDEND         | `dividend_stacks`        | bonificación al final de oleada basada en dinero guardado           |
+| STEAL            | `steal_stacks`           | roba N cartas al terminar cada oleada (via `steal_last_wave`)       |
+| WEAKEN           | `weaken_stacks`          | enemigos tienen -HP × stacks al spawnear                            |
+| AUTO_UPGRADE     | `auto_stacks`            | auto-upgradea torres Y obstáculos cada AUTO_UPGRADE_INTERVAL        |
+| BLOODLUST        | `bloodlust_stacks`       | cada kill suma BLOODLUST_BONUS_PER_KILL × stacks a `bloodlust_mult` |
+| FLAWLESS         | `flawless_stacks`        | +FLAWLESS_BONUS × stacks por oleada completada sin perder vidas     |
+| FORMATION        | `formation_stacks`       | +FORMATION_BONUS de daño si 3+ torres del mismo tipo en línea       |
+| FROZEN_AMP       | `frozen_amp_stacks`      | +FROZEN_AMP_BONUS de daño contra enemigos ralentizados              |
+
+### Iteración para renderizar el tray de reliquias
+
+`RELIC_KINDS` en `rendering.odin` es un slice ordenado de `Card_Kind` usados para iterar las reliquias activas. Al agregar una nueva reliquia, añadirla a este slice.
+
+### Prevención de activación múltiple
+
+El flag `relic_activated_this_frame` (en el loop de render de la mano) evita que un solo click active varias reliquias si el cursor queda sobre otro ítem al remover una carta de la mano.
+
+### STEAL — timing
+
+STEAL se dispara en `update_wave` (cuando todos los enemigos mueren), **no** en `start_next_wave`. El campo `steal_last_wave` previene disparos duplicados por frame.
+
+### Daño global — calc_damage
+
+```odin
+calc_damage :: proc(app, base, source_tower, enemy) -> f32
+```
+
+Aplica en orden: `bloodlust_mult`, Formation bonus (si `tower_is_in_formation`), Frozen Amp bonus (si enemigo tiene slow). Se llama en todos los sitios de daño: ICE, laser, proyectil directo, proyectil AoE.
+
+## Obstáculos en el camino
+
+### Orientación visual automática
+
+`obstacle_bar_dims(m, row, col, cs)` determina las dimensiones de la barrera según si el camino en esa celda es horizontal o vertical. Esta función se usa tanto en `render_obstacles` (obstáculos reales) como en `draw_obstacle_preview` / `draw_obstacle_preview_invalid` (ghost al colocar), garantizando coherencia visual.
+
+### Restricción de esquinas y uniones
+
+`map_is_path_corner_or_junction(m, row, col)` devuelve `true` si la celda es una esquina o bifurcación del camino. Los obstáculos no se pueden colocar en esas celdas — el ghost se renderiza en rojo con una X.
+
+Criterio: ≥ 3 vecinos path = junction; 2 vecinos no opuestos = corner.
+
+## Sistema de victoria / derrota
+
+- **Derrota**: `app.sim.health <= 0` → `app_set_state(.GAME_OVER)`, `sim.is_victory = false`
+- **Victoria**: se completa la oleada `MAX_WAVE` con salud restante → `sim.is_victory = true`, `app_set_state(.GAME_OVER)`
+- En `render_game_over_ui`: si `sim.is_victory`, el título usa la clave `GAME_VICTORY_TITLE` en verde; si no, `GAME_OVER_TITLE` en rojo.
+
+## Botón "Siguiente Oleada"
+
+`show_next_wave_button := !app.settings.auto_start_wave && can_start_wave`
+
+Solo se renderiza cuando auto-oleada está desactivada **y** la oleada actual ya terminó. Desaparece mientras hay enemigos vivos.
+
+## Stats de partida
+
+- `towers_built` se incrementa en `input.odin` al colocar una torre (no en `simulation.odin`).
+- `upgrades_bought` se incrementa al comprar un upgrade de torre.
+- `money_earned` se acumula en `app_add_money`.
+- Los stats se renderizan como un slice de `Stat_Row` en `render_game_over_ui`, por lo que agregar un nuevo stat no requiere actualizar un contador manual.
+
+## Toasts
+
+- Se posicionan con `margin_top = constants.UI_MARGIN_Y` (valor 8) en `entities/toast.odin`.
+- Solo el primer toast de la cola (`toasts[0]`) se anima y renderiza. Los siguientes esperan con `creation_time = 0` como sentinel.

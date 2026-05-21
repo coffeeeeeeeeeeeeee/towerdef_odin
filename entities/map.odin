@@ -412,6 +412,38 @@ map_list_saved :: proc() -> [dynamic]string {
 	return files
 }
 
+// Devuelve true si la celda es una esquina o unión del camino.
+// Esquina  = exactamente 2 vecinos de camino que NO son opuestos (arriba+derecha, etc.).
+// Unión    = 3 o más vecinos de camino.
+// Usado para bloquear la colocación de obstáculos en esas celdas.
+map_is_path_corner_or_junction :: proc(m: ^Map, row, col: i32) -> bool {
+	is_path_like :: proc(m: ^Map, r, c: i32) -> bool {
+		if r < 0 || r >= constants.GRID_SIZE || c < 0 || c >= constants.GRID_SIZE { return false }
+		t := m.grid[r][c]
+		return t == .PATH || t == .SPAWN || t == .GOAL
+	}
+	// Solo aplica a celdas que forman parte del camino
+	if !is_path_like(m, row, col) { return false }
+
+	top    := is_path_like(m, row - 1, col)
+	right  := is_path_like(m, row,     col + 1)
+	bottom := is_path_like(m, row + 1, col)
+	left   := is_path_like(m, row,     col - 1)
+
+	count := (1 if top else 0) + (1 if right else 0) +
+	         (1 if bottom else 0) + (1 if left else 0)
+
+	if count >= 3 { return true } // unión
+
+	if count == 2 {
+		// Recto (arriba+abajo o izq+der) → NO es esquina
+		straight := (top && bottom) || (left && right)
+		return !straight
+	}
+
+	return false
+}
+
 // ─── Snapshot (undo/redo) ────────────────────────────────────────────────────
 
 // Full copy of a Map's state, used for undo/redo history.

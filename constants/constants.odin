@@ -188,13 +188,20 @@ TOWER_MAX_LEVEL          :: i32(25)   // Absolute hard cap (manual + enhance com
 
 ENHANCE_MAX_LEVEL :: i32(5)  // Maximum levels a tower can receive via ENHANCE boosts
 
-WEAKEN_HP_MULTIPLIER :: f32(0.70)  // HP multiplier applied to enemies when WEAKEN card is active
-DIVIDEND_RATE        :: f32(0.15)  // Fraction of wave spending returned per DIVIDEND stack
+WEAKEN_HP_REDUCTION      :: f32(0.10)   // HP reduction per WEAKEN stack (e.g. 2 stacks = -20% HP)
+DIVIDEND_RATE            :: f32(0.15)   // Fraction of wave spending returned per DIVIDEND stack
+AUTO_UPGRADE_INTERVAL    :: f32(2.0)    // Seconds between auto-upgrade ticks
+BLOODLUST_BONUS_PER_KILL :: f32(0.001)  // Damage multiplier gained per kill per BLOODLUST stack (+0.1%)
+FLAWLESS_BONUS           :: i32(75)     // Gold reward per FLAWLESS stack for a perfect wave (no lives lost)
+FORMATION_BONUS          :: f32(0.25)   // Damage multiplier bonus per FORMATION stack for towers in a line of 3+
+FROZEN_AMP_BONUS         :: f32(0.30)   // Extra damage multiplier per FROZEN_AMP stack on slowed enemies
+STEAL_CARDS_PER_STACK    :: i32(1)      // Cards stolen per STEAL stack at end of each wave
 
 CARD_REROLL_COST     :: i32(50)    // Gold cost to reroll the 3-card selection
 CARD_REROLL_MIN_WAVE :: i32(10)    // Earliest wave at which rerolling is available
 CARD_SELL_PRICE      :: i32(25)    // Gold received when selling a card from hand to discard
 HAND_REDEAL_COST     :: i32(40)    // Gold cost to redeal the hand once the game has started (free before first wave)
+HAND_MAX_SPREAD_CARDS :: i32(8)    // Cards before the hand switches to compact (overlapping) mode
 
 CRIT_BASE_CHANCE     :: f32(0.10)  // Base critical hit chance (10%) for all towers
 CRIT_DAMAGE_MULTIPLIER :: f32(2.0) // Damage multiplier on a critical hit
@@ -308,7 +315,8 @@ MIXED_WAVE_MIN_WAVE :: i32(20)  // Mixed waves begin at this wave number
 
 DECK_HAND_SIZE          :: i32(3)     // Cards dealt to hand at the start of each wave
 DECK_CARD_DROP_CHANCE   :: f32(0.004) // Probability of a card drop on each enemy kill
-DECK_SELECTION_INTERVAL :: i32(10)    // Every N waves the player selects a new card to add to the deck
+DECK_SELECTION_INTERVAL :: i32(1)     // Every N waves the shop opens (1 = every wave)
+SHOP_RELIC_PRICE        :: i32(75)    // Fixed price for relic cards in the shop
 
 OBSTACLE_BASE_COST              :: i32(25)  // Gold cost to place an obstacle card from hand
 OBSTACLE_UPGRADE_COST_BASE :: 50  // Base cost; doubles each level: 50, 100, 200, 400…

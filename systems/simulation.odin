@@ -58,6 +58,15 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 
 	// Update ice pulses
 	update_ice_pulses(app, s_dt)
+
+	// Auto-upgrade: cada AUTO_UPGRADE_INTERVAL actualiza las torres más baratas
+	if sim.auto_stacks > 0 && sim.started {
+		sim.auto_upgrade_timer -= s_dt
+		if sim.auto_upgrade_timer <= 0 {
+			sim.auto_upgrade_timer = constants.AUTO_UPGRADE_INTERVAL
+			update_auto_upgrade(app)
+		}
+	}
 }
 
 // Wave management
@@ -69,9 +78,23 @@ update_wave :: proc(app: ^entities.App_State, dt: f32) {
 	if sim.started && sim.enemies_to_spawn > 0 &&
 	   sim.enemies_spawned >= sim.enemies_to_spawn && len(sim.enemies) == 0 {
 		if sim.wave_number >= constants.MAX_WAVE {
+			sim.is_victory = app.sim.health > 0
 			entities.app_set_state(app, .GAME_OVER)
-		} else if app.settings.auto_start_wave {
-			start_next_wave(app)
+		} else {
+			// STEAL: roba cartas al terminar la oleada, independientemente del auto_start.
+			// steal_last_wave evita que se dispare más de una vez por oleada.
+			if sim.steal_stacks > 0 && sim.steal_last_wave < sim.wave_number {
+				sim.steal_last_wave = sim.wave_number
+				cards_stolen := sim.steal_stacks * constants.STEAL_CARDS_PER_STACK
+				for _ in 0 ..< cards_stolen {
+					entities.deck_draw_one(sim)
+				}
+				entities.add_toast(app, fmt.tprintf("+%d carta(s) robada(s)", cards_stolen), .INFO)
+			}
+
+			if app.settings.auto_start_wave {
+				start_next_wave(app)
+			}
 		}
 	}
 }
@@ -95,11 +118,13 @@ start_next_wave :: proc(app: ^entities.App_State) {
 			}
 		}
 
-		// Interest bonus: reward the player for saving money between waves
-		interest := i32(f32(sim.money) * constants.INTEREST_RATE * sim.interest_multiplier)
-		if interest > 0 {
-			entities.app_add_money(app, interest)
-			entities.add_toast(app, fmt.tprintf("+$%d interés", interest), .INFO)
+		// Interest bonus: +INTEREST_RATE por cada stack de INTEREST_BOOST acumulado
+		if sim.interest_stacks > 0 {
+			interest := i32(f32(sim.money) * constants.INTEREST_RATE * f32(sim.interest_stacks))
+			if interest > 0 {
+				entities.app_add_money(app, interest)
+				entities.add_toast(app, fmt.tprintf("+$%d interés (x%d)", interest, sim.interest_stacks), .INFO)
+			}
 		}
 	}
 
@@ -110,12 +135,18 @@ start_next_wave :: proc(app: ^entities.App_State) {
 		entities.add_toast(app, fmt.tprintf("+$%d oleada", wave_reward), .SUCCESS)
 	}
 
-	// Snapshot de dinero para calcular el dividendo de la próxima oleada
-	sim.wave_start_money = sim.money
+	// Flawless: bono de oro si no se perdieron vidas en la oleada anterior
+	if sim.wave_number > 0 && sim.flawless_stacks > 0 {
+		if sim.health == sim.wave_start_health {
+			bonus := constants.FLAWLESS_BONUS * sim.flawless_stacks
+			entities.app_add_money(app, bonus)
+			entities.add_toast(app, fmt.tprintf("+$%d oleada perfecta", bonus), .SUCCESS)
+		}
+	}
 
-	// Transferir el flag de debilitamiento: la carta jugada afecta la oleada que empieza
-	sim.is_wave_weakened   = sim.next_wave_weakened
-	sim.next_wave_weakened = false
+	// Snapshots al inicio de oleada (usados por Dividend y Flawless al terminar)
+	sim.wave_start_money  = sim.money
+	sim.wave_start_health = sim.health
 
 	sim.started = true  // Mark game as started
 	sim.wave_number += 1
@@ -208,38 +239,18 @@ start_next_wave :: proc(app: ^entities.App_State) {
 		spawn.next_spawn_delay = get_next_spawn_delay()
 	}
 
-	// Selección de carta cada DECK_SELECTION_INTERVAL oleadas (pausa el juego)
-	if sim.wave_number % constants.DECK_SELECTION_INTERVAL == 0 {
+	// Shop al final de cada oleada (excepto la primera — el jugador ya tiene mano inicial)
+	if sim.wave_number > 1 && sim.wave_number % constants.DECK_SELECTION_INTERVAL == 0 {
 		generate_card_selection(sim)
 		sim.card_selection_active = true
 		simulation_set_pause(app, true)
 	}
 }
 
-// Agrega una carta aleatoria del pool completo directamente a la mano.
-draw_random_card :: proc(sim: ^entities.Simulation) {
-	pool := [13]entities.Card{
-		{kind = .TOWER, tower_type = .ARCHER},
-		{kind = .TOWER, tower_type = .CANNON},
-		{kind = .TOWER, tower_type = .SNIPER},
-		{kind = .TOWER, tower_type = .MISSILE},
-		{kind = .TOWER, tower_type = .LASER},
-		{kind = .TOWER, tower_type = .ICE},
-		{kind = .TOWER, tower_type = .ENHANCE},
-		{kind = .OBSTACLE},
-		{kind = .OBSTACLE},
-		{kind = .INTEREST_BOOST},
-		{kind = .EXTRA_DRAW},
-		{kind = .WEAKEN},
-		{kind = .DIVIDEND},
-	}
-	entities.card_add_to_hand(sim, pool[rand.int_max(13)])
-}
-
 // Rellena sim.card_selection_choices con 3 cartas distintas del pool.
 // Puede llamarse desde start_next_wave o desde el botón de reroll.
 generate_card_selection :: proc(sim: ^entities.Simulation) {
-	selection_pool := [13]entities.Card{
+	selection_pool := [18]entities.Card{
 		{kind = .TOWER, tower_type = .ARCHER},
 		{kind = .TOWER, tower_type = .CANNON},
 		{kind = .TOWER, tower_type = .SNIPER},
@@ -250,12 +261,17 @@ generate_card_selection :: proc(sim: ^entities.Simulation) {
 		{kind = .OBSTACLE},
 		{kind = .OBSTACLE},
 		{kind = .INTEREST_BOOST},
-		{kind = .EXTRA_DRAW},
+		{kind = .STEAL},
 		{kind = .WEAKEN},
 		{kind = .DIVIDEND},
+		{kind = .AUTO_UPGRADE},
+		{kind = .BLOODLUST},
+		{kind = .FLAWLESS},
+		{kind = .FORMATION},
+		{kind = .FROZEN_AMP},
 	}
-	available := [13]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
-	n := 13
+	available := [18]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}
+	n := 18
 	for i in 0 ..< 3 {
 		j := rand.int_max(n)
 		sim.card_selection_choices[i] = selection_pool[available[j]]
@@ -303,7 +319,7 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 				multiplier = constants.ENEMY_HEALTH_DEFAULT
 			}
 
-			weaken := constants.WEAKEN_HP_MULTIPLIER if sim.is_wave_weakened else 1.0
+			weaken := max(0.1, 1.0 - constants.WEAKEN_HP_REDUCTION * f32(sim.weaken_stacks))
 			hp :=
 				constants.ENEMY_BASE_HP *
 				math.pow(constants.ENEMY_GROWTH_RATE, f32(sim.wave_number - 1)) *
@@ -435,11 +451,16 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			}
 			entities.app_add_money(app, reward)
 			sim.enemies_killed += 1
-			sim.money_earned += reward
+			sim.money_earned   += reward
+
+			// Bloodlust: micro-bonus de daño por cada kill
+			if sim.bloodlust_stacks > 0 {
+				sim.bloodlust_mult += constants.BLOODLUST_BONUS_PER_KILL * f32(sim.bloodlust_stacks)
+			}
 
 			// 0.1% de probabilidad de obtener una carta aleatoria al matar
 			if rand.float32() < constants.DECK_CARD_DROP_CHANCE {
-				drop_pool := [12]entities.Card{
+				drop_pool := [17]entities.Card{
 					{kind = .TOWER, tower_type = .ARCHER},
 					{kind = .TOWER, tower_type = .CANNON},
 					{kind = .TOWER, tower_type = .SNIPER},
@@ -449,11 +470,16 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 					{kind = .OBSTACLE},
 					{kind = .OBSTACLE},
 					{kind = .INTEREST_BOOST},
-					{kind = .EXTRA_DRAW},
+					{kind = .STEAL},
 					{kind = .WEAKEN},
 					{kind = .DIVIDEND},
+					{kind = .AUTO_UPGRADE},
+					{kind = .BLOODLUST},
+					{kind = .FLAWLESS},
+					{kind = .FORMATION},
+					{kind = .FROZEN_AMP},
 				}
-				dropped := drop_pool[rand.int_max(12)]
+				dropped := drop_pool[rand.int_max(17)]
 				entities.card_add_to_hand(sim, dropped)
 				entities.add_toast(
 					app,
@@ -576,6 +602,7 @@ update_ice_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 			if is_crit {
 				dmg *= constants.CRIT_DAMAGE_MULTIPLIER
 			}
+			dmg = calc_damage(app, dmg, tower, &enemy)
 			enemy.hp -= dmg
 			tower.total_damage += dmg
 			spawn_damage_number(app, enemy.x + 0.5, enemy.y + 0.5, dmg, is_crit)
@@ -629,8 +656,9 @@ update_laser_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, dt:
 	damage, beam_active := entities.laser_tower_update(tower, dt)
 
 	if damage > 0 && tower.target != nil {
-		tower.target.hp -= damage
-		tower.total_damage += damage
+		scaled := calc_damage(app, damage, tower, tower.target)
+		tower.target.hp -= scaled
+		tower.total_damage += scaled
 
 		// Show accumulated damage
 		should_show, display_damage, is_crit := entities.laser_should_show_damage(tower)
@@ -638,6 +666,7 @@ update_laser_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, dt:
 			if is_crit {
 				// Apply bonus critical damage
 				bonus := display_damage * (constants.CRIT_DAMAGE_MULTIPLIER - 1.0)
+				bonus  = calc_damage(app, bonus, tower, tower.target)
 				tower.target.hp -= bonus
 				tower.total_damage += bonus
 			}
@@ -838,9 +867,10 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 
 			if proj.target != nil {
 				// Objetivo vivo: aplica daño directo
-				proj.target.hp -= damage
-				if source_tower != nil { source_tower.total_damage += damage }
-				spawn_damage_number(app, proj.target.x + 0.5, proj.target.y + 0.5, damage, is_crit)
+				scaled_dmg := calc_damage(app, damage, source_tower, proj.target)
+				proj.target.hp -= scaled_dmg
+				if source_tower != nil { source_tower.total_damage += scaled_dmg }
+				spawn_damage_number(app, proj.target.x + 0.5, proj.target.y + 0.5, scaled_dmg, is_crit)
 				play_sound(.PROJECTILE_HIT, .SFX)
 			}
 
@@ -864,6 +894,7 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 						if is_crit {
 							aoe_damage *= constants.CRIT_DAMAGE_MULTIPLIER
 						}
+						aoe_damage = calc_damage(app, aoe_damage, source_tower, &enemy)
 						enemy.hp -= aoe_damage
 						if source_tower != nil { source_tower.total_damage += aoe_damage }
 						spawn_damage_number(
@@ -906,6 +937,118 @@ update_damage_numbers :: proc(app: ^entities.App_State, dt: f32) {
 }
 
 // Update ice pulses (expanding ring animation)
+// Actualiza el auto-upgrade: mejora hasta auto_stacks torres en orden de upgrade más barato.
+// Salta torres al nivel máximo o cuando no hay dinero suficiente.
+// Cuenta cuántas torres del mismo tipo hay consecutivamente en una dirección (dr, dc).
+tower_count_line :: proc(app: ^entities.App_State, tower: ^entities.Tower, dr, dc: i32) -> i32 {
+	count := i32(0)
+	r, c  := tower.r + dr, tower.c + dc
+	for {
+		found := false
+		for &t in app.sim.towers {
+			if t.r == r && t.c == c && t.type == tower.type {
+				found = true
+				break
+			}
+		}
+		if !found { break }
+		count += 1
+		r += dr
+		c += dc
+	}
+	return count
+}
+
+// Devuelve true si la torre pertenece a una línea de 3+ torres del mismo tipo (horizontal o vertical).
+tower_is_in_formation :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> bool {
+	if app.sim.formation_stacks == 0 { return false }
+	h := 1 + tower_count_line(app, tower, 0, -1) + tower_count_line(app, tower, 0, 1)
+	if h >= 3 { return true }
+	v := 1 + tower_count_line(app, tower, -1, 0) + tower_count_line(app, tower, 1, 0)
+	return v >= 3
+}
+
+// Aplica los modificadores globales de daño: Bloodlust, Formation, Frozen Amp.
+// source puede ser nil (p.ej. obstáculos). enemy puede ser nil (p.ej. AoE sin objetivo).
+calc_damage :: proc(
+	app:    ^entities.App_State,
+	base:   f32,
+	source: ^entities.Tower,
+	enemy:  ^entities.Enemy,
+) -> f32 {
+	d := base * app.sim.bloodlust_mult
+
+	if source != nil && app.sim.formation_stacks > 0 && tower_is_in_formation(app, source) {
+		d *= 1.0 + constants.FORMATION_BONUS * f32(app.sim.formation_stacks)
+	}
+
+	if enemy != nil && enemy.slow_timer > 0 && app.sim.frozen_amp_stacks > 0 {
+		d *= 1.0 + constants.FROZEN_AMP_BONUS * f32(app.sim.frozen_amp_stacks)
+	}
+
+	return d
+}
+
+update_auto_upgrade :: proc(app: ^entities.App_State) {
+	sim := &app.sim
+	upgrades_done := i32(0)
+
+	for upgrades_done < sim.auto_stacks {
+		best_cost    := i32(max(i32))
+		best_tower   := -1          // índice en sim.towers, -1 si no es torre
+		best_obs_row := i32(-1)     // fila del obstáculo candidato
+		best_obs_col := i32(-1)     // col  del obstáculo candidato
+
+		// Candidatos: torres (incluye ENHANCE y todos los demás tipos)
+		for i in 0 ..< len(sim.towers) {
+			t := &sim.towers[i]
+			if t.level >= constants.TOWER_MAX_LEVEL do continue
+			manual_cap := constants.ENHANCE_MAX_LEVEL if t.type == .ENHANCE else constants.TOWER_MAX_MANUAL_LEVEL
+			if t.level - t.enhance_bonus >= manual_cap do continue
+			cost := entities.tower_get_upgrade_cost(t)
+			if cost < best_cost {
+				best_cost    = cost
+				best_tower   = i
+				best_obs_row = -1
+				best_obs_col = -1
+			}
+		}
+
+		// Candidatos: obstáculos (itera el grid buscando celdas con .OBSTACLE)
+		for row in 0 ..< app.editor.game_map.height {
+			for col in 0 ..< app.editor.game_map.width {
+				if app.editor.game_map.obstacle_grid[row][col] != .OBSTACLE do continue
+				level := entities.map_get_obstacle_level(&app.editor.game_map, row, col)
+				cost  := constants.OBSTACLE_UPGRADE_COST_BASE * i32(i32(1) << uint(level - 1))
+				if cost < best_cost {
+					best_cost    = cost
+					best_tower   = -1
+					best_obs_row = row
+					best_obs_col = col
+				}
+			}
+		}
+
+		// Sin candidato asequible → parar
+		if (best_tower < 0 && best_obs_row < 0) || sim.money < best_cost do break
+
+		// Aplicar upgrade al candidato más barato
+		sim.money -= best_cost
+		if best_tower >= 0 {
+			entities.tower_upgrade(&sim.towers[best_tower])
+		} else {
+			level := entities.map_get_obstacle_level(&app.editor.game_map, best_obs_row, best_obs_col)
+			entities.map_set_obstacle_level(&app.editor.game_map, best_obs_row, best_obs_col, level + 1)
+		}
+		sim.upgrades_bought += 1
+		upgrades_done += 1
+	}
+
+	if upgrades_done > 0 {
+		entities.add_toast(app, fmt.tprintf("Auto-mejora x%d", upgrades_done), .INFO)
+	}
+}
+
 update_ice_pulses :: proc(app: ^entities.App_State, dt: f32) {
 	sim := &app.sim
 	for i := len(sim.ice_pulses) - 1; i >= 0; i -= 1 {
@@ -1041,10 +1184,20 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		card_selection_active  = false,
 		card_selection_choices = {},
 		interest_multiplier    = 1.0,
-		next_wave_weakened     = false,
-		is_wave_weakened       = false,
+		interest_stacks        = 0,
+		steal_stacks           = 0,
+		weaken_stacks          = 0,
+		auto_stacks            = 0,
+		auto_upgrade_timer     = 0,
 		dividend_stacks        = 0,
 		wave_start_money       = 0,
+		steal_last_wave        = 0,
+		bloodlust_stacks       = 0,
+		bloodlust_mult         = 1.0,
+		flawless_stacks        = 0,
+		wave_start_health      = 0,
+		formation_stacks       = 0,
+		frozen_amp_stacks      = 0,
 
 		enemies_killed   = 0,
 		money_earned     = 0,
@@ -1056,9 +1209,9 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		_sample_timer    = 0,
 	}
 
-	// Inicializar mazo inicial y robar mano de apertura
+	// Inicializar mazo inicial y mano de apertura garantizada
+	// (build_starter_deck puebla sim.hand directamente con la composición garantizada)
 	entities.build_starter_deck(&app.sim)
-	entities.hand_refresh(&app.sim)
 
 	// Pre-roll bonus status for the first 3 upcoming waves (waves 1, 2, 3).
 	for i in 0 ..< 3 {

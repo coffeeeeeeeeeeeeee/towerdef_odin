@@ -92,28 +92,23 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 					// Place selected card if one is selected
 					if app.sim.selected_build_tower != .EMPTY {
 						if app.sim.selected_build_tower == .OBSTACLE {
-							// Colocar obstáculo (carta de tipo OBSTACLE)
-							if app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY &&
-							   app.sim.money >= constants.OBSTACLE_BASE_COST {
+							// Colocar obstáculo — gratuito, ya se pagó en el shop
+							is_forbidden := entities.map_is_path_corner_or_junction(&app.editor.game_map, grid_y, grid_x)
+							if app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY && !is_forbidden {
 								app.editor.game_map.obstacle_grid[grid_y][grid_x] = .OBSTACLE
-								app.sim.money -= constants.OBSTACLE_BASE_COST
 								entities.card_play(&app.sim, app.sim.selected_card_idx)
 								app.sim.selected_build_tower = .EMPTY
 								app.sim.selected_card_idx    = -1
 								play_sound(.CLICK, .UI)
 							}
 						} else {
-							// Colocar torre (carta de tipo TOWER)
+							// Colocar torre — gratuito, ya se pagó en el shop
 							tower_type := tile_to_tower_type(app.sim.selected_build_tower)
-							spec := constants.TOWER_SPECS[tower_type]
-
-							if app.sim.money >= spec.cost &&
-							   tile == .EMPTY &&
-							   app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY {
+							if tile == .EMPTY && app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY {
 								app.editor.game_map.grid[grid_y][grid_x] = app.sim.selected_build_tower
-								app.sim.money -= spec.cost
 								tower := entities.tower_init(tower_type, grid_y, grid_x)
 								append(&app.sim.towers, tower)
+								app.sim.towers_built += 1
 								entities.card_play(&app.sim, app.sim.selected_card_idx)
 								app.sim.selected_build_tower = .EMPTY
 								app.sim.selected_card_idx    = -1

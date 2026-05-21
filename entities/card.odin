@@ -2,15 +2,21 @@ package entities
 
 import "../constants"
 import "core:math/rand"
+import raylib "vendor:raylib"
 
 // Tipo de carta
 Card_Kind :: enum {
-	TOWER,          // valor cero → compatible con código existente
+	TOWER,           // valor cero → compatible con código existente
 	OBSTACLE,
-	INTEREST_BOOST, // duplica el multiplicador de interés entre oleadas
-	EXTRA_DRAW,     // aumenta permanentemente el tamaño de la mano en +1
-	WEAKEN,         // la próxima oleada tiene enemigos con -30% HP
-	DIVIDEND,       // al final de cada oleada devuelve un % del dinero gastado
+	INTEREST_BOOST,  // +INTEREST_RATE de interés por oleada (acumulable)
+	WEAKEN,          // enemigos con -WEAKEN_HP_REDUCTION × stacks de HP (acumulable)
+	DIVIDEND,        // al final de cada oleada devuelve un % del dinero gastado (acumulable)
+	STEAL,           // roba una carta del mazo al inicio de cada oleada (acumulable)
+	AUTO_UPGRADE,    // cada AUTO_UPGRADE_INTERVAL actualiza las torres más baratas (acumulable)
+	BLOODLUST,       // cada kill aumenta el multiplicador de daño de todas las torres (acumulable)
+	FLAWLESS,        // +oro al final de oleadas sin perder vidas (acumulable)
+	FORMATION,       // torres del mismo tipo en línea de 3+ reciben bonus de daño (acumulable)
+	FROZEN_AMP,      // enemigos ralentizados reciben daño amplificado (acumulable)
 }
 
 // Una carta del mazo
@@ -18,6 +24,79 @@ Card :: struct {
 	kind:       Card_Kind,
 	tower_type: constants.Tower_Type, // solo válido si kind == .TOWER
 }
+
+// ---------------------------------------------------------------------------
+// Sistema de Relictos
+//
+// Los relictos son cartas con efecto permanente y acumulable.
+// Se aplican inmediatamente al elegirlas (no van a la mano).
+// Para agregar un nuevo relicto:
+//   1. Añadir valor al enum Card_Kind arriba
+//   2. Añadir campo <nombre>_stacks: i32 en Simulation (app.odin)
+//   3. Inicializar el campo a 0 en simulation_init (simulation.odin)
+//   4. Aplicar el efecto en start_next_wave (simulation.odin)
+//   5. Agregar icono en Icons struct + load_icons (fonts.odin)
+//   6. Agregar los tres casos en is_relic / relic_icon / relic_stacks / relic_apply abajo
+//   7. Agregar traducción en translations.txt
+// ---------------------------------------------------------------------------
+
+// Devuelve true si la carta es un relicto (efecto permanente acumulable).
+is_relic :: proc(kind: Card_Kind) -> bool {
+	return kind == .INTEREST_BOOST || kind == .DIVIDEND   || kind == .STEAL      ||
+	       kind == .WEAKEN         || kind == .AUTO_UPGRADE || kind == .BLOODLUST ||
+	       kind == .FLAWLESS       || kind == .FORMATION   || kind == .FROZEN_AMP
+}
+
+// Devuelve el icono PNG asociado al relicto (Texture2D vacía si no existe).
+relic_icon :: proc(kind: Card_Kind) -> raylib.Texture2D {
+	#partial switch kind {
+	case .INTEREST_BOOST: return constants.game_icons.interest
+	case .DIVIDEND:       return constants.game_icons.dividend
+	case .STEAL:          return constants.game_icons.steal
+	case .WEAKEN:         return constants.game_icons.weaken
+	case .AUTO_UPGRADE:   return constants.game_icons.auto
+	case .BLOODLUST:      return constants.game_icons.bloodlust
+	case .FLAWLESS:       return constants.game_icons.flawless
+	case .FORMATION:      return constants.game_icons.formation
+	case .FROZEN_AMP:     return constants.game_icons.frozen_amp
+	}
+	return {}
+}
+
+// Devuelve el número de stacks acumulados del relicto en la simulación dada.
+relic_stacks :: proc(sim: ^Simulation, kind: Card_Kind) -> i32 {
+	#partial switch kind {
+	case .INTEREST_BOOST: return sim.interest_stacks
+	case .DIVIDEND:       return sim.dividend_stacks
+	case .STEAL:          return sim.steal_stacks
+	case .WEAKEN:         return sim.weaken_stacks
+	case .AUTO_UPGRADE:   return sim.auto_stacks
+	case .BLOODLUST:      return sim.bloodlust_stacks
+	case .FLAWLESS:       return sim.flawless_stacks
+	case .FORMATION:      return sim.formation_stacks
+	case .FROZEN_AMP:     return sim.frozen_amp_stacks
+	}
+	return 0
+}
+
+// Incrementa en 1 el stack del relicto.
+relic_apply :: proc(sim: ^Simulation, kind: Card_Kind) {
+	#partial switch kind {
+	case .INTEREST_BOOST: sim.interest_stacks  += 1
+	case .DIVIDEND:       sim.dividend_stacks  += 1
+	case .STEAL:          sim.steal_stacks     += 1
+	case .WEAKEN:         sim.weaken_stacks    += 1
+	case .AUTO_UPGRADE:   sim.auto_stacks      += 1
+	case .BLOODLUST:      sim.bloodlust_stacks += 1
+	case .FLAWLESS:       sim.flawless_stacks  += 1
+	case .FORMATION:      sim.formation_stacks += 1
+	case .FROZEN_AMP:     sim.frozen_amp_stacks += 1
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Operaciones de mazo
+// ---------------------------------------------------------------------------
 
 // Mezcla el mazo en el lugar usando Fisher-Yates
 deck_shuffle :: proc(deck: ^[dynamic]Card) {
@@ -93,53 +172,88 @@ card_add_to_hand :: proc(sim: ^Simulation, card: Card) {
 	append(&sim.hand, card)
 }
 
-// Construye y mezcla el mazo inicial.
-build_starter_deck :: proc(sim: ^Simulation) {
-	starter := []Card{
-		{kind = .TOWER, tower_type = .ARCHER},
-		{kind = .TOWER, tower_type = .ARCHER},
-		{kind = .TOWER, tower_type = .ARCHER},
-		{kind = .TOWER, tower_type = .CANNON},
-		{kind = .TOWER, tower_type = .CANNON},
-		{kind = .TOWER, tower_type = .SNIPER},
-		{kind = .TOWER, tower_type = .MISSILE},
-		{kind = .TOWER, tower_type = .LASER},
-		{kind = .TOWER, tower_type = .ICE},
-		{kind = .TOWER, tower_type = .ENHANCE},
-		{kind = .OBSTACLE},
-		{kind = .OBSTACLE},
+// Reparte una mano garantizada de 5 cartas y llena el mazo con el resto.
+// Limpia mano y mazo antes de operar (sirve tanto para inicio como para reroll).
+// Mano: 3 torres de daño (ARCHER/CANNON/SNIPER/MISSILE),
+//       1 de utilidad (ICE o ENHANCE), 1 reliquia aleatoria.
+// Mazo: las cartas restantes, mezcladas.
+deal_guaranteed_hand :: proc(sim: ^Simulation) {
+	clear(&sim.hand)
+	clear(&sim.deck)
+
+	// Pools — se eligen con índices aleatorios para evitar bias
+	damage_kinds  := []constants.Tower_Type{.ARCHER, .ARCHER, .CANNON, .CANNON, .SNIPER, .MISSILE}
+	utility_kinds := []constants.Tower_Type{.ICE, .ENHANCE}
+	relic_kinds   := []Card_Kind{.INTEREST_BOOST, .WEAKEN, .BLOODLUST, .FLAWLESS}
+
+	// Copias mutables para poder permutar in-place (Fisher-Yates)
+	dmg  := [6]constants.Tower_Type{damage_kinds[0],  damage_kinds[1],  damage_kinds[2],
+	                                  damage_kinds[3],  damage_kinds[4],  damage_kinds[5]}
+	util := [2]constants.Tower_Type{utility_kinds[0], utility_kinds[1]}
+	rel  := [4]Card_Kind{relic_kinds[0], relic_kinds[1], relic_kinds[2], relic_kinds[3]}
+
+	shuffle_tower :: proc(arr: []constants.Tower_Type) {
+		for i := len(arr) - 1; i > 0; i -= 1 {
+			j := rand.int_max(i + 1)
+			arr[i], arr[j] = arr[j], arr[i]
+		}
 	}
-	for c in starter {
-		append(&sim.deck, c)
+	shuffle_kind :: proc(arr: []Card_Kind) {
+		for i := len(arr) - 1; i > 0; i -= 1 {
+			j := rand.int_max(i + 1)
+			arr[i], arr[j] = arr[j], arr[i]
+		}
 	}
+	shuffle_tower(dmg[:])
+	shuffle_tower(util[:])
+	shuffle_kind(rel[:])
+
+	// -- Mano garantizada --
+	append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[0]})
+	append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[1]})
+	append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[2]})
+	append(&sim.hand, Card{kind = .TOWER, tower_type = util[0]})
+	append(&sim.hand, Card{kind = rel[0]})
+
+	// -- Resto al mazo --
+	append(&sim.deck, Card{kind = .TOWER, tower_type = dmg[3]})
+	append(&sim.deck, Card{kind = .TOWER, tower_type = dmg[4]})
+	append(&sim.deck, Card{kind = .TOWER, tower_type = dmg[5]})
+	append(&sim.deck, Card{kind = .TOWER, tower_type = util[1]})
+	append(&sim.deck, Card{kind = .TOWER, tower_type = .LASER})
+	append(&sim.deck, Card{kind = .OBSTACLE})
+	append(&sim.deck, Card{kind = .OBSTACLE})
 	deck_shuffle(&sim.deck)
+}
+
+// Construye el mazo inicial. Delega en deal_guaranteed_hand.
+build_starter_deck :: proc(sim: ^Simulation) {
+	deal_guaranteed_hand(sim)
 }
 
 // Devuelve el nombre traducido de una carta
 card_name :: proc(card: Card) -> string {
-	if card.kind == .OBSTACLE {
-		return constants.get_text("CARD_OBSTACLE_NAME")
-	}
-	if card.kind == .INTEREST_BOOST {
-		return constants.get_text("CARD_INTEREST_BOOST_NAME")
-	}
-	if card.kind == .EXTRA_DRAW {
-		return constants.get_text("CARD_EXTRA_DRAW_NAME")
-	}
-	if card.kind == .WEAKEN {
-		return constants.get_text("CARD_WEAKEN_NAME")
-	}
-	if card.kind == .DIVIDEND {
-		return constants.get_text("CARD_DIVIDEND_NAME")
-	}
-	switch card.tower_type {
-	case .ARCHER:  return constants.get_text("TOWER_ARCHER_NAME")
-	case .CANNON:  return constants.get_text("TOWER_CANNON_NAME")
-	case .SNIPER:  return constants.get_text("TOWER_SNIPER_NAME")
-	case .MISSILE: return constants.get_text("TOWER_MISSILE_NAME")
-	case .LASER:   return constants.get_text("TOWER_LASER_NAME")
-	case .ICE:     return constants.get_text("TOWER_ICE_NAME")
-	case .ENHANCE: return constants.get_text("TOWER_ENHANCE_NAME")
+	switch card.kind {
+	case .OBSTACLE:       return constants.get_text("CARD_OBSTACLE_NAME")
+	case .INTEREST_BOOST: return constants.get_text("CARD_INTEREST_BOOST_NAME")
+	case .WEAKEN:         return constants.get_text("CARD_WEAKEN_NAME")
+	case .DIVIDEND:       return constants.get_text("CARD_DIVIDEND_NAME")
+	case .STEAL:          return constants.get_text("CARD_STEAL_NAME")
+	case .AUTO_UPGRADE:   return constants.get_text("CARD_AUTO_UPGRADE_NAME")
+	case .BLOODLUST:      return constants.get_text("CARD_BLOODLUST_NAME")
+	case .FLAWLESS:       return constants.get_text("CARD_FLAWLESS_NAME")
+	case .FORMATION:      return constants.get_text("CARD_FORMATION_NAME")
+	case .FROZEN_AMP:     return constants.get_text("CARD_FROZEN_AMP_NAME")
+	case .TOWER:
+		switch card.tower_type {
+		case .ARCHER:  return constants.get_text("TOWER_ARCHER_NAME")
+		case .CANNON:  return constants.get_text("TOWER_CANNON_NAME")
+		case .SNIPER:  return constants.get_text("TOWER_SNIPER_NAME")
+		case .MISSILE: return constants.get_text("TOWER_MISSILE_NAME")
+		case .LASER:   return constants.get_text("TOWER_LASER_NAME")
+		case .ICE:     return constants.get_text("TOWER_ICE_NAME")
+		case .ENHANCE: return constants.get_text("TOWER_ENHANCE_NAME")
+		}
 	}
 	return "?"
 }
@@ -154,9 +268,9 @@ card_to_tile :: proc(card: Card) -> constants.Tile {
 	if card.kind == .OBSTACLE {
 		return .OBSTACLE
 	}
-	if card.kind == .INTEREST_BOOST || card.kind == .EXTRA_DRAW ||
-	   card.kind == .WEAKEN        || card.kind == .DIVIDEND {
-		return .EMPTY  // efectos instantáneos, sin colocación en el mapa
+	// Relictos no se colocan en el mapa
+	if is_relic(card.kind) {
+		return .EMPTY
 	}
 	switch card.tower_type {
 	case .ARCHER:  return .TOWER_ARCHER
@@ -180,9 +294,9 @@ card_cost :: proc(card: Card) -> i32 {
 	if card.kind == .OBSTACLE {
 		return constants.OBSTACLE_BASE_COST
 	}
-	if card.kind == .INTEREST_BOOST || card.kind == .EXTRA_DRAW ||
-	   card.kind == .WEAKEN        || card.kind == .DIVIDEND {
-		return 0  // sin costo: son beneficios estratégicos
+	// Relictos no tienen costo monetario
+	if is_relic(card.kind) {
+		return 0
 	}
 	return constants.TOWER_SPECS[card.tower_type].cost
 }
