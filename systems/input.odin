@@ -102,11 +102,18 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 								play_sound(.CLICK, .UI)
 							}
 						} else {
-							// Colocar torre — gratuito, ya se pagó en el shop
+							// Colocar torre — gratuito, ya se pagó en el shop.
+							// Se puede construir sobre árboles (ACCESSORY_TREE): el árbol se destruye.
 							tower_type := tile_to_tower_type(app.sim.selected_build_tower)
-							if tile == .EMPTY && app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY {
+							can_place  := (tile == .EMPTY || tile == .ACCESSORY_TREE) &&
+							              app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY
+							if can_place {
 								app.editor.game_map.grid[grid_y][grid_x] = app.sim.selected_build_tower
 								tower := entities.tower_init(tower_type, grid_y, grid_x)
+								selected_card := app.sim.hand[app.sim.selected_card_idx]
+								for _ in 0 ..< selected_card.bonus_level {
+									entities.tower_upgrade(&tower)
+								}
 								append(&app.sim.towers, tower)
 								app.sim.towers_built += 1
 								entities.card_play(&app.sim, app.sim.selected_card_idx)

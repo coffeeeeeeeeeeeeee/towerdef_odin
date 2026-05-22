@@ -1,4 +1,46 @@
-Esta carpeta contiene los archivos necesarios para compilar un juego en el lenguaje Odin. El juego es un juego de defensa de torres minimalista con un sistema de mazo de cartas al estilo Balatro. Contiene un archivo constants.odin donde se encuentran las principales variables de márgenes, colores, timers, etc. El juego se renderiza a través de rendering.odin y el audio desde audio.odin. Cada vez que agregues un texto que se lea en pantalla ten en cuenta que debes agregar una traducción en translations.txt
+Esta carpeta contiene los archivos necesarios para compilar un juego en el lenguaje Odin. El juego es un juego de defensa de torres minimalista con un sistema de mazo de cartas al estilo Balatro. Contiene un archivo constants.odin donde se encuentran las principales variables de márgenes, colores, timers, etc. Cada vez que agregues un texto que se lea en pantalla ten en cuenta que debes agregar una traducción en translations.txt
+
+## Estructura de archivos de rendering (systems/)
+
+El renderizado está dividido en tres archivos dentro de `systems/`, todos en `package systems`:
+
+| Archivo | Responsabilidad |
+|---|---|
+| `rendering.odin` | Mundo y mapa: `render_game`, `render_map`, tiles, enemigos, proyectiles, torres, obstáculos |
+| `interface.odin` | Widgets reutilizables: `render_button`, `render_card`, `render_panel`, `render_tooltip`, `render_select`, `render_slider`, gestión de `ui_click_blocks` / `ui_modal_blocks`, constantes `CARD_W/H/GAP`, helpers de rareza |
+| `menus.odin` | Pantallas y HUD: `render_ui`, `render_game_ui`, `render_menu_ui`, `render_game_over_ui`, shop overlay, mano de cartas, paneles de control |
+
+Al agregar una proc nueva, usar esta guía para decidir en qué archivo va:
+- ¿Dibuja algo del mundo del juego (mapa, enemigos, torres)? → `rendering.odin`
+- ¿Es un widget genérico reutilizable sin lógica de juego? → `interface.odin`
+- ¿Es una pantalla, overlay o HUD con lógica de estado de juego? → `menus.odin`
+
+## Sistema de UI blocking (ui_click_blocks / ui_modal_blocks)
+
+`ui_blocks_clear()` se llama al inicio de cada frame desde `render_game`.
+
+- **`ui_click_blocks`**: impide que los clicks lleguen a la grilla del mapa (chequeado en `input.odin`). Todos los botones y cartas se auto-registran al renderizarse.
+- **`ui_modal_blocks`**: impide que botones de capas inferiores respondan. Se usa para el shop overlay: `render_ui` agrega un rect pantalla-completa a `ui_modal_blocks` cuando el shop está activo, bloqueando la UI de juego subyacente.
+
+### ⚠️ Trampa conocida: modal blocks y el shop overlay
+
+`render_card_selection_overlay` llama a `clear(&ui_modal_blocks)` al inicio porque:
+1. `render_ui` ya agregó el rect pantalla-completa antes de renderizar la UI de juego.
+2. Esa UI ya fue procesada (y bloqueada correctamente).
+3. Sin el `clear`, los botones del propio shop también quedarían bloqueados.
+
+No mover ni eliminar ese `clear(&ui_modal_blocks)` sin entender este flujo.
+
+## Shop de cartas
+
+El shop se abre automáticamente entre oleadas (`card_selection_active = true`).
+
+- El jugador puede comprar **múltiples cartas** en una sola visita mientras tenga dinero.
+- Hacer click directamente sobre una carta la compra (no hay botón "Comprar" separado).
+- Las cartas ya compradas quedan en gris con etiqueta "Comprado" — no se pueden volver a comprar en esa visita.
+- El shop se cierra solo con el botón **Skip** (llama a `hand_refresh` y resetea `card_selection_bought`).
+- El reroll genera cartas nuevas y resetea `card_selection_bought` automáticamente (en `generate_card_selection`).
+- **`card_selection_bought: [3]bool`** en `Simulation` rastrea qué slots fueron comprados en la visita actual.
 
 ## Conversión de strings a cstring (patrón estándar)
 

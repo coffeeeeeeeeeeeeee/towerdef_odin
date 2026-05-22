@@ -15,6 +15,14 @@ Game_State :: enum {
 	SETTINGS,
 }
 
+// Rareza de carta — afecta probabilidad de aparición en tienda y precio
+Card_Rarity :: enum {
+	COMMON,
+	UNCOMMON,
+	RARE,
+	UNIQUE,
+}
+
 // Tile types
 Tile :: enum i32 {
 	EMPTY           = 0,
@@ -97,7 +105,7 @@ Biome_Tree_Colors :: struct {
 GRID_SIZE    :: 20
 CELL_SIZE    :: 32
 MAX_FPS      :: 60
-DEFAULT_MONEY  :: 120
+DEFAULT_MONEY  :: 80
 DEFAULT_HEALTH :: 40
 
 PATH_WIDTH_RATIO :: 0.4  // Path draw width as a fraction of cell size
@@ -196,12 +204,16 @@ FLAWLESS_BONUS           :: i32(75)     // Gold reward per FLAWLESS stack for a 
 FORMATION_BONUS          :: f32(0.25)   // Damage multiplier bonus per FORMATION stack for towers in a line of 3+
 FROZEN_AMP_BONUS         :: f32(0.30)   // Extra damage multiplier per FROZEN_AMP stack on slowed enemies
 STEAL_CARDS_PER_STACK    :: i32(1)      // Cards stolen per STEAL stack at end of each wave
+VETERAN_BOOST_CHANCE     :: f32(0.35)   // Chance per stack that a tower card in the shop appears pre-leveled (1 stack=35%, 2=70%, 3=100%)
+RELIC_FLASH_DURATION     :: f32(0.4)    // Seconds a relic icon flashes white when its effect triggers
 
 CARD_REROLL_COST     :: i32(50)    // Gold cost to reroll the 3-card selection
-CARD_REROLL_MIN_WAVE :: i32(10)    // Earliest wave at which rerolling is available
-CARD_SELL_PRICE      :: i32(25)    // Gold received when selling a card from hand to discard
+CARD_SELL_PRICE      :: i32(25)    // Gold received when selling a non-relic card from hand
+SELL_PRICE_COMMON    :: i32(20)    // Sell price for Common cards
+SELL_PRICE_UNCOMMON  :: i32(30)    // Sell price for Uncommon cards
+SELL_PRICE_RARE      :: i32(45)    // Sell price for Rare cards
+SELL_PRICE_UNIQUE    :: i32(65)    // Sell price for Unique cards
 HAND_REDEAL_COST     :: i32(40)    // Gold cost to redeal the hand once the game has started (free before first wave)
-HAND_MAX_SPREAD_CARDS :: i32(8)    // Cards before the hand switches to compact (overlapping) mode
 
 CRIT_BASE_CHANCE     :: f32(0.10)  // Base critical hit chance (10%) for all towers
 CRIT_DAMAGE_MULTIPLIER :: f32(2.0) // Damage multiplier on a critical hit
@@ -237,7 +249,7 @@ ENEMY_BASE_HP             :: f32(10.0)
 ENEMY_GROWTH_RATE         :: f32(1.07)    // HP multiplier per wave (exponential scaling)
 ENEMY_SPEED_GROWTH_RATE   :: f32(1.012)   // Speed multiplier per wave (~+1.2% per wave)
 ENEMY_GLOBAL_HP_MULTIPLIER    :: f32(0.85) // Global scalar applied to all enemy HP
-ENEMY_GLOBAL_SPEED_MULTIPLIER :: f32(0.45) // Global scalar applied to all enemy speeds
+ENEMY_GLOBAL_SPEED_MULTIPLIER :: f32(0.32) // Global scalar applied to all enemy speeds
 
 // Enemy speed (cells per second, further scaled by ENEMY_GLOBAL_SPEED_MULTIPLIER)
 ENEMY_SPEED_DEFAULT :: f32(1.0)  // Normal enemies
@@ -300,6 +312,7 @@ WAVE_ENEMIES_SCALE :: i32(2)
 
 BOSS_WAVE_INTERVAL :: i32(10)  // A boss wave occurs every N waves (wave 10, 20, 30…)
 MAX_WAVE           :: i32(100) // Game ends (victory) after completing this wave
+INTER_WAVE_DELAY   :: f32(2.0) // Seconds between wave end and next wave auto-start
 
 // Bonus waves
 BONUS_WAVE_CHANCE      :: f32(0.25)  // Probability of a bonus wave on any non-boss wave
@@ -316,7 +329,31 @@ MIXED_WAVE_MIN_WAVE :: i32(20)  // Mixed waves begin at this wave number
 DECK_HAND_SIZE          :: i32(3)     // Cards dealt to hand at the start of each wave
 DECK_CARD_DROP_CHANCE   :: f32(0.004) // Probability of a card drop on each enemy kill
 DECK_SELECTION_INTERVAL :: i32(1)     // Every N waves the shop opens (1 = every wave)
-SHOP_RELIC_PRICE        :: i32(75)    // Fixed price for relic cards in the shop
+SHOP_RELIC_PRICE        :: i32(75)    // Fallback price (kept for compatibility)
+
+// Rarity system — probabilidades de aparición por slot de tienda (suman 1.0)
+RARITY_PROB_COMMON   :: f32(0.60)
+RARITY_PROB_UNCOMMON :: f32(0.25)
+RARITY_PROB_RARE     :: f32(0.12)
+RARITY_PROB_UNIQUE   :: f32(0.03)
+
+// Precio de compra en la tienda por rareza (aplica a relictos y torres)
+SHOP_PRICE_COMMON   :: i32(50)
+SHOP_PRICE_UNCOMMON :: i32(75)
+SHOP_PRICE_RARE     :: i32(110)
+SHOP_PRICE_UNIQUE   :: i32(160)
+
+// Colores de rareza — usados como borde, badge y fondo de carta
+RARITY_COLOR_COMMON   :: raylib.Color{160, 160, 160, 255}  // Gris
+RARITY_COLOR_UNCOMMON :: raylib.Color{ 50, 200, 100, 255}  // Verde
+RARITY_COLOR_RARE     :: raylib.Color{ 80, 130, 255, 255}  // Azul
+RARITY_COLOR_UNIQUE   :: raylib.Color{255, 160,  20, 255}  // Dorado
+
+// Fondos de carta por rareza — versiones pastel/suaves para que el texto negro sea legible
+RARITY_CARD_BG_COMMON   :: raylib.Color{222, 222, 226, 255}
+RARITY_CARD_BG_UNCOMMON :: raylib.Color{190, 238, 205, 255}
+RARITY_CARD_BG_RARE     :: raylib.Color{190, 210, 252, 255}
+RARITY_CARD_BG_UNIQUE   :: raylib.Color{252, 228, 168, 255}
 
 OBSTACLE_BASE_COST              :: i32(25)  // Gold cost to place an obstacle card from hand
 OBSTACLE_UPGRADE_COST_BASE :: 50  // Base cost; doubles each level: 50, 100, 200, 400…
@@ -325,8 +362,8 @@ OBSTACLE_UPGRADE_COST_BASE :: 50  // Base cost; doubles each level: 50, 100, 200
 // Money
 // =============================================================================
 
-MONEY_WAVE_CLEAR_BASE     :: i32(50)   // Base gold per wave clear
-MONEY_WAVE_CLEAR_PER_WAVE :: i32(3)    // Extra gold per wave number (ola 1→53, ola 50→200, ola 100→350)
+MONEY_WAVE_CLEAR_BASE     :: i32(30)   // Base gold per wave clear
+MONEY_WAVE_CLEAR_PER_WAVE :: i32(2)    // Extra gold per wave number (ola 1→32, ola 50→130, ola 100→230)
 INTEREST_RATE    :: f32(0.05)  // Fraction of current gold awarded as interest at wave start
 
 // =============================================================================

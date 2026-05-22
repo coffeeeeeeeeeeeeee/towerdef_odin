@@ -26,7 +26,9 @@ Icons :: struct {
 	bloodlust:  raylib.Texture2D,
 	flawless:   raylib.Texture2D,
 	formation:  raylib.Texture2D,
-	frozen_amp: raylib.Texture2D,
+	frozen_amp:  raylib.Texture2D,
+	veteran: raylib.Texture2D,
+	loot:        raylib.Texture2D,
 }
 
 // Global fonts instance
@@ -101,6 +103,8 @@ load_icons :: proc() {
 	game_icons.flawless    = raylib.LoadTexture("images/icon_flawless.png")
 	game_icons.formation   = raylib.LoadTexture("images/icon_formation.png")
 	game_icons.frozen_amp  = raylib.LoadTexture("images/icon_frozen_amp.png")
+	game_icons.veteran = raylib.LoadTexture("images/icon_veteran.png")
+	game_icons.loot        = raylib.LoadTexture("images/icon_loot.png")
 
 	// Generate mipmaps and enable trilinear filtering for smooth downscaling
 	raylib.GenTextureMipmaps(&game_icons.damage)
@@ -118,6 +122,8 @@ load_icons :: proc() {
 	raylib.GenTextureMipmaps(&game_icons.flawless)
 	raylib.GenTextureMipmaps(&game_icons.formation)
 	raylib.GenTextureMipmaps(&game_icons.frozen_amp)
+	raylib.GenTextureMipmaps(&game_icons.veteran)
+	raylib.GenTextureMipmaps(&game_icons.loot)
 
 	raylib.SetTextureFilter(game_icons.damage,     .TRILINEAR)
 	raylib.SetTextureFilter(game_icons.speed,      .TRILINEAR)

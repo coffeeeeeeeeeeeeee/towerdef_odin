@@ -16,6 +16,14 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 
 	s_dt := dt * sim.speed
 
+	// Tick relic flash timers
+	for kind in entities.Card_Kind {
+		if sim.relic_flash_timers[kind] > 0 {
+			sim.relic_flash_timers[kind] -= s_dt
+			if sim.relic_flash_timers[kind] < 0 { sim.relic_flash_timers[kind] = 0 }
+		}
+	}
+
 	// Track play time
 	sim.play_time += s_dt
 
@@ -90,10 +98,20 @@ update_wave :: proc(app: ^entities.App_State, dt: f32) {
 					entities.deck_draw_one(sim)
 				}
 				entities.add_toast(app, fmt.tprintf("+%d carta(s) robada(s)", cards_stolen), .INFO)
+				relic_flash(sim, .STEAL)
 			}
 
-			if app.settings.auto_start_wave {
-				start_next_wave(app)
+			if app.settings.auto_start_wave && !sim.card_selection_active {
+				// Esperar INTER_WAVE_DELAY segundos antes de iniciar la siguiente oleada.
+				// La tienda abre su propio pausa — el timer se congela mientras está activa.
+				if sim.inter_wave_timer <= 0 {
+					sim.inter_wave_timer = constants.INTER_WAVE_DELAY
+				}
+				sim.inter_wave_timer -= dt
+				if sim.inter_wave_timer <= 0 {
+					sim.inter_wave_timer = 0
+					start_next_wave(app)
+				}
 			}
 		}
 	}
@@ -115,6 +133,7 @@ start_next_wave :: proc(app: ^entities.App_State) {
 			if dividend > 0 {
 				entities.app_add_money(app, dividend)
 				entities.add_toast(app, fmt.tprintf("+$%d dividendo", dividend), .INFO)
+				relic_flash(sim, .DIVIDEND)
 			}
 		}
 
@@ -124,6 +143,7 @@ start_next_wave :: proc(app: ^entities.App_State) {
 			if interest > 0 {
 				entities.app_add_money(app, interest)
 				entities.add_toast(app, fmt.tprintf("+$%d interés (x%d)", interest, sim.interest_stacks), .INFO)
+				relic_flash(sim, .INTEREST_BOOST)
 			}
 		}
 	}
@@ -141,6 +161,7 @@ start_next_wave :: proc(app: ^entities.App_State) {
 			bonus := constants.FLAWLESS_BONUS * sim.flawless_stacks
 			entities.app_add_money(app, bonus)
 			entities.add_toast(app, fmt.tprintf("+$%d oleada perfecta", bonus), .SUCCESS)
+			relic_flash(sim, .FLAWLESS)
 		}
 	}
 
@@ -247,10 +268,14 @@ start_next_wave :: proc(app: ^entities.App_State) {
 	}
 }
 
-// Rellena sim.card_selection_choices con 3 cartas distintas del pool.
+// Rellena sim.card_selection_choices con 3 cartas:
+//   slot 0 — torre o obstáculo (al azar, sin pesos de rareza)
+//   slot 1 — relicto (con pesos de rareza)
+//   slot 2 — torre/obstáculo o relicto al 50%
 // Puede llamarse desde start_next_wave o desde el botón de reroll.
 generate_card_selection :: proc(sim: ^entities.Simulation) {
-	selection_pool := [18]entities.Card{
+	sim.card_selection_bought = {}  // reinicia compras al generar nuevas cartas
+	tower_pool := [9]entities.Card{
 		{kind = .TOWER, tower_type = .ARCHER},
 		{kind = .TOWER, tower_type = .CANNON},
 		{kind = .TOWER, tower_type = .SNIPER},
@@ -260,6 +285,8 @@ generate_card_selection :: proc(sim: ^entities.Simulation) {
 		{kind = .TOWER, tower_type = .ENHANCE},
 		{kind = .OBSTACLE},
 		{kind = .OBSTACLE},
+	}
+	relic_pool := [11]entities.Card{
 		{kind = .INTEREST_BOOST},
 		{kind = .STEAL},
 		{kind = .WEAKEN},
@@ -269,19 +296,84 @@ generate_card_selection :: proc(sim: ^entities.Simulation) {
 		{kind = .FLAWLESS},
 		{kind = .FORMATION},
 		{kind = .FROZEN_AMP},
+		{kind = .VETERAN},
+		{kind = .LOOT},
 	}
-	available := [18]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}
-	n := 18
-	for i in 0 ..< 3 {
-		j := rand.int_max(n)
-		sim.card_selection_choices[i] = selection_pool[available[j]]
-		available[j] = available[n - 1]
-		n -= 1
+	tower_used := [9]bool{}
+	relic_used := [11]bool{}
+	cands      : [11]int
+
+	// helper: elige una torre al azar y la asigna al slot indicado
+	pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 0)
+	// helper: elige un relicto ponderado y lo asigna al slot indicado
+	pick_relic_slot(sim, &relic_pool, &relic_used, &cands, 1)
+	// slot 2: torre o relicto al 50%
+	if rand.float32() < 0.5 {
+		if pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 2) { return }
+	}
+	pick_relic_slot(sim, &relic_pool, &relic_used, &cands, 2)
+
+	// VETERAN: aplica bonus_level a cartas de torre del shop según probabilidad por stack
+	if sim.veteran_stacks > 0 {
+		chance := min(f32(1.0), f32(sim.veteran_stacks) * constants.VETERAN_BOOST_CHANCE)
+		for slot in 0 ..< 3 {
+			card := &sim.card_selection_choices[slot]
+			if card.kind == .TOWER && rand.float32() < chance {
+				card.bonus_level = sim.veteran_stacks
+			}
+		}
 	}
 }
 
+pick_tower_slot :: proc(sim: ^entities.Simulation, pool: ^[9]entities.Card, used: ^[9]bool, buf: ^[11]int, slot: int) -> bool {
+	n := 0
+	for j in 0 ..< 9 { if !used[j] { buf[n] = j; n += 1 } }
+	if n == 0 { return false }
+	idx := buf[rand.int_max(n)]
+	used[idx] = true
+	sim.card_selection_choices[slot] = pool[idx]
+	return true
+}
+
+pick_relic_slot :: proc(sim: ^entities.Simulation, pool: ^[11]entities.Card, used: ^[11]bool, buf: ^[11]int, slot: int) -> bool {
+	rval := rand.float32()
+	target: constants.Card_Rarity
+	if rval < constants.RARITY_PROB_UNIQUE {
+		target = .UNIQUE
+	} else if rval < constants.RARITY_PROB_UNIQUE + constants.RARITY_PROB_RARE {
+		target = .RARE
+	} else if rval < constants.RARITY_PROB_UNIQUE + constants.RARITY_PROB_RARE + constants.RARITY_PROB_UNCOMMON {
+		target = .UNCOMMON
+	} else {
+		target = .COMMON
+	}
+	n := 0
+	for j in 0 ..< 11 {
+		if !used[j] && entities.card_rarity(pool[j]) == target { buf[n] = j; n += 1 }
+	}
+	if n == 0 && target == .UNIQUE {
+		for j in 0 ..< 11 { if !used[j] && entities.card_rarity(pool[j]) == .RARE     { buf[n] = j; n += 1 } }
+	}
+	if n == 0 {
+		for j in 0 ..< 11 { if !used[j] && entities.card_rarity(pool[j]) == .UNCOMMON { buf[n] = j; n += 1 } }
+	}
+	if n == 0 {
+		for j in 0 ..< 11 { if !used[j] { buf[n] = j; n += 1 } }
+	}
+	if n == 0 { return false }
+	idx := buf[rand.int_max(n)]
+	used[idx] = true
+	sim.card_selection_choices[slot] = pool[idx]
+	return true
+}
+
 get_next_spawn_delay :: proc() -> f32 {
-	return 0.5 + rand.float32() * 1.0
+	return 1.2 + rand.float32() * 1.5
+}
+
+// Dispara el flash visual de una reliquia en el tray.
+relic_flash :: proc(sim: ^entities.Simulation, kind: entities.Card_Kind) {
+	sim.relic_flash_timers[kind] = constants.RELIC_FLASH_DURATION
 }
 
 // Spawn enemies
@@ -456,11 +548,12 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			// Bloodlust: micro-bonus de daño por cada kill
 			if sim.bloodlust_stacks > 0 {
 				sim.bloodlust_mult += constants.BLOODLUST_BONUS_PER_KILL * f32(sim.bloodlust_stacks)
+				relic_flash(sim, .BLOODLUST)
 			}
 
-			// 0.1% de probabilidad de obtener una carta aleatoria al matar
-			if rand.float32() < constants.DECK_CARD_DROP_CHANCE {
-				drop_pool := [17]entities.Card{
+			// Carta aleatoria al matar — solo si el jugador tiene la reliquia LOOT
+			if sim.loot_stacks > 0 && rand.float32() < f32(sim.loot_stacks) * constants.DECK_CARD_DROP_CHANCE {
+				drop_pool := [19]entities.Card{
 					{kind = .TOWER, tower_type = .ARCHER},
 					{kind = .TOWER, tower_type = .CANNON},
 					{kind = .TOWER, tower_type = .SNIPER},
@@ -478,8 +571,10 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 					{kind = .FLAWLESS},
 					{kind = .FORMATION},
 					{kind = .FROZEN_AMP},
+					{kind = .VETERAN},
+					{kind = .LOOT},
 				}
-				dropped := drop_pool[rand.int_max(17)]
+				dropped := drop_pool[rand.int_max(19)]
 				entities.card_add_to_hand(sim, dropped)
 				entities.add_toast(
 					app,
@@ -488,6 +583,7 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 					4.0,
 				)
 				play_sound(.CARD_GAINED, .SFX)
+				relic_flash(sim, .LOOT)
 			}
 
 			// Split: parent has is_split=true; children are created with is_split=false so they don't split again.
@@ -1046,6 +1142,7 @@ update_auto_upgrade :: proc(app: ^entities.App_State) {
 
 	if upgrades_done > 0 {
 		entities.add_toast(app, fmt.tprintf("Auto-mejora x%d", upgrades_done), .INFO)
+		relic_flash(sim, .AUTO_UPGRADE)
 	}
 }
 
@@ -1183,6 +1280,7 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		selected_card_idx = -1,
 		card_selection_active  = false,
 		card_selection_choices = {},
+		card_selection_bought  = {},
 		interest_multiplier    = 1.0,
 		interest_stacks        = 0,
 		steal_stacks           = 0,
@@ -1198,6 +1296,9 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		wave_start_health      = 0,
 		formation_stacks       = 0,
 		frozen_amp_stacks      = 0,
+		veteran_stacks     = 0,
+		loot_stacks            = 0,
+		inter_wave_timer       = 0,
 
 		enemies_killed   = 0,
 		money_earned     = 0,
@@ -1208,6 +1309,10 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		wave_marks       = make([dynamic]entities.Wave_Mark),
 		_sample_timer    = 0,
 	}
+
+	// Generar seed aleatorio y resetear el RNG global para determinismo
+	app.sim.seed = rand.uint64()
+	rand.reset(app.sim.seed)
 
 	// Inicializar mazo inicial y mano de apertura garantizada
 	// (build_starter_deck puebla sim.hand directamente con la composición garantizada)

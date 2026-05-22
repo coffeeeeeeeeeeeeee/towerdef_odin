@@ -60,6 +60,7 @@ Simulation :: struct {
 	// Selección de carta (cada DECK_SELECTION_INTERVAL oleadas)
 	card_selection_active:  bool,
 	card_selection_choices: [3]Card,
+	card_selection_bought:  [3]bool, // slots ya comprados en esta visita al shop
 
 	// Stacks permanentes de relictos (se acumulan toda la partida)
 	interest_stacks:     i32,  // +INTEREST_RATE de interés por oleada × stacks
@@ -89,6 +90,21 @@ Simulation :: struct {
 
 	// FROZEN_AMP: enemigos ralentizados reciben daño amplificado
 	frozen_amp_stacks: i32,
+
+	// VETERAN: cartas de torre en el shop aparecen pre-niveladas según stacks
+	veteran_stacks: i32,
+
+	// LOOT: chance de obtener carta aleatoria al matar un enemigo
+	loot_stacks: i32,
+
+	// Flash animation timers — cuentan regresivo desde RELIC_FLASH_DURATION hasta 0
+	relic_flash_timers: [Card_Kind]f32,
+
+	// Deterministic RNG — seed guardado para reproducibilidad
+	seed: u64,
+
+	// Inter-wave delay timer (counts down from INTER_WAVE_DELAY before auto-starting next wave)
+	inter_wave_timer: f32,
 
 	// Victory flag (set when wave MAX_WAVE is cleared with health > 0)
 	is_victory: bool,

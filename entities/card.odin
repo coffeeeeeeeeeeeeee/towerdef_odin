@@ -17,12 +17,15 @@ Card_Kind :: enum {
 	FLAWLESS,        // +oro al final de oleadas sin perder vidas (acumulable)
 	FORMATION,       // torres del mismo tipo en línea de 3+ reciben bonus de daño (acumulable)
 	FROZEN_AMP,      // enemigos ralentizados reciben daño amplificado (acumulable)
+	VETERAN,         // cartas de torre en el shop aparecen pre-niveladas según stacks (acumulable)
+	LOOT,            // chance de obtener carta aleatoria al matar un enemigo (acumulable)
 }
 
 // Una carta del mazo
 Card :: struct {
-	kind:       Card_Kind,
-	tower_type: constants.Tower_Type, // solo válido si kind == .TOWER
+	kind:        Card_Kind,
+	tower_type:  constants.Tower_Type, // solo válido si kind == .TOWER
+	bonus_level: i32,                  // niveles extra pre-aplicados (solo torres del shop con VETERAN)
 }
 
 // ---------------------------------------------------------------------------
@@ -42,9 +45,10 @@ Card :: struct {
 
 // Devuelve true si la carta es un relicto (efecto permanente acumulable).
 is_relic :: proc(kind: Card_Kind) -> bool {
-	return kind == .INTEREST_BOOST || kind == .DIVIDEND   || kind == .STEAL      ||
-	       kind == .WEAKEN         || kind == .AUTO_UPGRADE || kind == .BLOODLUST ||
-	       kind == .FLAWLESS       || kind == .FORMATION   || kind == .FROZEN_AMP
+	return kind == .INTEREST_BOOST || kind == .DIVIDEND    || kind == .STEAL       ||
+	       kind == .WEAKEN         || kind == .AUTO_UPGRADE || kind == .BLOODLUST  ||
+	       kind == .FLAWLESS       || kind == .FORMATION   || kind == .FROZEN_AMP  ||
+	       kind == .VETERAN    || kind == .LOOT
 }
 
 // Devuelve el icono PNG asociado al relicto (Texture2D vacía si no existe).
@@ -59,6 +63,8 @@ relic_icon :: proc(kind: Card_Kind) -> raylib.Texture2D {
 	case .FLAWLESS:       return constants.game_icons.flawless
 	case .FORMATION:      return constants.game_icons.formation
 	case .FROZEN_AMP:     return constants.game_icons.frozen_amp
+	case .VETERAN:    return constants.game_icons.veteran
+	case .LOOT:           return constants.game_icons.loot
 	}
 	return {}
 }
@@ -75,6 +81,8 @@ relic_stacks :: proc(sim: ^Simulation, kind: Card_Kind) -> i32 {
 	case .FLAWLESS:       return sim.flawless_stacks
 	case .FORMATION:      return sim.formation_stacks
 	case .FROZEN_AMP:     return sim.frozen_amp_stacks
+	case .VETERAN:    return sim.veteran_stacks
+	case .LOOT:           return sim.loot_stacks
 	}
 	return 0
 }
@@ -90,7 +98,9 @@ relic_apply :: proc(sim: ^Simulation, kind: Card_Kind) {
 	case .BLOODLUST:      sim.bloodlust_stacks += 1
 	case .FLAWLESS:       sim.flawless_stacks  += 1
 	case .FORMATION:      sim.formation_stacks += 1
-	case .FROZEN_AMP:     sim.frozen_amp_stacks += 1
+	case .FROZEN_AMP:     sim.frozen_amp_stacks  += 1
+	case .VETERAN:    sim.veteran_stacks += 1
+	case .LOOT:           sim.loot_stacks        += 1
 	}
 }
 
@@ -149,11 +159,13 @@ hand_redeal :: proc(sim: ^Simulation) {
 }
 
 // Consume una carta de la mano por índice al colocarla.
-// La carta se elimina permanentemente.
+// La carta va al descarte para que pueda ser robada de nuevo (STEAL, hand_refresh, etc.).
 card_play :: proc(sim: ^Simulation, hand_idx: int) {
 	if hand_idx < 0 || hand_idx >= len(sim.hand) {
 		return
 	}
+	card := sim.hand[hand_idx]
+	append(&sim.discard, card)
 	ordered_remove(&sim.hand, hand_idx)
 }
 
@@ -244,6 +256,8 @@ card_name :: proc(card: Card) -> string {
 	case .FLAWLESS:       return constants.get_text("CARD_FLAWLESS_NAME")
 	case .FORMATION:      return constants.get_text("CARD_FORMATION_NAME")
 	case .FROZEN_AMP:     return constants.get_text("CARD_FROZEN_AMP_NAME")
+	case .VETERAN:    return constants.get_text("CARD_VETERAN_NAME")
+	case .LOOT:           return constants.get_text("CARD_LOOT_NAME")
 	case .TOWER:
 		switch card.tower_type {
 		case .ARCHER:  return constants.get_text("TOWER_ARCHER_NAME")
@@ -284,9 +298,55 @@ card_to_tile :: proc(card: Card) -> constants.Tile {
 	return .EMPTY
 }
 
+// Devuelve la rareza de una carta (afecta probabilidad de aparición y precio en tienda).
+card_rarity :: proc(card: Card) -> constants.Card_Rarity {
+	if card.kind == .TOWER {
+		switch card.tower_type {
+		case .ARCHER, .CANNON:          return .COMMON
+		case .SNIPER, .ICE, .ENHANCE:   return .UNCOMMON
+		case .LASER, .MISSILE:          return .RARE
+		}
+	}
+	switch card.kind {
+	case .TOWER:                    return .COMMON
+	case .OBSTACLE:                 return .COMMON
+	case .AUTO_UPGRADE:             return .COMMON
+	case .LOOT, .DIVIDEND:          return .UNCOMMON
+	case .STEAL, .INTEREST_BOOST:   return .UNCOMMON
+	case .FORMATION:                return .RARE
+	case .WEAKEN, .FROZEN_AMP:      return .RARE
+	case .VETERAN:              return .RARE
+	case .BLOODLUST, .FLAWLESS:     return .UNIQUE
+	}
+	return .COMMON
+}
+
+// Devuelve el precio de tienda de una carta según su rareza.
+card_shop_price :: proc(card: Card) -> i32 {
+	switch card_rarity(card) {
+	case .COMMON:   return constants.SHOP_PRICE_COMMON
+	case .UNCOMMON: return constants.SHOP_PRICE_UNCOMMON
+	case .RARE:     return constants.SHOP_PRICE_RARE
+	case .UNIQUE:   return constants.SHOP_PRICE_UNIQUE
+	}
+	return constants.SHOP_PRICE_COMMON
+}
+
 // Alias original (compatibilidad)
 card_tower_type_to_tile :: proc(tower_type: constants.Tower_Type) -> constants.Tile {
 	return card_to_tile(Card{kind = .TOWER, tower_type = tower_type})
+}
+
+// Precio de venta de una carta desde la mano, según rareza.
+// Aplica igual a torres, obstáculos y relictos.
+card_sell_price :: proc(card: Card) -> i32 {
+	switch card_rarity(card) {
+	case .COMMON:   return constants.SELL_PRICE_COMMON
+	case .UNCOMMON: return constants.SELL_PRICE_UNCOMMON
+	case .RARE:     return constants.SELL_PRICE_RARE
+	case .UNIQUE:   return constants.SELL_PRICE_UNIQUE
+	}
+	return constants.CARD_SELL_PRICE
 }
 
 // Costo de colocar una carta
