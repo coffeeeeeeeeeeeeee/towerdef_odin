@@ -207,6 +207,11 @@ STEAL_CARDS_PER_STACK    :: i32(1)      // Cards stolen per STEAL stack at end o
 VETERAN_BOOST_CHANCE     :: f32(0.35)   // Chance per stack that a tower card in the shop appears pre-leveled (1 stack=35%, 2=70%, 3=100%)
 RELIC_FLASH_DURATION     :: f32(0.4)    // Seconds a relic icon flashes white when its effect triggers
 
+RECYCLER_SELL_BONUS  :: f32(0.10)  // Extra fraction of sell price per RECYCLER stack
+MEMENTO_GOLD_PER_10W :: i32(1)     // Gold per stack per 10 completed waves
+WARMED_UP_THRESHOLD  :: f32(15.0)  // Seconds of continuous targeting before warm bonus kicks in
+WARMED_UP_BONUS      :: f32(0.03)  // Extra damage multiplier per WARMED_UP stack when active
+
 CARD_REROLL_COST     :: i32(50)    // Gold cost to reroll the 3-card selection
 CARD_SELL_PRICE      :: i32(25)    // Gold received when selling a non-relic card from hand
 SELL_PRICE_COMMON    :: i32(20)    // Sell price for Common cards

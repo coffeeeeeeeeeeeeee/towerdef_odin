@@ -39,8 +39,10 @@ render_tower_ranges :: proc(app: ^entities.App_State) {
 		cx_i := i32(center_x)
 		cy_i := i32(center_y)
 
-		// Relleno sutil dentro del área de rango
+		// Relleno sutil + outline nítido (sin outline el rango es invisible).
+		// Ver CLAUDE.md → "render_tower_ranges → ⚠️ Trampa conocida".
 		raylib.DrawCircle(cx_i, cy_i, range_px, constants.TOWER_RANGE_PREVIEW)
+		raylib.DrawCircleLines(cx_i, cy_i, range_px, raylib.Color{255, 255, 255, 200})
 	}
 }
 
@@ -820,7 +822,7 @@ render_enemies :: proc(app: ^entities.App_State, cs: f32) {
 		cx    := x + cs / 2
 		cy    := y + cs / 2
 
-		render_enemy_shape(cx, cy, size, color, enemy.is_flying, enemy.is_boss, so)
+		render_enemy_shape(cx, cy, size, color, .FLYING in enemy.flags, .BOSS in enemy.flags, so)
 
 		// Slow overlay: translucent blue halo when slowed by ice tower
 		if enemy.slow_timer > 0 {

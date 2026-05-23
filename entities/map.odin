@@ -51,6 +51,10 @@ map_init :: proc(width: i32 = constants.GRID_SIZE, height: i32 = constants.GRID_
 
 // Destroy map and free resources
 map_destroy :: proc(m: ^Map) {
+	// Las keys de tile_data se clonaron al heap; hay que liberarlas antes del map.
+	for k in m.tile_data {
+		delete(k)
+	}
 	delete(m.tile_data)
 }
 
@@ -131,6 +135,10 @@ map_clear :: proc(m: ^Map) {
 			m.grid[row][col] = .EMPTY
 			m.obstacle_grid[row][col] = .EMPTY
 		}
+	}
+	// Liberar keys clonadas antes de tirar el map
+	for k in m.tile_data {
+		delete(k)
 	}
 	delete(m.tile_data)
 	m.tile_data = make(map[string]constants.Tile_Data)
@@ -524,6 +532,13 @@ map_load :: proc(m: ^Map, filename: string) -> bool {
 	version := parse_i32(strings.trim_space(lines[1]))
 	_ = version  // For future version handling
 	
+	// Liberar tile_data anterior antes de cargar el nuevo mapa (sino quedan
+	// niveles de obstáculos residuales del mapa previo y leak de keys clonadas).
+	for k in m.tile_data {
+		delete(k)
+	}
+	clear(&m.tile_data)
+
 	// Read grid dimensions from file
 	m.width = parse_i32(strings.trim_space(lines[2]))
 	m.height = parse_i32(strings.trim_space(lines[3]))

@@ -142,7 +142,13 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 		play_text,
 		{f32(play_x), f32(play_button_y), f32(play_width), f32(menu_button_height)},
 	) {
-		entities.app_set_state(app, .PLAYING)
+		// Abrir el browser de mapas en play mode para que el usuario elija el mapa
+		for f in app.editor.map_browser_files { delete(f) }
+		delete(app.editor.map_browser_files)
+		app.editor.map_browser_files = entities.map_list_saved()
+		app.editor.map_browser_scroll = 0
+		app.editor.show_map_browser = true
+		app.editor.map_browser_play_mode = true
 	}
 
 	// Editor button
@@ -183,6 +189,11 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	) {
 		app.should_quit = true
 	}
+
+	// Browser de mapas en play mode (encima del menú)
+	if app.editor.show_map_browser {
+		render_map_browser(app)
+	}
 }
 
 // Render game UI (HUD)
@@ -206,7 +217,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	render_info_panel(
 		{hud_px, hud_py, hud_panel_w, hud_panel_h},
 		constants.get_text("UI_MONEY"),
-		fmt.tprintf("%d", app.sim.money),
+		format_short(app.sim.money),
 		constants.game_icons.money,
 	)
 
@@ -855,8 +866,20 @@ render_map_browser :: proc(app: ^entities.App_State) {
 			if entities.map_load(&app.editor.game_map, fname) {
 				app.editor.current_biome    = app.editor.game_map.biome
 				app.editor.current_map_name = strings.clone(fname)
-				entities.add_toast(app, fmt.tprintf("Loaded: %s", fname), .SUCCESS, 2.0)
-				play_sound(.CONFIRMATION, .UI)
+				app.editor.show_map_browser = false
+				if app.editor.map_browser_play_mode {
+					// Modo Play: lanzar simulación directamente
+					app.editor.map_browser_play_mode = false
+					if simulation_init_from_editor(app) {
+						entities.app_set_state(app, .PLAYING)
+					} else {
+						entities.add_toast(app, constants.get_text("EDITOR_ERROR_NO_PATH"), .ERROR, 3.0)
+						play_sound(.ERROR, .UI)
+					}
+				} else {
+					entities.add_toast(app, fmt.tprintf("Loaded: %s", fname), .SUCCESS, 2.0)
+					play_sound(.CONFIRMATION, .UI)
+				}
 			} else {
 				// Roll back the undo push since nothing changed
 				if len(app.editor.undo_stack) > 0 {
@@ -868,7 +891,6 @@ render_map_browser :: proc(app: ^entities.App_State) {
 				entities.add_toast(app, fmt.tprintf("Failed to load: %s", fname), .ERROR, 3.0)
 				play_sound(.ERROR, .UI)
 			}
-			app.editor.show_map_browser = false
 		}
 	}
 
@@ -906,6 +928,7 @@ render_map_browser :: proc(app: ^entities.App_State) {
 		{f32(close_x), f32(close_y), f32(close_w), f32(close_h)},
 	) {
 		app.editor.show_map_browser = false
+		app.editor.map_browser_play_mode = false
 		play_sound(.CLOSE, .UI)
 	}
 }
@@ -1107,16 +1130,11 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 			// Pick color
 			color: raylib.Color
 			switch {
-			case wm.is_boss:
-				color = constants.COLOR_ENEMY_BOSS
-			case wm.is_green:
-				color = constants.ENEMY_GREEN
-			case wm.is_blue:
-				color = constants.ENEMY_BLUE
-			case wm.is_flying:
-				color = constants.COLOR_ENEMY_FLYING
-			case:
-				color = constants.COLOR_ENEMY
+			case .BOSS   in wm.flags: color = constants.COLOR_ENEMY_BOSS
+			case .GREEN  in wm.flags: color = constants.ENEMY_GREEN
+			case .BLUE   in wm.flags: color = constants.ENEMY_BLUE
+			case .FLYING in wm.flags: color = constants.COLOR_ENEMY_FLYING
+			case:                     color = constants.COLOR_ENEMY
 			}
 
 			// Vertical tick on graph
@@ -1124,7 +1142,7 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 
 			// Shape: boss=square, flying=triangle, others=circle
 			switch {
-			case wm.is_boss:
+			case .BOSS in wm.flags:
 				raylib.DrawRectangle(
 					i32(mx - marker_r),
 					i32(marker_y),
@@ -1132,7 +1150,7 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 					i32(marker_r * 2),
 					color,
 				)
-			case wm.is_flying:
+			case .FLYING in wm.flags:
 				raylib.DrawTriangle(
 					{mx, marker_y},
 					{mx - marker_r, marker_y + marker_r * 2},
@@ -1214,6 +1232,7 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 		constants.get_text("GAME_OVER_BUTTON_MENU"),
 		{f32(btn_x), f32(btn_y), f32(btn_width), f32(btn_height)},
 	) {
+		simulation_reset(app)
 		entities.app_set_state(app, .MENU)
 	}
 }
@@ -1698,8 +1717,8 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 		{
 			bloodlust_bonus := tower.damage * (app.sim.bloodlust_mult - 1.0)
 			formation_bonus : f32 = 0
-			if app.sim.formation_stacks > 0 && tower_is_in_formation(app, tower) {
-				formation_bonus = tower.damage * constants.FORMATION_BONUS * f32(app.sim.formation_stacks)
+			if app.sim.relic_stacks[.FORMATION] > 0 && tower._in_formation {
+				formation_bonus = tower.damage * constants.FORMATION_BONUS * f32(app.sim.relic_stacks[.FORMATION])
 			}
 			total_bonus := bloodlust_bonus + formation_bonus
 			if total_bonus >= 0.05 {
@@ -1907,7 +1926,8 @@ render_relic_tray :: proc(app: ^entities.App_State) {
 	anchor_y := screen_h - CARD_H - CARD_BOTTOM_MARGIN - SLOT_GAP
 
 	slot_idx := i32(0)
-	for kind in RELIC_KINDS {
+	for spec in entities.RELIC_SPECS {
+		kind   := spec.kind
 		stacks := entities.relic_stacks(&app.sim, kind)
 		if stacks == 0 do continue
 
@@ -1947,57 +1967,18 @@ render_relic_tray :: proc(app: ^entities.App_State) {
 				constants.game_fonts.semibold)
 		}
 
+		// Tooltip al hacer hover — mismo contenido que la carta en mano/tienda
+		draw_card_tooltip(entities.Card{kind = kind}, raylib.Rectangle{sx, sy, ICON_SIZE, ICON_SIZE})
+
 		slot_idx += 1
 	}
 }
 apply_relic_card :: proc(app: ^entities.App_State, kind: entities.Card_Kind) {
 	entities.relic_apply(&app.sim, kind)
 	stacks := entities.relic_stacks(&app.sim, kind)
-	#partial switch kind {
-	case .INTEREST_BOOST:
-		entities.add_toast(app,
-			fmt.tprintf("Interés x%d (%.0f%%/oleada)", stacks, f32(stacks) * constants.INTEREST_RATE * 100),
-			.SUCCESS)
-	case .DIVIDEND:
-		entities.add_toast(app,
-			fmt.tprintf("Dividendo x%d (%.0f%%/oleada)", stacks, f32(stacks) * constants.DIVIDEND_RATE * 100),
-			.SUCCESS)
-	case .STEAL:
-		entities.add_toast(app,
-			fmt.tprintf("Ladrón x%d (+%d carta/oleada)", stacks, stacks),
-			.SUCCESS)
-	case .WEAKEN:
-		entities.add_toast(app,
-			fmt.tprintf("Debilitar x%d (-%.0f%% HP enemigos)", stacks, f32(stacks) * constants.WEAKEN_HP_REDUCTION * 100),
-			.SUCCESS)
-	case .AUTO_UPGRADE:
-		entities.add_toast(app,
-			fmt.tprintf("Auto-mejora x%d (cada %.0fs)", stacks, constants.AUTO_UPGRADE_INTERVAL),
-			.SUCCESS)
-	case .BLOODLUST:
-		entities.add_toast(app,
-			fmt.tprintf("Sed de sangre x%d (+%.1f%% daño/kill)", stacks, f32(stacks) * constants.BLOODLUST_BONUS_PER_KILL * 100),
-			.SUCCESS)
-	case .FLAWLESS:
-		entities.add_toast(app,
-			fmt.tprintf("Impecable x%d (+$%d/oleada perfecta)", stacks, constants.FLAWLESS_BONUS * stacks),
-			.SUCCESS)
-	case .FORMATION:
-		entities.add_toast(app,
-			fmt.tprintf("Formación x%d (+%.0f%% daño en línea de 3+)", stacks, f32(stacks) * constants.FORMATION_BONUS * 100),
-			.SUCCESS)
-	case .FROZEN_AMP:
-		entities.add_toast(app,
-			fmt.tprintf("Crioamplificador x%d (+%.0f%% daño a ralentizados)", stacks, f32(stacks) * constants.FROZEN_AMP_BONUS * 100),
-			.SUCCESS)
-	case .VETERAN:
-		entities.add_toast(app,
-			fmt.tprintf("Veterano x%d (%.0f%% chance/carta pre-nivelada)", stacks, min(f32(100), f32(stacks) * constants.VETERAN_BOOST_CHANCE * 100)),
-			.SUCCESS)
-	case .LOOT:
-		entities.add_toast(app,
-			fmt.tprintf("Saqueador x%d (%.1f%% chance/kill)", stacks, f32(stacks) * constants.DECK_CARD_DROP_CHANCE * 100),
-			.SUCCESS)
+	spec, ok := entities.relic_spec_for(kind)
+	if ok {
+		entities.add_toast(app, spec.toast_format(stacks), .SUCCESS)
 	}
 }
 
@@ -2225,7 +2206,7 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		sell_label := fmt.tprintf("%s $%d", constants.get_text("CARD_SELL_BUTTON"), sell_price)
 		sell_rect  := raylib.Rectangle{cx, cy + CARD_H + 4, CARD_W, 24}
 		if render_button(sell_label, sell_rect, 1, true) {
-			entities.card_sell(&app.sim, i)
+			entities.card_play(&app.sim, i)
 			app.sim.money += sell_price
 			if app.sim.selected_card_idx == i {
 				app.sim.selected_build_tower = .EMPTY

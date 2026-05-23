@@ -5,7 +5,6 @@ import "../entities"
 import "core:fmt"
 import "core:math"
 import "core:math/rand"
-import "vendor:raylib"
 
 // Forward declaration - App_State will be passed directly
 simulation_update :: proc(app: ^entities.App_State, dt: f32) {
@@ -68,7 +67,7 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 	update_ice_pulses(app, s_dt)
 
 	// Auto-upgrade: cada AUTO_UPGRADE_INTERVAL actualiza las torres más baratas
-	if sim.auto_stacks > 0 && sim.started {
+	if sim.relic_stacks[.AUTO_UPGRADE] > 0 && sim.started {
 		sim.auto_upgrade_timer -= s_dt
 		if sim.auto_upgrade_timer <= 0 {
 			sim.auto_upgrade_timer = constants.AUTO_UPGRADE_INTERVAL
@@ -91,9 +90,9 @@ update_wave :: proc(app: ^entities.App_State, dt: f32) {
 		} else {
 			// STEAL: roba cartas al terminar la oleada, independientemente del auto_start.
 			// steal_last_wave evita que se dispare más de una vez por oleada.
-			if sim.steal_stacks > 0 && sim.steal_last_wave < sim.wave_number {
+			if sim.relic_stacks[.STEAL] > 0 && sim.steal_last_wave < sim.wave_number {
 				sim.steal_last_wave = sim.wave_number
-				cards_stolen := sim.steal_stacks * constants.STEAL_CARDS_PER_STACK
+				cards_stolen := sim.relic_stacks[.STEAL] * constants.STEAL_CARDS_PER_STACK
 				for _ in 0 ..< cards_stolen {
 					entities.deck_draw_one(sim)
 				}
@@ -127,9 +126,9 @@ start_next_wave :: proc(app: ^entities.App_State) {
 
 	if sim.wave_number > 0 {
 		// Dividend: devuelve un % del dinero gastado durante la oleada anterior
-		if sim.dividend_stacks > 0 {
+		if sim.relic_stacks[.DIVIDEND] > 0 {
 			spent    := max(0, sim.wave_start_money - sim.money)
-			dividend := i32(f32(spent) * constants.DIVIDEND_RATE * f32(sim.dividend_stacks))
+			dividend := i32(f32(spent) * constants.DIVIDEND_RATE * f32(sim.relic_stacks[.DIVIDEND]))
 			if dividend > 0 {
 				entities.app_add_money(app, dividend)
 				entities.add_toast(app, fmt.tprintf("+$%d dividendo", dividend), .INFO)
@@ -138,12 +137,23 @@ start_next_wave :: proc(app: ^entities.App_State) {
 		}
 
 		// Interest bonus: +INTEREST_RATE por cada stack de INTEREST_BOOST acumulado
-		if sim.interest_stacks > 0 {
-			interest := i32(f32(sim.money) * constants.INTEREST_RATE * f32(sim.interest_stacks))
+		if sim.relic_stacks[.INTEREST_BOOST] > 0 {
+			interest := i32(f32(sim.money) * constants.INTEREST_RATE * f32(sim.relic_stacks[.INTEREST_BOOST]))
 			if interest > 0 {
 				entities.app_add_money(app, interest)
-				entities.add_toast(app, fmt.tprintf("+$%d interés (x%d)", interest, sim.interest_stacks), .INFO)
+				entities.add_toast(app, fmt.tprintf("+$%d interés (x%d)", interest, sim.relic_stacks[.INTEREST_BOOST]), .INFO)
 				relic_flash(sim, .INTEREST_BOOST)
+			}
+		}
+
+		// MEMENTO: +gold por stack por cada 10 oleadas completadas
+		// sim.wave_number aquí es el ANTERIOR (antes del +=1), por lo que es el conteo de olas completadas
+		if sim.relic_stacks[.MEMENTO] > 0 {
+			memento_gold := i32(sim.wave_number / 10) * sim.relic_stacks[.MEMENTO]
+			if memento_gold > 0 {
+				entities.app_add_money(app, memento_gold)
+				entities.add_toast(app, fmt.tprintf("+$%d recuerdo (ola %d)", memento_gold, sim.wave_number), .INFO)
+				relic_flash(sim, .MEMENTO)
 			}
 		}
 	}
@@ -156,9 +166,9 @@ start_next_wave :: proc(app: ^entities.App_State) {
 	}
 
 	// Flawless: bono de oro si no se perdieron vidas en la oleada anterior
-	if sim.wave_number > 0 && sim.flawless_stacks > 0 {
+	if sim.wave_number > 0 && sim.relic_stacks[.FLAWLESS] > 0 {
 		if sim.health == sim.wave_start_health {
-			bonus := constants.FLAWLESS_BONUS * sim.flawless_stacks
+			bonus := constants.FLAWLESS_BONUS * sim.relic_stacks[.FLAWLESS]
 			entities.app_add_money(app, bonus)
 			entities.add_toast(app, fmt.tprintf("+$%d oleada perfecta", bonus), .SUCCESS)
 			relic_flash(sim, .FLAWLESS)
@@ -175,62 +185,78 @@ start_next_wave :: proc(app: ^entities.App_State) {
 	sim.wave_time = 0
 
 	// Determine wave type based on wave number.
-	sim.is_wave_boss  = sim.wave_number % constants.BOSS_WAVE_INTERVAL == 0
+	sim.wave_flags = {}
+	is_boss := sim.wave_number % constants.BOSS_WAVE_INTERVAL == 0
+	if is_boss { sim.wave_flags |= {.BOSS} }
 
 	// Bonus wave: consume pre-rolled lookahead[0] (always false for boss waves), then shift
 	// and roll a new value for wave N+3.
-	sim.is_wave_bonus      = !sim.is_wave_boss && sim.wave_number >= constants.BONUS_WAVE_MIN_WAVE && sim.lookahead_bonus[0]
+	is_bonus          := !is_boss && sim.wave_number >= constants.BONUS_WAVE_MIN_WAVE && sim.lookahead_bonus[0]
 	sim.lookahead_bonus[0] = sim.lookahead_bonus[1]
 	sim.lookahead_bonus[1] = sim.lookahead_bonus[2]
-	next_preview_wave      := sim.wave_number + 3
-	sim.lookahead_bonus[2]  = (next_preview_wave % constants.BOSS_WAVE_INTERVAL != 0) && next_preview_wave >= constants.BONUS_WAVE_MIN_WAVE && rand.float32() < constants.BONUS_WAVE_CHANCE
+	next_preview_wave := sim.wave_number + 3
+	sim.lookahead_bonus[2] = (next_preview_wave % constants.BOSS_WAVE_INTERVAL != 0) && next_preview_wave >= constants.BONUS_WAVE_MIN_WAVE && rand.float32() < constants.BONUS_WAVE_CHANCE
+	if is_bonus { sim.wave_flags |= {.BONUS} }
+
+	// SCOUT: anuncia el tipo de la PRÓXIMA oleada (wave_number+1).
+	// Después del shift, lookahead_bonus[0] corresponde exactamente a wave_number+1.
+	if sim.relic_stacks[.SCOUT] > 0 {
+		next_wn := sim.wave_number + 1
+		if next_wn <= constants.MAX_WAVE {
+			next_is_boss  := next_wn % constants.BOSS_WAVE_INTERVAL == 0
+			next_is_bonus := !next_is_boss && next_wn >= constants.BONUS_WAVE_MIN_WAVE && sim.lookahead_bonus[0]
+			wave_type: string
+			if next_is_boss {
+				wave_type = "Jefe"
+			} else if next_is_bonus {
+				wave_type = "Bonus"
+			} else {
+				switch next_wn % 4 {
+				case 1: wave_type = "Verde"
+				case 2: wave_type = "Voladores"
+				case 3: wave_type = "Azul"
+				case 0: wave_type = "Divisores"
+				}
+			}
+			entities.add_toast(app, fmt.tprintf("Scout: próx. oleada → %s", wave_type), .INFO)
+			relic_flash(sim, .SCOUT)
+		}
+	}
 
 	// Sub-types: on bonus waves all flags are active; on normal waves rotate by wave number.
-	if sim.is_wave_bonus {
-		sim.is_wave_green  = true
-		sim.is_wave_flying = true
-		sim.is_wave_blue   = true
-		sim.is_wave_split  = true
-	} else {
+	if is_bonus {
+		sim.wave_flags |= {.GREEN, .FLYING, .BLUE, .SPLIT}
+	} else if !is_boss {
 		// Sub-tipo primario: rotación de 4 tipos
-		primary           := sim.wave_number % 4
-		sim.is_wave_green  = !sim.is_wave_boss && primary == 1
-		sim.is_wave_flying = !sim.is_wave_boss && primary == 2
-		sim.is_wave_blue   = !sim.is_wave_boss && primary == 3
-		sim.is_wave_split  = !sim.is_wave_boss && primary == 0
+		primary := sim.wave_number % 4
+		if primary == 1 { sim.wave_flags |= {.GREEN} }
+		if primary == 2 { sim.wave_flags |= {.FLYING} }
+		if primary == 3 { sim.wave_flags |= {.BLUE} }
+		if primary == 0 { sim.wave_flags |= {.SPLIT} }
 
 		// Oleadas mixtas (>= ola MIXED_WAVE_MIN_WAVE): añadir un segundo sub-tipo.
 		// El secundario está desfasado 2 posiciones para que nunca coincida con el primario
 		// ni con el tipo de la oleada anterior/siguiente.
 		// Combos: green+blue, flying+split, blue+green, split+flying
-		if !sim.is_wave_boss && sim.wave_number > constants.MIXED_WAVE_MIN_WAVE {
+		if sim.wave_number > constants.MIXED_WAVE_MIN_WAVE {
 			secondary := (sim.wave_number + 2) % 4
-			if secondary == 1 { sim.is_wave_green  = true }
-			if secondary == 2 { sim.is_wave_flying = true }
-			if secondary == 3 { sim.is_wave_blue   = true }
-			if secondary == 0 { sim.is_wave_split  = true }
+			if secondary == 1 { sim.wave_flags |= {.GREEN} }
+			if secondary == 2 { sim.wave_flags |= {.FLYING} }
+			if secondary == 3 { sim.wave_flags |= {.BLUE} }
+			if secondary == 0 { sim.wave_flags |= {.SPLIT} }
 		}
 	}
 
 	// Record wave marker for graph
 	append(
 		&sim.wave_marks,
-		entities.Wave_Mark {
-			time      = sim.play_time,
-			wave      = sim.wave_number,
-			is_boss   = sim.is_wave_boss,
-			is_green  = sim.is_wave_green,
-			is_flying = sim.is_wave_flying,
-			is_blue   = sim.is_wave_blue,
-			is_split  = sim.is_wave_split,
-			is_bonus  = sim.is_wave_bonus,
-		},
+		entities.Wave_Mark{time = sim.play_time, wave = sim.wave_number, flags = sim.wave_flags},
 	)
 
 	// Calculate enemies to spawn
-	if sim.is_wave_boss {
+	if .BOSS in sim.wave_flags {
 		sim.enemies_to_spawn = 1
-	} else if sim.is_wave_bonus {
+	} else if .BONUS in sim.wave_flags {
 		sim.enemies_to_spawn = constants.BONUS_WAVE_ENEMY_COUNT
 	} else {
 		sim.enemies_to_spawn = constants.WAVE_ENEMIES_BASE + sim.wave_number * constants.WAVE_ENEMIES_SCALE
@@ -241,7 +267,7 @@ start_next_wave :: proc(app: ^entities.App_State) {
 		spawn := &sim.spawns[i]
 		spawn.enemies_spawned = 0
 
-		if sim.is_wave_boss {
+		if .BOSS in sim.wave_flags {
 			if i == 0 {
 				spawn.enemies_to_spawn = 1
 			} else {
@@ -286,7 +312,7 @@ generate_card_selection :: proc(sim: ^entities.Simulation) {
 		{kind = .OBSTACLE},
 		{kind = .OBSTACLE},
 	}
-	relic_pool := [11]entities.Card{
+	relic_pool := [16]entities.Card{
 		{kind = .INTEREST_BOOST},
 		{kind = .STEAL},
 		{kind = .WEAKEN},
@@ -298,10 +324,15 @@ generate_card_selection :: proc(sim: ^entities.Simulation) {
 		{kind = .FROZEN_AMP},
 		{kind = .VETERAN},
 		{kind = .LOOT},
+		{kind = .SCOUT},
+		{kind = .RECYCLER},
+		{kind = .MEMENTO},
+		{kind = .WARMED_UP},
+		{kind = .CRYPTOBRO},
 	}
 	tower_used := [9]bool{}
-	relic_used := [11]bool{}
-	cands      : [11]int
+	relic_used := [16]bool{}
+	cands      : [16]int
 
 	// helper: elige una torre al azar y la asigna al slot indicado
 	pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 0)
@@ -314,18 +345,18 @@ generate_card_selection :: proc(sim: ^entities.Simulation) {
 	pick_relic_slot(sim, &relic_pool, &relic_used, &cands, 2)
 
 	// VETERAN: aplica bonus_level a cartas de torre del shop según probabilidad por stack
-	if sim.veteran_stacks > 0 {
-		chance := min(f32(1.0), f32(sim.veteran_stacks) * constants.VETERAN_BOOST_CHANCE)
+	if sim.relic_stacks[.VETERAN] > 0 {
+		chance := min(f32(1.0), f32(sim.relic_stacks[.VETERAN]) * constants.VETERAN_BOOST_CHANCE)
 		for slot in 0 ..< 3 {
 			card := &sim.card_selection_choices[slot]
 			if card.kind == .TOWER && rand.float32() < chance {
-				card.bonus_level = sim.veteran_stacks
+				card.bonus_level = sim.relic_stacks[.VETERAN]
 			}
 		}
 	}
 }
 
-pick_tower_slot :: proc(sim: ^entities.Simulation, pool: ^[9]entities.Card, used: ^[9]bool, buf: ^[11]int, slot: int) -> bool {
+pick_tower_slot :: proc(sim: ^entities.Simulation, pool: ^[9]entities.Card, used: ^[9]bool, buf: ^[16]int, slot: int) -> bool {
 	n := 0
 	for j in 0 ..< 9 { if !used[j] { buf[n] = j; n += 1 } }
 	if n == 0 { return false }
@@ -335,7 +366,7 @@ pick_tower_slot :: proc(sim: ^entities.Simulation, pool: ^[9]entities.Card, used
 	return true
 }
 
-pick_relic_slot :: proc(sim: ^entities.Simulation, pool: ^[11]entities.Card, used: ^[11]bool, buf: ^[11]int, slot: int) -> bool {
+pick_relic_slot :: proc(sim: ^entities.Simulation, pool: ^[16]entities.Card, used: ^[16]bool, buf: ^[16]int, slot: int) -> bool {
 	rval := rand.float32()
 	target: constants.Card_Rarity
 	if rval < constants.RARITY_PROB_UNIQUE {
@@ -348,17 +379,17 @@ pick_relic_slot :: proc(sim: ^entities.Simulation, pool: ^[11]entities.Card, use
 		target = .COMMON
 	}
 	n := 0
-	for j in 0 ..< 11 {
+	for j in 0 ..< 16 {
 		if !used[j] && entities.card_rarity(pool[j]) == target { buf[n] = j; n += 1 }
 	}
 	if n == 0 && target == .UNIQUE {
-		for j in 0 ..< 11 { if !used[j] && entities.card_rarity(pool[j]) == .RARE     { buf[n] = j; n += 1 } }
+		for j in 0 ..< 16 { if !used[j] && entities.card_rarity(pool[j]) == .RARE     { buf[n] = j; n += 1 } }
 	}
 	if n == 0 {
-		for j in 0 ..< 11 { if !used[j] && entities.card_rarity(pool[j]) == .UNCOMMON { buf[n] = j; n += 1 } }
+		for j in 0 ..< 16 { if !used[j] && entities.card_rarity(pool[j]) == .UNCOMMON { buf[n] = j; n += 1 } }
 	}
 	if n == 0 {
-		for j in 0 ..< 11 { if !used[j] { buf[n] = j; n += 1 } }
+		for j in 0 ..< 16 { if !used[j] { buf[n] = j; n += 1 } }
 	}
 	if n == 0 { return false }
 	idx := buf[rand.int_max(n)]
@@ -393,25 +424,20 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			sim.enemies_spawned += 1 // Increment global counter
 
 			is_last := spawn.enemies_spawned == spawn.enemies_to_spawn
-			is_boss := sim.is_wave_boss && is_last
+			is_boss := (.BOSS in sim.wave_flags) && is_last
 
 			// Calculate HP multiplier
 			multiplier: f32
-			if is_boss {
-				multiplier = constants.ENEMY_HEALTH_BOSS
-			} else if sim.is_wave_bonus {
-				multiplier = constants.ENEMY_HEALTH_BONUS
-			} else if sim.is_wave_green {
-				multiplier = constants.ENEMY_HEALTH_GREEN
-			} else if sim.is_wave_flying {
-				multiplier = constants.ENEMY_HEALTH_FLYING
-			} else if sim.is_wave_blue {
-				multiplier = constants.ENEMY_HEALTH_BLUE
-			} else {
-				multiplier = constants.ENEMY_HEALTH_DEFAULT
+			switch {
+			case is_boss:                    multiplier = constants.ENEMY_HEALTH_BOSS
+			case .BONUS  in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_BONUS
+			case .GREEN  in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_GREEN
+			case .FLYING in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_FLYING
+			case .BLUE   in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_BLUE
+			case:                            multiplier = constants.ENEMY_HEALTH_DEFAULT
 			}
 
-			weaken := max(0.1, 1.0 - constants.WEAKEN_HP_REDUCTION * f32(sim.weaken_stacks))
+			weaken := max(0.1, 1.0 - constants.WEAKEN_HP_REDUCTION * f32(sim.relic_stacks[.WEAKEN]))
 			hp :=
 				constants.ENEMY_BASE_HP *
 				math.pow(constants.ENEMY_GROWTH_RATE, f32(sim.wave_number - 1)) *
@@ -421,33 +447,22 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 
 			// Speed — bonus enemies use their own speed constant
 			speed: f32
-			if sim.is_wave_bonus {
-				speed = constants.ENEMY_SPEED_BONUS
-			} else if sim.is_wave_green {
-				speed = constants.ENEMY_SPEED_GREEN
-			} else if sim.is_wave_blue {
-				speed = constants.ENEMY_SPEED_BLUE
-			} else if sim.is_wave_flying {
-				speed = constants.ENEMY_SPEED_FLYING
-			} else {
-				speed = constants.ENEMY_SPEED_DEFAULT
+			switch {
+			case .BONUS  in sim.wave_flags: speed = constants.ENEMY_SPEED_BONUS
+			case .GREEN  in sim.wave_flags: speed = constants.ENEMY_SPEED_GREEN
+			case .BLUE   in sim.wave_flags: speed = constants.ENEMY_SPEED_BLUE
+			case .FLYING in sim.wave_flags: speed = constants.ENEMY_SPEED_FLYING
+			case:                           speed = constants.ENEMY_SPEED_DEFAULT
 			}
 
 			speed *= constants.ENEMY_GLOBAL_SPEED_MULTIPLIER
 			// Escalado progresivo: +~1.2% de velocidad por oleada (igual que HP usa ENEMY_GROWTH_RATE)
 			speed *= math.pow(constants.ENEMY_SPEED_GROWTH_RATE, f32(sim.wave_number - 1))
 
-			enemy := entities.enemy_init(
-				hp,
-				speed,
-				is_boss,
-				sim.is_wave_flying,
-				sim.is_wave_green,
-				sim.is_wave_blue,
-				raylib.WHITE,
-				sim.is_wave_bonus,
-			)
-			enemy.is_split = sim.is_wave_split
+			// Build per-enemy flags: inherit wave subtypes; boss flag only for the last enemy
+			enemy_flags := sim.wave_flags - {.BOSS}
+			if is_boss { enemy_flags |= {.BOSS} }
+			enemy := entities.enemy_init(hp, speed, enemy_flags)
 
 			// Set enemy path (this also sets initial position to spawn)
 			entities.enemy_set_path(&enemy, spawn.path)
@@ -489,7 +504,7 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 		if reached_end {
 			// Enemy reached goal
 			damage := constants.ENEMY_GOAL_DAMAGE_DEFAULT
-			if enemy.is_boss {
+			if .BOSS in enemy.flags {
 				damage = constants.ENEMY_GOAL_DAMAGE_BOSS
 			}
 			entities.app_take_damage(app, damage)
@@ -505,7 +520,7 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 		}
 
 		// Obstacle damage
-		if !enemy.is_flying {
+		if !(.FLYING in enemy.flags) {
 			grid_x := i32(enemy.x + 0.5)
 			grid_y := i32(enemy.y + 0.5)
 
@@ -533,12 +548,12 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 
 			// Enemy died - give reward
 			reward := constants.ENEMY_REWARD_DEFAULT
-			if enemy.is_boss {
+			if .BOSS in enemy.flags {
 				reward = constants.ENEMY_REWARD_BOSS
-			} else if enemy.is_green {
+			} else if .GREEN in enemy.flags {
 				reward = constants.ENEMY_REWARD_GREEN
 			}
-			if enemy.is_bonus {
+			if .BONUS in enemy.flags {
 				reward += constants.ENEMY_REWARD_BONUS
 			}
 			entities.app_add_money(app, reward)
@@ -546,14 +561,14 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			sim.money_earned   += reward
 
 			// Bloodlust: micro-bonus de daño por cada kill
-			if sim.bloodlust_stacks > 0 {
-				sim.bloodlust_mult += constants.BLOODLUST_BONUS_PER_KILL * f32(sim.bloodlust_stacks)
+			if sim.relic_stacks[.BLOODLUST] > 0 {
+				sim.bloodlust_mult += constants.BLOODLUST_BONUS_PER_KILL * f32(sim.relic_stacks[.BLOODLUST])
 				relic_flash(sim, .BLOODLUST)
 			}
 
 			// Carta aleatoria al matar — solo si el jugador tiene la reliquia LOOT
-			if sim.loot_stacks > 0 && rand.float32() < f32(sim.loot_stacks) * constants.DECK_CARD_DROP_CHANCE {
-				drop_pool := [19]entities.Card{
+			if sim.relic_stacks[.LOOT] > 0 && rand.float32() < f32(sim.relic_stacks[.LOOT]) * constants.DECK_CARD_DROP_CHANCE {
+				drop_pool := [24]entities.Card{
 					{kind = .TOWER, tower_type = .ARCHER},
 					{kind = .TOWER, tower_type = .CANNON},
 					{kind = .TOWER, tower_type = .SNIPER},
@@ -573,8 +588,13 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 					{kind = .FROZEN_AMP},
 					{kind = .VETERAN},
 					{kind = .LOOT},
+					{kind = .SCOUT},
+					{kind = .RECYCLER},
+					{kind = .MEMENTO},
+					{kind = .WARMED_UP},
+					{kind = .CRYPTOBRO},
 				}
-				dropped := drop_pool[rand.int_max(19)]
+				dropped := drop_pool[rand.int_max(24)]
 				entities.card_add_to_hand(sim, dropped)
 				entities.add_toast(
 					app,
@@ -586,21 +606,27 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 				relic_flash(sim, .LOOT)
 			}
 
-			// Split: parent has is_split=true; children are created with is_split=false so they don't split again.
-			// Children of bonus enemies keep sub-type flags but NOT is_bonus (no extra gold).
-			if enemy.is_split && !enemy.is_boss {
+			// CRYPTOBRO: la torre que mató al jefe gana +1 nivel permanente
+			if .BOSS in enemy.flags && sim.relic_stacks[.CRYPTOBRO] > 0 && enemy.last_attacker_r >= 0 {
+				for &t in sim.towers {
+					if t.r == enemy.last_attacker_r && t.c == enemy.last_attacker_c {
+						if t.level < constants.TOWER_MAX_LEVEL {
+							entities.tower_upgrade(&t)
+							entities.add_toast(app, fmt.tprintf("¡Cryptobro! Torre → Nv%d", t.level), .SUCCESS, 4.0)
+							relic_flash(sim, .CRYPTOBRO)
+						}
+						break
+					}
+				}
+			}
+
+			// Split: parent has .SPLIT flag; children don't inherit SPLIT, BOSS, or BONUS.
+			// Children keep sub-type flags (FLYING, GREEN, BLUE) so mixed-wave behavior is preserved.
+			if (.SPLIT in enemy.flags) && !(.BOSS in enemy.flags) {
 				for _ in 0 ..< 2 {
-					child_hp := enemy.max_hp * constants.SPLIT_HP_RATIO
-					child := entities.enemy_init(
-						child_hp,
-						enemy.speed * constants.SPLIT_SPEED_MULT,
-						false,
-						enemy.is_flying,
-						enemy.is_green,
-						enemy.is_blue,
-						enemy.boss_color,
-						false, // is_bonus: children no dan gold extra
-					)
+					child_hp    := enemy.max_hp * constants.SPLIT_HP_RATIO
+					child_flags := enemy.flags - {.SPLIT, .BOSS, .BONUS}
+					child := entities.enemy_init(child_hp, enemy.speed * constants.SPLIT_SPEED_MULT, child_flags)
 					// Resume from where the parent is in the path
 					child_path := enemy.path[int(enemy.path_idx):]
 					entities.enemy_set_path_slice(&child, child_path)
@@ -651,6 +677,13 @@ update_towers :: proc(app: ^entities.App_State, dt: f32) {
 		// Find target
 		target_enemy := find_target(app, &tower)
 		tower.target = target_enemy
+
+		// WARMED_UP: acumula tiempo con objetivo; reset si no hay objetivo
+		if tower.target != nil {
+			tower.warm_timer += dt
+		} else {
+			tower.warm_timer = 0
+		}
 
 		if tower.target != nil {
 			// Turn towards target
@@ -850,18 +883,18 @@ update_projectile_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower
 	}
 }
 
-// Find target for tower
+// Find target for tower — uses a fixed-size stack buffer to avoid per-call heap allocation.
 find_target :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> ^entities.Enemy {
 	sim := &app.sim
 
-	// Build list of eligible enemies
-	eligible: [dynamic]^entities.Enemy
-	defer delete(eligible)
+	// Fixed-size eligible list; 256 slots is well above any practical enemy count.
+	MAX_ELIGIBLE :: 256
+	eligible: [MAX_ELIGIBLE]^entities.Enemy
+	n := 0
 
 	for i in 0 ..< len(sim.enemies) {
 		enemy := &sim.enemies[i]
 
-		// Check if enemy is in range
 		dx := (enemy.x + 0.5) - (f32(tower.c) + 0.5)
 		dy := (enemy.y + 0.5) - (f32(tower.r) + 0.5)
 		dist := math.sqrt_f32(dx * dx + dy * dy)
@@ -871,24 +904,27 @@ find_target :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> ^entiti
 			// Only ARCHER, MISSILE, and LASER can target flying enemies
 			can_target_flying :=
 				tower.type == .ARCHER || tower.type == .MISSILE || tower.type == .LASER
-			if !enemy.is_flying || can_target_flying {
-				append(&eligible, enemy)
+			if !(.FLYING in enemy.flags) || can_target_flying {
+				if n < MAX_ELIGIBLE {
+					eligible[n] = enemy
+					n += 1
+				}
 			}
 		}
 	}
 
-	if len(eligible) == 0 {
+	if n == 0 {
 		return nil
 	}
 
-	// Sort based on target strategy
+	// Pick best enemy according to strategy
 	best_enemy := eligible[0]
 
 	switch tower.target_strategy {
 	case .FIRST:
 		// Enemy closest to goal (furthest along path)
 		best_progress := best_enemy.path_idx
-		for i in 1 ..< len(eligible) {
+		for i in 1 ..< n {
 			enemy := eligible[i]
 			if enemy.path_idx > best_progress {
 				best_progress = enemy.path_idx
@@ -899,7 +935,7 @@ find_target :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> ^entiti
 	case .LAST:
 		// Enemy furthest from goal (least along path)
 		best_progress := best_enemy.path_idx
-		for i in 1 ..< len(eligible) {
+		for i in 1 ..< n {
 			enemy := eligible[i]
 			if enemy.path_idx < best_progress {
 				best_progress = enemy.path_idx
@@ -908,9 +944,8 @@ find_target :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> ^entiti
 		}
 
 	case .MAX_HP:
-		// Enemy with most HP
 		best_hp := best_enemy.hp
-		for i in 1 ..< len(eligible) {
+		for i in 1 ..< n {
 			enemy := eligible[i]
 			if enemy.hp > best_hp {
 				best_hp = enemy.hp
@@ -919,9 +954,8 @@ find_target :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> ^entiti
 		}
 
 	case .MIN_HP:
-		// Enemy with least HP
 		best_hp := best_enemy.hp
-		for i in 1 ..< len(eligible) {
+		for i in 1 ..< n {
 			enemy := eligible[i]
 			if enemy.hp < best_hp {
 				best_hp = enemy.hp
@@ -1033,7 +1067,7 @@ update_damage_numbers :: proc(app: ^entities.App_State, dt: f32) {
 }
 
 // Update ice pulses (expanding ring animation)
-// Actualiza el auto-upgrade: mejora hasta auto_stacks torres en orden de upgrade más barato.
+// Actualiza el auto-upgrade: mejora hasta relic_stacks[.AUTO_UPGRADE] torres en orden de upgrade más barato.
 // Salta torres al nivel máximo o cuando no hay dinero suficiente.
 // Cuenta cuántas torres del mismo tipo hay consecutivamente en una dirección (dr, dc).
 tower_count_line :: proc(app: ^entities.App_State, tower: ^entities.Tower, dr, dc: i32) -> i32 {
@@ -1056,12 +1090,20 @@ tower_count_line :: proc(app: ^entities.App_State, tower: ^entities.Tower, dr, d
 }
 
 // Devuelve true si la torre pertenece a una línea de 3+ torres del mismo tipo (horizontal o vertical).
+// Pura geometría — sin chequeo de reliquias. Usada por update_formation_cache.
 tower_is_in_formation :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> bool {
-	if app.sim.formation_stacks == 0 { return false }
 	h := 1 + tower_count_line(app, tower, 0, -1) + tower_count_line(app, tower, 0, 1)
 	if h >= 3 { return true }
 	v := 1 + tower_count_line(app, tower, -1, 0) + tower_count_line(app, tower, 1, 0)
 	return v >= 3
+}
+
+// Recalcula _in_formation en todas las torres.
+// Llamar cuando se construye o se vende una torre.
+update_formation_cache :: proc(app: ^entities.App_State) {
+	for &t in app.sim.towers {
+		t._in_formation = tower_is_in_formation(app, &t)
+	}
 }
 
 // Aplica los modificadores globales de daño: Bloodlust, Formation, Frozen Amp.
@@ -1074,12 +1116,23 @@ calc_damage :: proc(
 ) -> f32 {
 	d := base * app.sim.bloodlust_mult
 
-	if source != nil && app.sim.formation_stacks > 0 && tower_is_in_formation(app, source) {
-		d *= 1.0 + constants.FORMATION_BONUS * f32(app.sim.formation_stacks)
+	if source != nil && app.sim.relic_stacks[.FORMATION] > 0 && source._in_formation {
+		d *= 1.0 + constants.FORMATION_BONUS * f32(app.sim.relic_stacks[.FORMATION])
 	}
 
-	if enemy != nil && enemy.slow_timer > 0 && app.sim.frozen_amp_stacks > 0 {
-		d *= 1.0 + constants.FROZEN_AMP_BONUS * f32(app.sim.frozen_amp_stacks)
+	if enemy != nil && enemy.slow_timer > 0 && app.sim.relic_stacks[.FROZEN_AMP] > 0 {
+		d *= 1.0 + constants.FROZEN_AMP_BONUS * f32(app.sim.relic_stacks[.FROZEN_AMP])
+	}
+
+	// WARMED_UP: bonus de daño si la torre lleva WARMED_UP_THRESHOLD segundos con objetivo
+	if source != nil && app.sim.relic_stacks[.WARMED_UP] > 0 && source.warm_timer >= constants.WARMED_UP_THRESHOLD {
+		d *= 1.0 + constants.WARMED_UP_BONUS * f32(app.sim.relic_stacks[.WARMED_UP])
+	}
+
+	// CRYPTOBRO: registra la última torre que dañó a este enemigo (para boss-kill level up)
+	if source != nil && enemy != nil {
+		enemy.last_attacker_r = source.r
+		enemy.last_attacker_c = source.c
 	}
 
 	return d
@@ -1087,54 +1140,67 @@ calc_damage :: proc(
 
 update_auto_upgrade :: proc(app: ^entities.App_State) {
 	sim := &app.sim
+
+	// Collect all upgradeable candidates in one pass, then sort once and consume cheapest N.
+	// This replaces relic_stacks[.AUTO_UPGRADE] separate full scans with a single O(N log N) pass.
+	Auto_Candidate :: struct {
+		cost:     i32,
+		tower_i:  int,   // index in sim.towers, or -1 for obstacle
+		row, col: i32,   // obstacle grid position (valid when tower_i < 0)
+	}
+
+	MAX_CANDS :: 256
+	cands: [MAX_CANDS]Auto_Candidate
+	nc := 0
+
+	for i in 0 ..< len(sim.towers) {
+		t := &sim.towers[i]
+		if t.level >= constants.TOWER_MAX_LEVEL do continue
+		manual_cap := constants.ENHANCE_MAX_LEVEL if t.type == .ENHANCE else constants.TOWER_MAX_MANUAL_LEVEL
+		if t.level - t.enhance_bonus >= manual_cap do continue
+		if nc < MAX_CANDS {
+			cands[nc] = Auto_Candidate{entities.tower_get_upgrade_cost(t), i, -1, -1}
+			nc += 1
+		}
+	}
+
+	for row in 0 ..< app.editor.game_map.height {
+		for col in 0 ..< app.editor.game_map.width {
+			if app.editor.game_map.obstacle_grid[row][col] != .OBSTACLE do continue
+			level := entities.map_get_obstacle_level(&app.editor.game_map, row, col)
+			cost  := constants.OBSTACLE_UPGRADE_COST_BASE * i32(i32(1) << uint(level - 1))
+			if nc < MAX_CANDS {
+				cands[nc] = Auto_Candidate{cost, -1, row, col}
+				nc += 1
+			}
+		}
+	}
+
+	if nc == 0 { return }
+
+	// Insertion sort by cost ascending (nc is always small — ≤ 256)
+	for i in 1 ..< nc {
+		key := cands[i]
+		j   := i - 1
+		for j >= 0 && cands[j].cost > key.cost {
+			cands[j + 1] = cands[j]
+			j -= 1
+		}
+		cands[j + 1] = key
+	}
+
+	// Consume cheapest candidates up to relic_stacks[.AUTO_UPGRADE]
 	upgrades_done := i32(0)
-
-	for upgrades_done < sim.auto_stacks {
-		best_cost    := i32(max(i32))
-		best_tower   := -1          // índice en sim.towers, -1 si no es torre
-		best_obs_row := i32(-1)     // fila del obstáculo candidato
-		best_obs_col := i32(-1)     // col  del obstáculo candidato
-
-		// Candidatos: torres (incluye ENHANCE y todos los demás tipos)
-		for i in 0 ..< len(sim.towers) {
-			t := &sim.towers[i]
-			if t.level >= constants.TOWER_MAX_LEVEL do continue
-			manual_cap := constants.ENHANCE_MAX_LEVEL if t.type == .ENHANCE else constants.TOWER_MAX_MANUAL_LEVEL
-			if t.level - t.enhance_bonus >= manual_cap do continue
-			cost := entities.tower_get_upgrade_cost(t)
-			if cost < best_cost {
-				best_cost    = cost
-				best_tower   = i
-				best_obs_row = -1
-				best_obs_col = -1
-			}
-		}
-
-		// Candidatos: obstáculos (itera el grid buscando celdas con .OBSTACLE)
-		for row in 0 ..< app.editor.game_map.height {
-			for col in 0 ..< app.editor.game_map.width {
-				if app.editor.game_map.obstacle_grid[row][col] != .OBSTACLE do continue
-				level := entities.map_get_obstacle_level(&app.editor.game_map, row, col)
-				cost  := constants.OBSTACLE_UPGRADE_COST_BASE * i32(i32(1) << uint(level - 1))
-				if cost < best_cost {
-					best_cost    = cost
-					best_tower   = -1
-					best_obs_row = row
-					best_obs_col = col
-				}
-			}
-		}
-
-		// Sin candidato asequible → parar
-		if (best_tower < 0 && best_obs_row < 0) || sim.money < best_cost do break
-
-		// Aplicar upgrade al candidato más barato
-		sim.money -= best_cost
-		if best_tower >= 0 {
-			entities.tower_upgrade(&sim.towers[best_tower])
+	for i in 0 ..< nc {
+		if upgrades_done >= sim.relic_stacks[.AUTO_UPGRADE] { break }
+		cand := cands[i]
+		if sim.money < cand.cost { break } // sorted — nothing cheaper remains
+		sim.money -= cand.cost
+		if cand.tower_i >= 0 {
+			entities.tower_upgrade(&sim.towers[cand.tower_i])
 		} else {
-			level := entities.map_get_obstacle_level(&app.editor.game_map, best_obs_row, best_obs_col)
-			entities.map_set_obstacle_level(&app.editor.game_map, best_obs_row, best_obs_col, level + 1)
+			level := entities.map_get_obstacle_level(&app.editor.game_map, cand.row, cand.col)
+			entities.map_set_obstacle_level(&app.editor.game_map, cand.row, cand.col, level + 1)
 		}
 		sim.upgrades_bought += 1
 		upgrades_done += 1
@@ -1195,6 +1261,11 @@ simulation_remove_tower_at :: proc(app: ^entities.App_State, row, col: i32) -> b
 		if tower.r == row && tower.c == col {
 			// Calculate refund
 			refund := entities.tower_get_sell_refund(tower)
+			// RECYCLER: bonus de venta por stack
+			if app.sim.relic_stacks[.RECYCLER] > 0 {
+				bonus := i32(f32(refund) * constants.RECYCLER_SELL_BONUS * f32(app.sim.relic_stacks[.RECYCLER]))
+				refund += bonus
+			}
 			app.sim.money += refund
 
 			// Remove from grid
@@ -1205,6 +1276,9 @@ simulation_remove_tower_at :: proc(app: ^entities.App_State, row, col: i32) -> b
 
 			// Deselect tower
 			entities.app_deselect_tower(app)
+
+			// Invalidate formation cache
+			update_formation_cache(app)
 
 			return true
 		}
@@ -1265,13 +1339,6 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		enemies_spawned  = 0,
 		wave_time        = 0,
 		next_spawn_delay = 0,
-		is_wave_boss     = false,
-		is_wave_green    = false,
-		is_wave_flying   = false,
-		is_wave_blue     = false,
-		is_wave_split    = false,
-		is_wave_bonus    = false,
-
 		// Deck builder
 		deck      = make([dynamic]entities.Card),
 		hand      = make([dynamic]entities.Card),
@@ -1281,23 +1348,11 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		card_selection_active  = false,
 		card_selection_choices = {},
 		card_selection_bought  = {},
-		interest_multiplier    = 1.0,
-		interest_stacks        = 0,
-		steal_stacks           = 0,
-		weaken_stacks          = 0,
-		auto_stacks            = 0,
 		auto_upgrade_timer     = 0,
-		dividend_stacks        = 0,
 		wave_start_money       = 0,
 		steal_last_wave        = 0,
-		bloodlust_stacks       = 0,
 		bloodlust_mult         = 1.0,
-		flawless_stacks        = 0,
 		wave_start_health      = 0,
-		formation_stacks       = 0,
-		frozen_amp_stacks      = 0,
-		veteran_stacks     = 0,
-		loot_stacks            = 0,
 		inter_wave_timer       = 0,
 
 		enemies_killed   = 0,
@@ -1401,5 +1456,6 @@ simulation_init_from_editor :: proc(app: ^entities.App_State) -> bool {
 		}
 	}
 
+	update_formation_cache(app)
 	return len(app.sim.spawns) > 0
 }

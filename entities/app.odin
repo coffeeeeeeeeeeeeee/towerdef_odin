@@ -38,13 +38,8 @@ Simulation :: struct {
 	wave_time: f32,
 	next_spawn_delay: f32,
 	
-	// Wave type flags
-	is_wave_boss:  bool,
-	is_wave_green: bool,
-	is_wave_flying: bool,
-	is_wave_blue:  bool,
-	is_wave_split: bool,
-	is_wave_bonus: bool,
+	// Wave type flags (combinable Enemy_Flags — same flags as individual enemies)
+	wave_flags: Enemy_Flags,
 
 	// Pre-rolled bonus status for the next 3 upcoming waves (index 0 = wave+1).
 	// Shifts forward each time start_next_wave is called.
@@ -62,40 +57,16 @@ Simulation :: struct {
 	card_selection_choices: [3]Card,
 	card_selection_bought:  [3]bool, // slots ya comprados en esta visita al shop
 
-	// Stacks permanentes de relictos (se acumulan toda la partida)
-	interest_stacks:     i32,  // +INTEREST_RATE de interés por oleada × stacks
-	steal_stacks:        i32,  // roba steal_stacks cartas adicionales al inicio de oleada
-	weaken_stacks:       i32,  // enemigos tienen -WEAKEN_HP_REDUCTION × stacks de HP
-	auto_stacks:         i32,  // auto-upgradea auto_stacks torres cada AUTO_UPGRADE_INTERVAL
+	// Stacks permanentes de relictos — indexado por Card_Kind (ver RELIC_SPECS en card.odin).
+	// Se inicializa a cero automáticamente; sim.relic_stacks[.INTEREST_BOOST], etc.
+	relic_stacks:        [Card_Kind]i32,
 	auto_upgrade_timer:  f32,  // tiempo restante hasta el próximo tick de auto-upgrade
-	interest_multiplier: f32,  // legacy, ya no se usa — mantener para no romper init
 
-	// DIVIDEND: stacks; wave_start_money = snapshot al inicio de oleada
-	dividend_stacks:    i32,
-	wave_start_money:   i32,
-
-	// STEAL: última oleada en la que ya se robaron cartas (evita disparos múltiples entre oleadas)
-	steal_last_wave: i32,
-
-	// BLOODLUST: micro-bonus de daño por kill (multiplicador acumulado durante la partida)
-	bloodlust_stacks: i32,
-	bloodlust_mult:   f32,  // empieza en 1.0; cada kill += BLOODLUST_BONUS_PER_KILL × stacks
-
-	// FLAWLESS: bono de oro por oleada sin perder vidas
-	flawless_stacks:    i32,
-	wave_start_health:  i32,  // salud al inicio de la oleada para comparar al final
-
-	// FORMATION: bonus de daño para torres del mismo tipo en línea de 3+
-	formation_stacks: i32,
-
-	// FROZEN_AMP: enemigos ralentizados reciben daño amplificado
-	frozen_amp_stacks: i32,
-
-	// VETERAN: cartas de torre en el shop aparecen pre-niveladas según stacks
-	veteran_stacks: i32,
-
-	// LOOT: chance de obtener carta aleatoria al matar un enemigo
-	loot_stacks: i32,
+	// Auxiliares por relicto (no son stacks, son estado derivado)
+	wave_start_money:   i32,  // snapshot de dinero al inicio de oleada (DIVIDEND)
+	steal_last_wave:    i32,  // última oleada en que STEAL ya robó (evita doble disparo)
+	bloodlust_mult:     f32,  // multiplicador de daño acumulado por kills (BLOODLUST)
+	wave_start_health:  i32,  // salud al inicio de oleada (FLAWLESS)
 
 	// Flash animation timers — cuentan regresivo desde RELIC_FLASH_DURATION hasta 0
 	relic_flash_timers: [Card_Kind]f32,
@@ -131,14 +102,9 @@ Graph_Sample :: struct {
 
 // Marks when a wave started, with its type for color/shape
 Wave_Mark :: struct {
-	time:     f32,
-	wave:     i32,
-	is_boss:  bool,
-	is_green: bool,
-	is_blue:  bool,
-	is_flying: bool,
-	is_split: bool,
-	is_bonus: bool,
+	time:  f32,
+	wave:  i32,
+	flags: Enemy_Flags,
 }
 
 // Editor state
@@ -165,6 +131,7 @@ Editor :: struct {
 	show_map_browser: bool,           // Si el browser de mapas está abierto
 	map_browser_files: [dynamic]string, // Lista de archivos .map disponibles
 	map_browser_scroll: i32,          // Scroll offset del browser
+	map_browser_play_mode: bool,      // True cuando el browser fue abierto desde el menú Play (lanza simulación al seleccionar)
 
 	// Undo / Redo
 	undo_stack: [dynamic]Map_Snapshot, // Snapshots anteriores (el último es el más reciente)

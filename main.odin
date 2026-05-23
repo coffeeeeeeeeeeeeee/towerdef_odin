@@ -62,6 +62,8 @@ main :: proc() {
 	// Load icon textures
 	constants.load_icons()
 	defer constants.unload_icons()
+	entities.load_relic_icons()
+	defer entities.unload_relic_icons()
 
 	// Initialize audio system
 	systems.audio_init()
@@ -213,47 +215,29 @@ app_init :: proc(initial_settings: entities.Settings) {
 	camera_offset_y := i32((screen_height - grid_total_size) / 2)
 
 	app = entities.App_State {
-		state = .MENU,
+		state          = .MENU,
 		previous_state = .MENU,
-		toasts = make([dynamic]entities.Toast),
-		sim = entities.Simulation {
-			towers = make([dynamic]entities.Tower),
-			enemies = make([dynamic]entities.Enemy),
-			projectiles = make([dynamic]entities.Projectile),
-			explosions = make([dynamic]entities.Explosion),
-			damage_numbers = make([dynamic]entities.Damage_Number),
-			laser_beams = make([dynamic]entities.Laser_Beam),
-			spawns = make([dynamic]entities.Spawn_Point),
-			money = constants.DEFAULT_MONEY,
-			health = constants.DEFAULT_HEALTH,
-			wave_number = 1,
-			speed = 1.0,
-			paused = false,
-			started = false,
-			selected_build_tower = .EMPTY,
-		},
+		toasts         = make([dynamic]entities.Toast),
 		editor = entities.Editor {
-			game_map = entities.map_init(),
-			current_tool = .EMPTY,
-			show_grid = true,
-			show_paths = false,
-			current_biome = .PLAIN,
-			load_map_filename = {},
+			game_map        = entities.map_init(),
+			current_tool    = .EMPTY,
+			show_grid       = true,
+			show_paths      = false,
+			current_biome   = .PLAIN,
 			load_map_active = false,
 		},
-		settings = initial_settings,
-		zoom = 1.0,
-		target_zoom = 1.0,
-		camera_offset_x = camera_offset_x,
-		camera_offset_y = camera_offset_y,
+		settings              = initial_settings,
+		zoom                  = 1.0,
+		target_zoom           = 1.0,
+		camera_offset_x       = camera_offset_x,
+		camera_offset_y       = camera_offset_y,
 		target_camera_offset_x = camera_offset_x,
 		target_camera_offset_y = camera_offset_y,
-		selected_tower_r = -1,
-		selected_tower_c = -1,
-		selected_obstacle = {row = 0, col = 0, valid = false},
-		selected_cell = {row = 0, col = 0, valid = false},
+		selected_tower_r      = -1,
+		selected_tower_c      = -1,
 	}
 
+	// simulation_reset inicializa sim desde cero (dynamic arrays, seed, mazo, etc.)
 	systems.simulation_reset(&app)
 }
 
@@ -277,6 +261,12 @@ app_destroy :: proc() {
 		entities.map_snapshot_destroy(&s)
 	}
 	delete(app.editor.redo_stack)
+
+	// Toasts pendientes: cada uno tiene un message clonado en el heap
+	for &t in app.toasts {
+		delete(t.message)
+	}
+	delete(app.toasts)
 }
 
 // Global app instance using entities.App_State

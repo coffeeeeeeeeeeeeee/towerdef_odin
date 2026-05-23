@@ -7,6 +7,14 @@ import "core:math"
 import "core:strings"
 import "vendor:raylib"
 
+// Formatea un número para el HUD: < 1000 → "999", 1000–9999 → "1.2k", ≥ 10000 → "12k"
+format_short :: proc(n: i32) -> string {
+	if n < 1000 { return fmt.tprintf("%d", n) }
+	k := f32(n) / 1000.0
+	if k < 10.0 { return fmt.tprintf("%.1fk", k) }
+	return fmt.tprintf("%.0fk", k)
+}
+
 render_tooltip :: proc(rect: raylib.Rectangle) -> raylib.Rectangle {
 	mx := f32(constants.TOOLTIP_MARGIN_X)
 	my := f32(constants.TOOLTIP_MARGIN_Y)
@@ -479,6 +487,9 @@ render_button :: proc(
 			resolved_text_color = constants.UI_TEXT_COLOR
 		}
 	}
+	if !enabled {
+		resolved_text_color = raylib.WHITE
+	}
 
 	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
 	text_width := f32(
@@ -752,12 +763,6 @@ CARD_H  :: f32(155)
 CARD_GAP :: f32(10)
 CARD_BOTTOM_MARGIN :: f32(16)
 
-// Lista ordenada de todos los tipos de relicto (para iterar en tray y previews)
-RELIC_KINDS := []entities.Card_Kind{
-	.INTEREST_BOOST, .DIVIDEND, .STEAL, .WEAKEN, .AUTO_UPGRADE,
-	.BLOODLUST, .FLAWLESS, .FORMATION, .FROZEN_AMP, .VETERAN, .LOOT,
-}
-
 render_relic_preview :: proc(
 	app: ^entities.App_State,
 	kind: entities.Card_Kind,
@@ -822,17 +827,15 @@ render_card :: proc(
 	preview_y := y + 12
 	icon_cx   := x + CARD_W / 2
 	icon_cy   := preview_y + preview_size / 2
-	switch card.kind {
-	case .OBSTACLE:
+	if card.kind == .OBSTACLE {
 		draw_obstacle_preview(preview_x, preview_y, preview_size)
-	case .TOWER:
+	} else if card.kind == .TOWER {
 		dummy := entities.tower_init(card.tower_type, 0, 0)
 		old_show_range := app.settings.show_tower_range
 		app.settings.show_tower_range = false
 		render_tower(app, &dummy, preview_x, preview_y, preview_size)
 		app.settings.show_tower_range = old_show_range
-	case .INTEREST_BOOST, .DIVIDEND, .STEAL, .WEAKEN, .AUTO_UPGRADE,
-	     .BLOODLUST, .FLAWLESS, .FORMATION, .FROZEN_AMP, .VETERAN, .LOOT:
+	} else if entities.is_relic(card.kind) {
 		// Relictos: icono PNG + badge de stacks acumulados
 		render_relic_preview(app, card.kind, icon_cx, preview_y, preview_size)
 	}
@@ -914,65 +917,41 @@ draw_card_tooltip :: proc(card: entities.Card, card_rect: raylib.Rectangle) {
 	}
 
 	// Línea 1: descripción (sin números)
-	desc_key : string
-	switch card.kind {
+	#partial switch card.kind {
 	case .TOWER:
+		tower_desc_key : string
 		switch card.tower_type {
-		case .ARCHER:  desc_key = "TOOLTIP_ARCHER_DESC"
-		case .CANNON:  desc_key = "TOOLTIP_CANNON_DESC"
-		case .SNIPER:  desc_key = "TOOLTIP_SNIPER_DESC"
-		case .MISSILE: desc_key = "TOOLTIP_MISSILE_DESC"
-		case .LASER:   desc_key = "TOOLTIP_LASER_DESC"
-		case .ICE:     desc_key = "TOOLTIP_ICE_DESC"
-		case .ENHANCE: desc_key = "TOOLTIP_ENHANCE_DESC"
+		case .ARCHER:  tower_desc_key = "TOOLTIP_ARCHER_DESC"
+		case .CANNON:  tower_desc_key = "TOOLTIP_CANNON_DESC"
+		case .SNIPER:  tower_desc_key = "TOOLTIP_SNIPER_DESC"
+		case .MISSILE: tower_desc_key = "TOOLTIP_MISSILE_DESC"
+		case .LASER:   tower_desc_key = "TOOLTIP_LASER_DESC"
+		case .ICE:     tower_desc_key = "TOOLTIP_ICE_DESC"
+		case .ENHANCE: tower_desc_key = "TOOLTIP_ENHANCE_DESC"
 		}
-	case .OBSTACLE:       desc_key = "TOOLTIP_OBSTACLE_DESC"
-	case .INTEREST_BOOST: desc_key = "TOOLTIP_INTEREST_BOOST_DESC"
-	case .DIVIDEND:       desc_key = "TOOLTIP_DIVIDEND_DESC"
-	case .STEAL:          desc_key = "TOOLTIP_STEAL_DESC"
-	case .WEAKEN:         desc_key = "TOOLTIP_WEAKEN_DESC"
-	case .AUTO_UPGRADE:   desc_key = "TOOLTIP_AUTO_UPGRADE_DESC"
-	case .BLOODLUST:      desc_key = "TOOLTIP_BLOODLUST_DESC"
-	case .FLAWLESS:       desc_key = "TOOLTIP_FLAWLESS_DESC"
-	case .FORMATION:      desc_key = "TOOLTIP_FORMATION_DESC"
-	case .FROZEN_AMP:     desc_key = "TOOLTIP_FROZEN_AMP_DESC"
-	case .VETERAN:    desc_key = "TOOLTIP_VETERAN_DESC"
-	case .LOOT:           desc_key = "TOOLTIP_LOOT_DESC"
+		push(&lines, &n, constants.get_text(tower_desc_key))
+	case .OBSTACLE:
+		push(&lines, &n, constants.get_text("TOOLTIP_OBSTACLE_DESC"))
+	case:
+		rspec, rok := entities.relic_spec_for(card.kind)
+		if rok { push(&lines, &n, constants.get_text(rspec.desc_key)) }
 	}
-	push(&lines, &n, constants.get_text(desc_key))
 
 	// Línea 2+: valores numéricos desde constants.odin
-	switch card.kind {
+	#partial switch card.kind {
 	case .TOWER:
-		spec := constants.TOWER_SPECS[card.tower_type]
-		push(&lines, &n, fmt.tprintf("DMG %.1f  CD %.2fs  RNG %.1f", spec.damage, spec.cooldown, spec.range))
-		if spec.aoe > 0 {
-			push(&lines, &n, fmt.tprintf("AoE %.1f", spec.aoe))
+		tspec := constants.TOWER_SPECS[card.tower_type]
+		push(&lines, &n, fmt.tprintf("DMG %.1f  CD %.2fs  RNG %.1f", tspec.damage, tspec.cooldown, tspec.range))
+		if tspec.aoe > 0 {
+			push(&lines, &n, fmt.tprintf("AoE %.1f", tspec.aoe))
 		}
-	case .INTEREST_BOOST:
-		push(&lines, &n, fmt.tprintf("+%.0f%% por stack/oleada", constants.INTEREST_RATE * 100))
-	case .DIVIDEND:
-		push(&lines, &n, fmt.tprintf("+%.0f%% del oro ahorrado/stack", constants.DIVIDEND_RATE * 100))
-	case .STEAL:
-		push(&lines, &n, fmt.tprintf("+%d carta(s) por stack/oleada", constants.STEAL_CARDS_PER_STACK))
-	case .WEAKEN:
-		push(&lines, &n, fmt.tprintf("-%.0f%% HP enemigo por stack", constants.WEAKEN_HP_REDUCTION * 100))
-	case .AUTO_UPGRADE:
-		push(&lines, &n, fmt.tprintf("1 mejora cada %.0fs por stack", constants.AUTO_UPGRADE_INTERVAL))
-	case .BLOODLUST:
-		push(&lines, &n, fmt.tprintf("+%.1f%% dano por kill/stack", constants.BLOODLUST_BONUS_PER_KILL * 100))
-	case .FLAWLESS:
-		push(&lines, &n, fmt.tprintf("+$%d oro por stack (ola perfecta)", constants.FLAWLESS_BONUS))
-	case .FORMATION:
-		push(&lines, &n, fmt.tprintf("+%.0f%% dano por stack (3+ iguales)", constants.FORMATION_BONUS * 100))
-	case .FROZEN_AMP:
-		push(&lines, &n, fmt.tprintf("+%.0f%% dano por stack vs lentos", constants.FROZEN_AMP_BONUS * 100))
-	case .VETERAN:
-		push(&lines, &n, fmt.tprintf("+1 nivel inicial por stack"))
-	case .LOOT:
-		push(&lines, &n, fmt.tprintf("%.1f%% chance/kill por stack", constants.DECK_CARD_DROP_CHANCE * 100))
 	case .OBSTACLE:
 		// sin stat numérico
+	case:
+		rspec, rok := entities.relic_spec_for(card.kind)
+		if rok && rspec.stat_format != nil {
+			push(&lines, &n, rspec.stat_format())
+		}
 	}
 
 	// ── Dimensiones y posición ───────────────────────────────────────────────

@@ -10,25 +10,14 @@ Fonts :: struct {
 	bold:     raylib.Font,
 }
 
-// Icon textures
+// Icon textures (UI / HUD icons — los iconos de relictos se gestionan en entities/card.odin)
 Icons :: struct {
-	damage:   raylib.Texture2D,
-	speed:    raylib.Texture2D,
-	crit:     raylib.Texture2D,
-	health:   raylib.Texture2D,
-	wave:     raylib.Texture2D,
-	money:    raylib.Texture2D,
-	interest: raylib.Texture2D,
-	dividend: raylib.Texture2D,
-	steal:      raylib.Texture2D,
-	weaken:     raylib.Texture2D,
-	auto:       raylib.Texture2D,
-	bloodlust:  raylib.Texture2D,
-	flawless:   raylib.Texture2D,
-	formation:  raylib.Texture2D,
-	frozen_amp:  raylib.Texture2D,
-	veteran: raylib.Texture2D,
-	loot:        raylib.Texture2D,
+	damage: raylib.Texture2D,
+	speed:  raylib.Texture2D,
+	crit:   raylib.Texture2D,
+	health: raylib.Texture2D,
+	wave:   raylib.Texture2D,
+	money:  raylib.Texture2D,
 }
 
 // Global fonts instance
@@ -88,23 +77,12 @@ load_fonts :: proc() {
 
 // Load all icon textures
 load_icons :: proc() {
-	game_icons.damage   = raylib.LoadTexture("images/icon_damage.png")
-	game_icons.speed    = raylib.LoadTexture("images/icon_speed.png")
-	game_icons.crit     = raylib.LoadTexture("images/icon_crit.png")
-	game_icons.health   = raylib.LoadTexture("images/icon_health.png")
-	game_icons.wave     = raylib.LoadTexture("images/icon_wave.png")
-	game_icons.money    = raylib.LoadTexture("images/icon_money.png")
-	game_icons.interest = raylib.LoadTexture("images/icon_interest.png")
-	game_icons.dividend = raylib.LoadTexture("images/icon_dividend.png")
-	game_icons.steal    = raylib.LoadTexture("images/icon_steal.png")
-	game_icons.weaken   = raylib.LoadTexture("images/icon_weaken.png")
-	game_icons.auto        = raylib.LoadTexture("images/icon_auto.png")
-	game_icons.bloodlust   = raylib.LoadTexture("images/icon_bloodlust.png")
-	game_icons.flawless    = raylib.LoadTexture("images/icon_flawless.png")
-	game_icons.formation   = raylib.LoadTexture("images/icon_formation.png")
-	game_icons.frozen_amp  = raylib.LoadTexture("images/icon_frozen_amp.png")
-	game_icons.veteran = raylib.LoadTexture("images/icon_veteran.png")
-	game_icons.loot        = raylib.LoadTexture("images/icon_loot.png")
+	game_icons.damage = raylib.LoadTexture("images/icon_damage.png")
+	game_icons.speed  = raylib.LoadTexture("images/icon_speed.png")
+	game_icons.crit   = raylib.LoadTexture("images/icon_crit.png")
+	game_icons.health = raylib.LoadTexture("images/icon_health.png")
+	game_icons.wave   = raylib.LoadTexture("images/icon_wave.png")
+	game_icons.money  = raylib.LoadTexture("images/icon_money.png")
 
 	// Generate mipmaps and enable trilinear filtering for smooth downscaling
 	raylib.GenTextureMipmaps(&game_icons.damage)
@@ -113,33 +91,13 @@ load_icons :: proc() {
 	raylib.GenTextureMipmaps(&game_icons.health)
 	raylib.GenTextureMipmaps(&game_icons.wave)
 	raylib.GenTextureMipmaps(&game_icons.money)
-	raylib.GenTextureMipmaps(&game_icons.interest)
-	raylib.GenTextureMipmaps(&game_icons.dividend)
-	raylib.GenTextureMipmaps(&game_icons.steal)
-	raylib.GenTextureMipmaps(&game_icons.weaken)
-	raylib.GenTextureMipmaps(&game_icons.auto)
-	raylib.GenTextureMipmaps(&game_icons.bloodlust)
-	raylib.GenTextureMipmaps(&game_icons.flawless)
-	raylib.GenTextureMipmaps(&game_icons.formation)
-	raylib.GenTextureMipmaps(&game_icons.frozen_amp)
-	raylib.GenTextureMipmaps(&game_icons.veteran)
-	raylib.GenTextureMipmaps(&game_icons.loot)
 
-	raylib.SetTextureFilter(game_icons.damage,     .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.speed,      .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.crit,       .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.health,     .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.wave,       .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.money,      .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.interest,   .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.dividend,   .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.steal,      .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.weaken,     .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.auto,       .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.bloodlust,  .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.flawless,   .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.formation,  .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.frozen_amp, .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.damage, .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.speed,  .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.crit,   .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.health, .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.wave,   .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.money,  .TRILINEAR)
 }
 
 // Unload all icon textures
@@ -150,15 +108,6 @@ unload_icons :: proc() {
 	raylib.UnloadTexture(game_icons.health)
 	raylib.UnloadTexture(game_icons.wave)
 	raylib.UnloadTexture(game_icons.money)
-	raylib.UnloadTexture(game_icons.interest)
-	raylib.UnloadTexture(game_icons.dividend)
-	raylib.UnloadTexture(game_icons.steal)
-	raylib.UnloadTexture(game_icons.weaken)
-	raylib.UnloadTexture(game_icons.auto)
-	raylib.UnloadTexture(game_icons.bloodlust)
-	raylib.UnloadTexture(game_icons.flawless)
-	raylib.UnloadTexture(game_icons.formation)
-	raylib.UnloadTexture(game_icons.frozen_amp)
 }
 
 // Unload all fonts

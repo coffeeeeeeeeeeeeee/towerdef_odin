@@ -33,7 +33,26 @@ input_handle :: proc(app: ^entities.App_State) {
 
 // Menu input
 input_handle_menu :: proc(app: ^entities.App_State) {
-	// Handled by render_button in rendering.odin
+	// Si el browser de mapas está abierto (para seleccionar mapa al jugar),
+	// manejar scroll y ESC igual que en el editor
+	if app.editor.show_map_browser {
+		if raylib.IsKeyPressed(.ESCAPE) {
+			app.editor.show_map_browser = false
+			app.editor.map_browser_play_mode = false
+		}
+		wheel := raylib.GetMouseWheelMove()
+		if wheel != 0 {
+			app.editor.map_browser_scroll -= i32(wheel)
+			if app.editor.map_browser_scroll < 0 {
+				app.editor.map_browser_scroll = 0
+			}
+			max_scroll := i32(len(app.editor.map_browser_files)) - 8
+			if max_scroll < 0 { max_scroll = 0 }
+			if app.editor.map_browser_scroll > max_scroll {
+				app.editor.map_browser_scroll = max_scroll
+			}
+		}
+	}
 }
 
 // Playing input
@@ -116,6 +135,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 								}
 								append(&app.sim.towers, tower)
 								app.sim.towers_built += 1
+								update_formation_cache(app)
 								entities.card_play(&app.sim, app.sim.selected_card_idx)
 								app.sim.selected_build_tower = .EMPTY
 								app.sim.selected_card_idx    = -1
@@ -197,6 +217,7 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 	if app.editor.show_map_browser {
 		if raylib.IsKeyPressed(.ESCAPE) {
 			app.editor.show_map_browser = false
+			app.editor.map_browser_play_mode = false
 		}
 		wheel := raylib.GetMouseWheelMove()
 		if wheel != 0 {

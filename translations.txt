@@ -488,3 +488,39 @@ TOOLTIP_VETERAN_DESC|PORTUGUESE|Cartas de torre no shop podem aparecer pre-nivel
 TOOLTIP_LOOT_DESC|ENGLISH|Chance to find a card on each kill
 TOOLTIP_LOOT_DESC|SPANISH|Chance de encontrar carta al matar
 TOOLTIP_LOOT_DESC|PORTUGUESE|Chance de encontrar carta ao matar
+
+# New filler relics
+CARD_SCOUT_NAME|ENGLISH|Scout
+CARD_SCOUT_NAME|SPANISH|Explorador
+CARD_SCOUT_NAME|PORTUGUESE|Explorador
+TOOLTIP_SCOUT_DESC|ENGLISH|Reveals next wave type at wave start
+TOOLTIP_SCOUT_DESC|SPANISH|Revela el tipo de la próxima oleada
+TOOLTIP_SCOUT_DESC|PORTUGUESE|Revela o tipo da próxima onda
+
+CARD_RECYCLER_NAME|ENGLISH|Recycler
+CARD_RECYCLER_NAME|SPANISH|Reciclador
+CARD_RECYCLER_NAME|PORTUGUESE|Reciclador
+TOOLTIP_RECYCLER_DESC|ENGLISH|Bonus gold when selling placed towers
+TOOLTIP_RECYCLER_DESC|SPANISH|Oro extra al vender torres colocadas
+TOOLTIP_RECYCLER_DESC|PORTUGUESE|Ouro extra ao vender torres colocadas
+
+CARD_MEMENTO_NAME|ENGLISH|Memento
+CARD_MEMENTO_NAME|SPANISH|Recuerdo
+CARD_MEMENTO_NAME|PORTUGUESE|Memento
+TOOLTIP_MEMENTO_DESC|ENGLISH|Earn more gold the further you progress
+TOOLTIP_MEMENTO_DESC|SPANISH|Gana más oro cuanto más avanzas
+TOOLTIP_MEMENTO_DESC|PORTUGUESE|Ganhe mais ouro quanto mais avançar
+
+CARD_WARMED_UP_NAME|ENGLISH|Warmed Up
+CARD_WARMED_UP_NAME|SPANISH|En Calor
+CARD_WARMED_UP_NAME|PORTUGUESE|Aquecido
+TOOLTIP_WARMED_UP_DESC|ENGLISH|Towers with sustained target deal bonus damage
+TOOLTIP_WARMED_UP_DESC|SPANISH|Torres con objetivo continuo hacen más daño
+TOOLTIP_WARMED_UP_DESC|PORTUGUESE|Torres com alvo continuo causam mais dano
+
+CARD_CRYPTOBRO_NAME|ENGLISH|Cryptobro
+CARD_CRYPTOBRO_NAME|SPANISH|Cryptobro
+CARD_CRYPTOBRO_NAME|PORTUGUESE|Cryptobro
+TOOLTIP_CRYPTOBRO_DESC|ENGLISH|Tower that kills the boss gains +1 permanent level
+TOOLTIP_CRYPTOBRO_DESC|SPANISH|La torre que mata al jefe gana +1 nivel permanente
+TOOLTIP_CRYPTOBRO_DESC|PORTUGUESE|A torre que mata o chefe ganha +1 nível permanente

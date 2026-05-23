@@ -47,6 +47,14 @@ Tower :: struct {
 	_laser_accum: f32,
 	_laser_accum_timer: f32,
 
+	// Cached formation flag — true when this tower is in a 3+ line of same type.
+	// Recalculated by update_formation_cache whenever towers are added or removed.
+	_in_formation: bool,
+
+	// WARMED_UP relic: seconds this tower has continuously had a live target.
+	// Reset to 0 when no target is found. Bonus kicks in at WARMED_UP_THRESHOLD.
+	warm_timer: f32,
+
 	// Lifetime damage statistics
 	total_damage: f32,
 }

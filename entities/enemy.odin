@@ -1,61 +1,47 @@
 package entities
 
 import "core:math"
-import "core:fmt"
 import "vendor:raylib"
 import "../constants"
 
-// Enemy type
-Enemy_Type :: enum {
-	NORMAL,
-	GREEN,
-	BLUE,
-	FLYING,
-	BOSS,
-}
+// Enemy behaviour flags — combinable via bit_set (e.g. mixed waves have two flags set).
+Enemy_Flag :: enum u8 { BOSS, GREEN, BLUE, FLYING, SPLIT, BONUS }
+Enemy_Flags :: bit_set[Enemy_Flag; u8]
 
 // Enemy structure
 Enemy :: struct {
 	// Position (in grid units, can be fractional)
 	x: f32,
 	y: f32,
-	
+
 	// Path following
 	path: [dynamic]Path_Node,
 	path_idx: i32,
-	
+
 	// Stats
 	hp: f32,
 	max_hp: f32,
 	speed: f32,
-	
-	// Type flags
-	is_boss: bool,
-	is_flying: bool,
-	is_green: bool,
-	is_blue: bool,
-	boss_color: raylib.Color,
-	
+
+	// Type flags (combinable: a mixed-wave enemy can have e.g. GREEN|BLUE)
+	flags: Enemy_Flags,
+
 	// Healing (for blue enemies)
 	heal_cooldown: f32,
-	
-	// Obstacle damage tracking (to prevent multiple hits from same obstacle)
-	obstacle_damage: map[string]bool,
 
-	// True if this enemy belongs to a split-type wave (renders purple and splits on death).
-	// Children spawned by splitting have is_split = false, so they don't split again.
-	is_split: bool,
-
-	// True if this enemy comes from a bonus wave. Renders gold and drops extra money.
-	// Split children of a bonus enemy inherit sub-type flags but NOT is_bonus.
-	is_bonus: bool,
+	// Obstacle damage tracking (to prevent multiple hits from same obstacle).
+	// Key es [row, col] como [2]i32 — NO usar string con tprintf (la memoria del
+	// temp_allocator se libera al final del frame y deja las keys colgando).
+	obstacle_damage: map[[2]i32]bool,
 
 	// Slow effect (from ice tower)
 	slow_factor: f32,  // Speed multiplier: 1.0 = normal, <1.0 = slowed
 	slow_timer:  f32,  // Seconds remaining on the slow
 
-	// Temporary distance for targeting
-	_tmp_dist: f32,
+	// CRYPTOBRO relic: last tower that dealt damage to this enemy (row/col, -1 = none)
+	last_attacker_r: i32,
+	last_attacker_c: i32,
+
 }
 
 // Path node for enemy movement
@@ -65,36 +51,22 @@ Path_Node :: struct {
 }
 
 // Initialize a new enemy
-enemy_init :: proc(
-	hp: f32,
-	speed: f32,
-	is_boss: bool,
-	is_flying: bool,
-	is_green: bool,
-	is_blue: bool,
-	boss_color: raylib.Color,
-	is_bonus: bool = false,
-) -> Enemy {
+enemy_init :: proc(hp, speed: f32, flags: Enemy_Flags = {}) -> Enemy {
 	return Enemy{
-		x = 0,
-		y = 0,
-		path = make([dynamic]Path_Node),
-		path_idx = 0,
-		hp = hp,
-		max_hp = hp,
-		speed = speed,
-		is_boss = is_boss,
-		is_flying = is_flying,
-		is_green = is_green,
-		is_blue = is_blue,
-		boss_color = boss_color,
-		heal_cooldown = constants.ENEMY_HEAL_COOLDOWN_BLUE,
-		obstacle_damage = make(map[string]bool),
-		is_split = false,
-		is_bonus = is_bonus,
-		slow_factor = 1.0,
-		slow_timer = 0.0,
-		_tmp_dist = 0,
+		x               = 0,
+		y               = 0,
+		path            = make([dynamic]Path_Node),
+		path_idx        = 0,
+		hp              = hp,
+		max_hp          = hp,
+		speed           = speed,
+		flags           = flags,
+		heal_cooldown   = constants.ENEMY_HEAL_COOLDOWN_BLUE,
+		obstacle_damage = make(map[[2]i32]bool),
+		slow_factor     = 1.0,
+		slow_timer      = 0.0,
+		last_attacker_r = -1,
+		last_attacker_c = -1,
 	}
 }
 
@@ -171,7 +143,7 @@ enemy_move :: proc(e: ^Enemy, dt: f32) -> bool {
 
 // Update blue enemy healing
 enemy_update_healing :: proc(e: ^Enemy, dt: f32) {
-	if !e.is_blue {
+	if !(.BLUE in e.flags) {
 		return
 	}
 	
@@ -185,51 +157,52 @@ enemy_update_healing :: proc(e: ^Enemy, dt: f32) {
 
 // Check and apply obstacle damage
 enemy_apply_obstacle_damage :: proc(e: ^Enemy, grid_x, grid_y, obstacle_level: i32) -> f32 {
-	if e.is_flying {
+	if .FLYING in e.flags {
 		return 0
 	}
 	
-	// Create key for obstacle
-	key := fmt.tprintf("%d,%d", grid_y, grid_x)
-	
+	// Key estable por posición — no depende del temp_allocator
+	key := [2]i32{grid_y, grid_x}
+
 	if e.obstacle_damage[key] {
 		return 0 // Already damaged by this obstacle
 	}
-	
+
 	// Daño exponencial: base * 2^(level-1), igual que el upgrade de torres
 	damage := constants.OBSTACLE_DAMAGE_PER_LEVEL * f32(i32(1) << uint(obstacle_level - 1))
 	e.hp -= damage
 	e.obstacle_damage[key] = true
-	
+
 	return damage
 }
 
 // Get enemy color — bonus overrides all sub-types; bosses inherit sub-type color
 enemy_get_color :: proc(e: ^Enemy) -> raylib.Color {
 	switch {
-	case e.is_bonus:
-		return constants.COLOR_ENEMY_BONUS
-	case e.is_green:
-		return constants.ENEMY_GREEN
-	case e.is_blue:
-		return constants.ENEMY_BLUE
-	case e.is_flying:
-		return constants.COLOR_ENEMY_FLYING
-	case e.is_split:
-		return constants.COLOR_ENEMY_SPLIT
-	case:
-		return constants.COLOR_ENEMY
+	case .BONUS  in e.flags: return constants.COLOR_ENEMY_BONUS
+	case .GREEN  in e.flags: return constants.ENEMY_GREEN
+	case .BLUE   in e.flags: return constants.ENEMY_BLUE
+	case .FLYING in e.flags: return constants.COLOR_ENEMY_FLYING
+	case .SPLIT  in e.flags: return constants.COLOR_ENEMY_SPLIT
+	case:                    return constants.COLOR_ENEMY
 	}
 }
 
-// Apply a slow effect to an enemy (refreshes duration if already slowed)
+// Apply a slow effect to an enemy.
+// A stronger slow (lower factor) always wins.
+// A weaker slow while a stronger one is active is silently ignored — it neither
+// overwrites the slow_factor nor extends the duration.
 enemy_apply_slow :: proc(e: ^Enemy, factor: f32, duration: f32) {
-	// Only apply if this is a stronger or fresh slow
-	if factor < e.slow_factor || e.slow_timer <= 0 {
+	if e.slow_timer <= 0 {
+		// No active slow — apply fresh
 		e.slow_factor = factor
+		e.slow_timer  = duration
+	} else if factor <= e.slow_factor {
+		// New slow is at least as strong — apply and refresh
+		e.slow_factor = factor
+		e.slow_timer  = duration
 	}
-	// Always refresh duration
-	e.slow_timer = duration
+	// Weaker slow while a stronger one is active: do nothing
 }
 
 // Tick down slow timer and restore full speed when expired
@@ -246,24 +219,18 @@ enemy_update_slow :: proc(e: ^Enemy, dt: f32) {
 // Get enemy size — bosses are 75% larger than their sub-type base size
 enemy_get_size :: proc(e: ^Enemy) -> f32 {
 	boss_mult :: f32(1.75)
-	if e.is_bonus {
+	if .BONUS in e.flags {
 		base: f32 = constants.ENEMY_SIZE_BONUS
-		if e.is_boss { return base * boss_mult }
+		if .BOSS in e.flags { return base * boss_mult }
 		return base
 	}
 	base: f32
 	switch {
-	case e.is_flying:
-		base = constants.ENEMY_SIZE_FLYING
-	case e.is_blue:
-		base = constants.ENEMY_SIZE_BLUE
-	case e.is_green:
-		base = constants.ENEMY_SIZE_GREEN
-	case:
-		base = constants.ENEMY_SIZE_DEFAULT
+	case .FLYING in e.flags: base = constants.ENEMY_SIZE_FLYING
+	case .BLUE   in e.flags: base = constants.ENEMY_SIZE_BLUE
+	case .GREEN  in e.flags: base = constants.ENEMY_SIZE_GREEN
+	case:                    base = constants.ENEMY_SIZE_DEFAULT
 	}
-	if e.is_boss {
-		return base * boss_mult
-	}
+	if .BOSS in e.flags { return base * boss_mult }
 	return base
 }
