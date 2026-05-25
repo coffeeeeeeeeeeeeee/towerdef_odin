@@ -10,11 +10,12 @@ import "vendor:raylib"
 // Render the entire game
 render_game :: proc(app: ^entities.App_State) {
 	ui_blocks_clear() // Reset click-blocking registry for this frame
-	render_map(app)
+	render_map(app, &app.editor.game_map)
 	render_tower_ranges(app)
-	render_map_objects(app)
+	render_map_objects(app, &app.editor.game_map)
 	render_gameplay(app)
 	render_ui(app)
+	render_tooltip_layer(app) // Always last — draws on top of everything
 }
 
 // Render tower ranges (separate layer above grid)
@@ -47,8 +48,7 @@ render_tower_ranges :: proc(app: ^entities.App_State) {
 }
 
 // Render map objects (towers, spawn, goal, accessories, obstacles) - intermediate layer
-render_map_objects :: proc(app: ^entities.App_State) {
-	m := &app.editor.game_map
+render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	cs := f32(app.settings.cell_size) * app.zoom
 
 	// Draw gameplay tiles (towers, accessories)
@@ -59,12 +59,13 @@ render_map_objects :: proc(app: ^entities.App_State) {
 			y := f32(row) * cs + f32(app.camera_offset_y)
 
 			#partial switch tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE, .TOWER_ENHANCE:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
+			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
 				// In game mode, find tower entity
 				if app.state == .PLAYING || app.state == .PAUSED {
 					for &tower in app.sim.towers {
 						if tower.r == i32(row) && tower.c == i32(col) {
-							render_tower(app, &tower, x, y, cs)
+							render_tower(&tower, x, y, cs)
 							break
 						}
 					}
@@ -81,7 +82,7 @@ render_map_objects :: proc(app: ^entities.App_State) {
 				render_goal(x, y, cs)
 
 			case .ACCESSORY_TREE:
-				render_tree(x, y, cs, app.editor.game_map.biome, i32(row), i32(col))
+				render_tree(x, y, cs, m.biome, i32(row), i32(col))
 
 			case .ACCESSORY_BLOCK:
 				render_block(x, y, cs)
@@ -129,8 +130,7 @@ render_map_objects :: proc(app: ^entities.App_State) {
 }
 
 // Render map (grid, paths, obstacles)
-render_map :: proc(app: ^entities.App_State) {
-	m := &app.editor.game_map
+render_map :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	cs := f32(app.settings.cell_size) * app.zoom
 	gs := m.width // Use map's actual dimensions
 
@@ -164,13 +164,13 @@ render_map :: proc(app: ^entities.App_State) {
 			if app.sim.selected_build_tower == .OBSTACLE {
 				// Ghost de obstáculo: rojo si está en esquina/unión, normal si es válido
 				forbidden := entities.map_is_path_corner_or_junction(
-					&app.editor.game_map,
+					m,
 					app.selected_cell.row, app.selected_cell.col,
 				)
 				if forbidden {
-					draw_obstacle_preview_invalid(sx, sy, cs, &app.editor.game_map, app.selected_cell.row, app.selected_cell.col)
+					draw_obstacle_preview_invalid(sx, sy, cs, m, app.selected_cell.row, app.selected_cell.col)
 				} else {
-					draw_obstacle_preview(sx, sy, cs, &app.editor.game_map, app.selected_cell.row, app.selected_cell.col)
+					draw_obstacle_preview(sx, sy, cs, m, app.selected_cell.row, app.selected_cell.col)
 				}
 			} else {
 				tower_type := tile_to_tower_type(app.sim.selected_build_tower)
@@ -188,6 +188,54 @@ render_map :: proc(app: ^entities.App_State) {
 			}
 		}
 	}
+}
+
+// Render map preview to a RenderTexture2D for the map browser.
+// Saves and restores the relevant app fields used by render_map / render_map_objects.
+render_map_preview_to_texture :: proc(app: ^entities.App_State) {
+	m := &app.editor.map_browser_preview
+
+	// Unload previous texture if any
+	if app.editor.map_browser_preview_tex_valid {
+		raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
+		app.editor.map_browser_preview_tex_valid = false
+	}
+
+	cs    := f32(app.settings.cell_size)
+	tex_w := i32(f32(m.width)  * cs)
+	tex_h := i32(f32(m.height) * cs)
+	app.editor.map_browser_preview_tex = raylib.LoadRenderTexture(tex_w, tex_h)
+
+	// Save fields that render_map / render_map_objects read from app
+	saved_offset_x          := app.camera_offset_x
+	saved_offset_y          := app.camera_offset_y
+	saved_zoom              := app.zoom
+	saved_state             := app.state
+	saved_show_grid         := app.settings.show_grid
+	saved_selected_cell     := app.selected_cell.valid
+
+	// Override for a clean, static preview (no camera pan, no ghost, no reticles)
+	app.camera_offset_x     = 0
+	app.camera_offset_y     = 0
+	app.zoom                = 1.0
+	app.state               = .EDITOR
+	app.settings.show_grid  = false
+	app.selected_cell.valid = false
+
+	raylib.BeginTextureMode(app.editor.map_browser_preview_tex)
+		render_map(app, m)
+		render_map_objects(app, m)
+	raylib.EndTextureMode()
+
+	// Restore
+	app.camera_offset_x     = saved_offset_x
+	app.camera_offset_y     = saved_offset_y
+	app.zoom                = saved_zoom
+	app.state               = saved_state
+	app.settings.show_grid  = saved_show_grid
+	app.selected_cell.valid = saved_selected_cell
+
+	app.editor.map_browser_preview_tex_valid = true
 }
 
 // Render paths
@@ -678,8 +726,8 @@ render_laser_beams :: proc(app: ^entities.App_State, cs: f32) {
 
 	for &beam in sim.laser_beams {
 		alpha := beam.duration / beam.max_duration
-		color := constants.TOWER_LASER_COLOR
-		color.a = u8(255 * alpha)
+		color := beam.color
+		color.a = u8(f32(color.a) * alpha)
 
 		// Convert from grid coordinates to screen pixels
 		start_screen_x := beam.start_x * cs + f32(app.camera_offset_x)
@@ -1009,6 +1057,12 @@ render_projectiles :: proc(app: ^entities.App_State, cs: f32) {
 				{tip_x, tip_y},
 				tip_color,
 			)
+
+		case .MORTAR:
+			// Large dark shell — bigger and slower-looking than a cannonball
+			raylib.DrawCircle(i32(x) + 1, i32(y) + 1, cs * 0.14, raylib.Color{0, 0, 0, 60})
+			raylib.DrawCircle(i32(x), i32(y), cs * 0.13, constants.TOWER_MORTAR_BASE)
+			raylib.DrawCircle(i32(x), i32(y), cs * 0.06, constants.TOWER_MORTAR_STROKE)
 		}
 	}
 }
@@ -1119,6 +1173,12 @@ draw_tower_tile :: proc(
 	case .ENHANCE:
 		fill = constants.TOWER_ENHANCE_BASE
 		stroke = constants.TOWER_ENHANCE_STROKE
+	case .TESLA:
+		fill = constants.TOWER_TESLA_BASE
+		stroke = constants.TOWER_TESLA_STROKE
+	case .MORTAR:
+		fill = constants.TOWER_MORTAR_BASE
+		stroke = constants.TOWER_MORTAR_STROKE
 	}
 
 	// Draw shadow (hard shadow offset to bottom-right like JS)
@@ -1393,12 +1453,49 @@ draw_tower_tile :: proc(
 		// Core
 		raylib.DrawCircle(i32(cx), i32(cy), r * 0.35, constants.TOWER_ENHANCE_BASE)
 		raylib.DrawCircle(i32(cx), i32(cy), r * 0.18, constants.TOWER_ENHANCE_STROKE)
+
+	case .TESLA:
+		// 3 electrodes at 120° apart, each with a glowing tip
+		elec_r  := cs * 0.30
+		prong_w := max(1.5, cs * 0.065)
+		for i in 0 ..< 3 {
+			a  := f32(i) * math.PI * 2.0 / 3.0
+			ex := cx + math.cos(a) * elec_r
+			ey := cy + math.sin(a) * elec_r
+			// Shadow
+			raylib.DrawLineEx({cx + so, cy + so}, {ex + so, ey + so}, prong_w, constants.TOWER_SHADOW)
+			// Electrode arm
+			raylib.DrawLineEx({cx, cy}, {ex, ey}, prong_w, constants.TOWER_TESLA_STROKE)
+			// Tip ball
+			raylib.DrawCircle(i32(ex + so), i32(ey + so), cs * 0.065, constants.TOWER_SHADOW)
+			raylib.DrawCircle(i32(ex), i32(ey), cs * 0.065, constants.TOWER_TESLA_ARC)
+		}
+		// Central core
+		raylib.DrawCircle(i32(cx + so), i32(cy + so), r * 0.48, constants.TOWER_SHADOW)
+		raylib.DrawCircle(i32(cx), i32(cy), r * 0.48, constants.TOWER_TESLA_STROKE)
+		raylib.DrawCircle(i32(cx), i32(cy), r * 0.24, constants.TOWER_TESLA_ARC)
+
+	case .MORTAR:
+		// Wide squat barrel always pointing straight up (ignores tower rotation)
+		barrel_w := cs * 0.26
+		barrel_h := cs * 0.28
+		bx       := cx - barrel_w / 2
+		by       := cy - barrel_h
+		// Shadow
+		raylib.DrawRectangle(i32(bx + so), i32(by + so), i32(barrel_w), i32(barrel_h), constants.TOWER_SHADOW)
+		// Barrel body
+		raylib.DrawRectangle(i32(bx), i32(by), i32(barrel_w), i32(barrel_h), constants.TOWER_MORTAR_BASE)
+		raylib.DrawRectangleLines(i32(bx), i32(by), i32(barrel_w), i32(barrel_h), constants.TOWER_MORTAR_STROKE)
+		// Bore (dark circle at barrel mouth)
+		bore_r := cs * 0.068
+		raylib.DrawCircle(i32(cx + so), i32(by + bore_r + so), bore_r, constants.TOWER_SHADOW)
+		raylib.DrawCircle(i32(cx), i32(by + bore_r), bore_r, constants.TOWER_MORTAR_STROKE)
+		raylib.DrawCircle(i32(cx), i32(by + bore_r), bore_r * 0.5, raylib.Color{20, 20, 20, 220})
 	}
 }
 
 // Render tower for simulation (calls unified function with rotation)
-render_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, x, y, cs: f32) {
-	// Draw tower
+render_tower :: proc(tower: ^entities.Tower, x, y, cs: f32) {
 	draw_tower_tile(x, y, cs, tower.type, tower.angle, false)
 }
 

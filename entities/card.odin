@@ -457,6 +457,8 @@ card_name :: proc(card: Card) -> string {
 		case .LASER:   return constants.get_text("TOWER_LASER_NAME")
 		case .ICE:     return constants.get_text("TOWER_ICE_NAME")
 		case .ENHANCE: return constants.get_text("TOWER_ENHANCE_NAME")
+		case .TESLA:   return constants.get_text("TOWER_TESLA_NAME")
+		case .MORTAR:  return constants.get_text("TOWER_MORTAR_NAME")
 		}
 	}
 	if card.kind == .OBSTACLE {
@@ -490,6 +492,8 @@ card_to_tile :: proc(card: Card) -> constants.Tile {
 	case .LASER:   return .TOWER_LASER
 	case .ICE:     return .TOWER_ICE
 	case .ENHANCE: return .TOWER_ENHANCE
+	case .TESLA:   return .TOWER_TESLA
+	case .MORTAR:  return .TOWER_MORTAR
 	}
 	return .EMPTY
 }
@@ -498,9 +502,9 @@ card_to_tile :: proc(card: Card) -> constants.Tile {
 card_rarity :: proc(card: Card) -> constants.Card_Rarity {
 	if card.kind == .TOWER {
 		switch card.tower_type {
-		case .ARCHER, .CANNON:          return .COMMON
-		case .SNIPER, .ICE, .ENHANCE:   return .UNCOMMON
-		case .LASER, .MISSILE:          return .RARE
+		case .ARCHER, .CANNON:                  return .COMMON
+		case .SNIPER, .ICE, .ENHANCE:           return .UNCOMMON
+		case .LASER, .MISSILE, .TESLA, .MORTAR: return .RARE
 		}
 	}
 	if card.kind == .OBSTACLE { return .COMMON }

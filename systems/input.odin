@@ -28,6 +28,13 @@ input_handle :: proc(app: ^entities.App_State) {
 		if raylib.IsKeyPressed(.ESCAPE) {
 			entities.app_set_state(app, app.previous_state)
 		}
+	case .RUN_COMPLETE:
+		// Input handled via render_button in render_run_complete_ui
+	case .PROGRESSION:
+		// Input handled via render_button in render_progression_ui
+		if raylib.IsKeyPressed(.ESCAPE) {
+			entities.app_set_state(app, .MENU)
+		}
 	}
 }
 
@@ -37,16 +44,24 @@ input_handle_menu :: proc(app: ^entities.App_State) {
 	// manejar scroll y ESC igual que en el editor
 	if app.editor.show_map_browser {
 		if raylib.IsKeyPressed(.ESCAPE) {
+			entities.map_destroy(&app.editor.map_browser_preview)
+			app.editor.map_browser_preview_valid = false
+			if app.editor.map_browser_preview_tex_valid {
+				raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
+				app.editor.map_browser_preview_tex_valid = false
+			}
 			app.editor.show_map_browser = false
 			app.editor.map_browser_play_mode = false
 		}
 		wheel := raylib.GetMouseWheelMove()
 		if wheel != 0 {
+			content_h     := constants.UI_MAP_BROWSER_HEIGHT - constants.UI_MAP_BROWSER_HEADER_HEIGHT - constants.UI_MAP_BROWSER_FOOTER_HEIGHT
+			visible_items := content_h / constants.UI_MAP_BROWSER_ITEM_HEIGHT
 			app.editor.map_browser_scroll -= i32(wheel)
 			if app.editor.map_browser_scroll < 0 {
 				app.editor.map_browser_scroll = 0
 			}
-			max_scroll := i32(len(app.editor.map_browser_files)) - 8
+			max_scroll := i32(len(app.editor.map_browser_entries)) - visible_items
 			if max_scroll < 0 { max_scroll = 0 }
 			if app.editor.map_browser_scroll > max_scroll {
 				app.editor.map_browser_scroll = max_scroll
@@ -89,7 +104,8 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 			obstacle := app.editor.game_map.obstacle_grid[grid_y][grid_x]
 
 			#partial switch tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE, .TOWER_ENHANCE:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
+			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
 				// Select tower for upgrade
 				select_tower_at(app, grid_y, grid_x)
 				app.selected_obstacle.valid = false // Deselect obstacle
@@ -216,16 +232,24 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 	// Cuando el browser está abierto: manejar scroll/ESC y bloquear el resto del input
 	if app.editor.show_map_browser {
 		if raylib.IsKeyPressed(.ESCAPE) {
+			entities.map_destroy(&app.editor.map_browser_preview)
+			app.editor.map_browser_preview_valid = false
+			if app.editor.map_browser_preview_tex_valid {
+				raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
+				app.editor.map_browser_preview_tex_valid = false
+			}
 			app.editor.show_map_browser = false
 			app.editor.map_browser_play_mode = false
 		}
 		wheel := raylib.GetMouseWheelMove()
 		if wheel != 0 {
+			content_h     := constants.UI_MAP_BROWSER_HEIGHT - constants.UI_MAP_BROWSER_HEADER_HEIGHT - constants.UI_MAP_BROWSER_FOOTER_HEIGHT
+			visible_items := content_h / constants.UI_MAP_BROWSER_ITEM_HEIGHT
 			app.editor.map_browser_scroll -= i32(wheel)
 			if app.editor.map_browser_scroll < 0 {
 				app.editor.map_browser_scroll = 0
 			}
-			max_scroll := i32(len(app.editor.map_browser_files)) - 8
+			max_scroll := i32(len(app.editor.map_browser_entries)) - visible_items
 			if max_scroll < 0 { max_scroll = 0 }
 			if app.editor.map_browser_scroll > max_scroll {
 				app.editor.map_browser_scroll = max_scroll
@@ -279,7 +303,8 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 		case .PATH, .SPAWN, .GOAL:
 			// Place path elements
 			app.editor.game_map.grid[grid_y][grid_x] = tool
-		case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE, .TOWER_ENHANCE:
+		case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
+		     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
 			// Place tower (only on empty cells)
 			if app.editor.game_map.grid[grid_y][grid_x] == .EMPTY {
 				app.editor.game_map.grid[grid_y][grid_x] = tool
@@ -459,14 +484,20 @@ input_process_editor_shortcuts :: proc(app: ^entities.App_State) {
 	// Abrir/cerrar browser de mapas (Ctrl+B)
 	if ctrl && raylib.IsKeyPressed(.B) {
 		if app.editor.show_map_browser {
+			entities.map_destroy(&app.editor.map_browser_preview)
+			app.editor.map_browser_preview_valid = false
+			if app.editor.map_browser_preview_tex_valid {
+				raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
+				app.editor.map_browser_preview_tex_valid = false
+			}
 			app.editor.show_map_browser = false
 		} else {
-			for f in app.editor.map_browser_files {
-				delete(f)
-			}
-			delete(app.editor.map_browser_files)
-			app.editor.map_browser_files = entities.map_list_saved()
-			app.editor.map_browser_scroll = 0
+			entities.map_file_entries_destroy(&app.editor.map_browser_entries)
+			app.editor.map_browser_entries = entities.map_list_saved_entries()
+			app.editor.map_browser_scroll   = 0
+			app.editor.map_browser_selected = -1
+			app.editor.map_browser_preview  = entities.map_init()
+			app.editor.map_browser_preview_valid = false
 			app.editor.show_map_browser = true
 		}
 	}
@@ -556,6 +587,10 @@ tile_to_tower_type :: proc(tile: constants.Tile) -> constants.Tower_Type {
 		return .ICE
 	case .TOWER_ENHANCE:
 		return .ENHANCE
+	case .TOWER_TESLA:
+		return .TESLA
+	case .TOWER_MORTAR:
+		return .MORTAR
 	case:
 		return .ARCHER  // Default
 	}

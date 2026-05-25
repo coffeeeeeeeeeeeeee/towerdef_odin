@@ -13,6 +13,8 @@ Game_State :: enum {
 	EDITOR,
 	GAME_OVER,
 	SETTINGS,
+	RUN_COMPLETE,
+	PROGRESSION,
 }
 
 // Rareza de carta — afecta probabilidad de aparición en tienda y precio
@@ -39,6 +41,8 @@ Tile :: enum i32 {
 	ACCESSORY_BLOCK  = 11,
 	TOWER_ICE        = 12,
 	TOWER_ENHANCE    = 13,
+	TOWER_TESLA      = 14,
+	TOWER_MORTAR     = 15,
 }
 
 Tower_Type :: enum {
@@ -49,6 +53,8 @@ Tower_Type :: enum {
 	LASER,
 	ICE,
 	ENHANCE,
+	TESLA,
+	MORTAR,
 }
 
 Target_Strategy :: enum {
@@ -179,6 +185,25 @@ TOWER_SPECS := [Tower_Type]Tower_Spec {
 		cost     = 90,
 		color    = raylib.GOLD,
 	},
+	.TESLA = {
+		type     = .TESLA,
+		range    = 3.0,
+		damage   = 6.0,
+		cooldown = 1.5,
+		aoe      = 0,
+		cost     = 55,
+		color    = raylib.Color{120, 70, 220, 255},
+	},
+	.MORTAR = {
+		type         = .MORTAR,
+		range        = 5.0,
+		damage       = 14.0,
+		cooldown     = 3.0,
+		aoe          = 1.5,
+		cost         = 65,
+		color        = raylib.Color{70, 100, 55, 255},
+		min_cooldown = 1.0,
+	},
 }
 
 // =============================================================================
@@ -243,6 +268,13 @@ ICE_SLOW_DURATION :: f32(2.0)  // Seconds the slow effect lasts after a pulse
 
 PROJECTILE_SPEED_DEFAULT :: f32(12.0)  // Travel speed for Archer, Cannon, Sniper, Laser projectiles
 PROJECTILE_SPEED_MISSILE :: f32(5.0)   // Slower travel speed for Missile projectiles
+PROJECTILE_SPEED_MORTAR  :: f32(2.5)   // Very slow mortar shell
+
+// TESLA chain lightning
+TESLA_CHAIN_COUNT   :: 3        // Total enemies hit (primary + bounces)
+TESLA_CHAIN_RANGE   :: f32(1.8) // Max grid-cell distance between chain targets
+TESLA_CHAIN_FALLOFF :: f32(0.6) // Damage multiplier per bounce step
+TESLA_ARC_DURATION  :: f32(0.18) // Seconds chain arcs remain visible
 
 AOE_DAMAGE_MULTIPLIER :: f32(0.5)  // Splash damage is this fraction of the direct-hit damage
 
@@ -316,7 +348,8 @@ WAVE_ENEMIES_BASE  :: i32(5)
 WAVE_ENEMIES_SCALE :: i32(2)
 
 BOSS_WAVE_INTERVAL :: i32(10)  // A boss wave occurs every N waves (wave 10, 20, 30…)
-MAX_WAVE           :: i32(100) // Game ends (victory) after completing this wave
+MAX_WAVE           :: i32(100) // Legacy constant (kept for reference)
+RUN_MAX_WAVES      :: i32(30)  // Waves per meta-progression run
 INTER_WAVE_DELAY   :: f32(2.0) // Seconds between wave end and next wave auto-start
 
 // Bonus waves
@@ -531,6 +564,11 @@ TOWER_ICE_STROKE        :: raylib.Color{ 70, 160, 210, 255}
 TOWER_ENHANCE_BASE      :: raylib.Color{230, 180,  40, 255}
 TOWER_ENHANCE_STROKE    :: raylib.Color{180, 130,  20, 255}
 TOWER_ENHANCE_GLOW      :: raylib.Color{255, 230, 100, 200}
+TOWER_TESLA_BASE        :: raylib.Color{ 85,  55, 175, 255}
+TOWER_TESLA_STROKE      :: raylib.Color{120,  70, 220, 255}
+TOWER_TESLA_ARC         :: raylib.Color{200, 230, 255, 255}
+TOWER_MORTAR_BASE       :: raylib.Color{ 70, 100,  55, 255}
+TOWER_MORTAR_STROKE     :: raylib.Color{ 45,  65,  30, 255}
 
 // =============================================================================
 // UI layout
@@ -648,13 +686,13 @@ MENU_GRID_SPEED      :: f32(10.0)  // Pixels per second for diagonal scroll anim
 // Map browser panel
 // =============================================================================
 
-UI_MAP_BROWSER_WIDTH             :: i32(420)
-UI_MAP_BROWSER_HEIGHT            :: i32(480)
+UI_MAP_BROWSER_WIDTH             :: i32(700)
+UI_MAP_BROWSER_HEIGHT            :: i32(500)
 UI_MAP_BROWSER_SHADOW_OFFSET     :: i32(4)
 UI_MAP_BROWSER_TITLE_Y_OFFSET    :: i32(14)
 UI_MAP_BROWSER_SEPARATOR_Y       :: i32(38)
 UI_MAP_BROWSER_HEADER_HEIGHT     :: i32(46)
-UI_MAP_BROWSER_FOOTER_HEIGHT     :: i32(48)
+UI_MAP_BROWSER_FOOTER_HEIGHT     :: i32(52)
 UI_MAP_BROWSER_ITEM_HEIGHT       :: i32(36)
 UI_MAP_BROWSER_ITEM_SIDE_PADDING :: i32(8)
 UI_MAP_BROWSER_ITEM_VERT_GAP     :: i32(4)
@@ -662,14 +700,19 @@ UI_MAP_BROWSER_ITEM_TEXT_INDENT  :: i32(10)
 UI_MAP_BROWSER_ITEM_FONT_SIZE    :: i32(13)
 UI_MAP_BROWSER_SCROLL_FONT_SIZE  :: i32(11)
 UI_MAP_BROWSER_CLOSE_HEIGHT      :: i32(28)
-UI_MAP_BROWSER_CLOSE_BTN_MARGIN  :: i32(10)
+UI_MAP_BROWSER_CLOSE_BTN_MARGIN  :: i32(12)
 UI_MAP_BROWSER_TITLE_FONT_SIZE   :: i32(16)
+UI_MAP_BROWSER_LIST_WIDTH        :: i32(230)
+UI_MAP_BROWSER_INFO_HEIGHT       :: i32(48)
+UI_MAP_BROWSER_INFO_FONT_SIZE    :: i32(12)
+UI_MAP_BROWSER_PREVIEW_PAD       :: i32(12)
 
-UI_MAP_BROWSER_OVERLAY_COLOR   :: raylib.Color{  0,   0,   0, 140}
-UI_MAP_BROWSER_SHADOW_COLOR    :: raylib.Color{  0,   0,   0,  80}
-UI_MAP_BROWSER_SEPARATOR_COLOR :: raylib.Color{180, 180, 180, 200}
-UI_MAP_BROWSER_MUTED_COLOR     :: raylib.Color{130, 130, 130, 255}
-UI_MAP_BROWSER_LOADED_COLOR    :: raylib.Color{ 30, 120,  30, 255}
+UI_MAP_BROWSER_OVERLAY_COLOR      :: raylib.Color{  0,   0,   0, 140}
+UI_MAP_BROWSER_SHADOW_COLOR       :: raylib.Color{  0,   0,   0,  80}
+UI_MAP_BROWSER_SEPARATOR_COLOR    :: raylib.Color{180, 180, 180, 200}
+UI_MAP_BROWSER_MUTED_COLOR        :: raylib.Color{130, 130, 130, 255}
+UI_MAP_BROWSER_LOADED_COLOR       :: raylib.Color{ 30, 120,  30, 255}
+UI_MAP_BROWSER_SELECTED_BG_COLOR  :: raylib.Color{ 30, 120,  30,  45}
 
 // =============================================================================
 // Zoom

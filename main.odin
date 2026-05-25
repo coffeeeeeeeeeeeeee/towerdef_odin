@@ -75,6 +75,8 @@ main :: proc() {
 
 	// Initialize game
 	app_init(initial_settings)
+	// Load meta-progression save
+	app.meta = entities.meta_load()
 	defer {
 		save_settings(app.settings)
 		app_destroy()
@@ -247,10 +249,11 @@ app_destroy :: proc() {
 	systems.simulation_cleanup(&app)
 
 	// Free editor dynamic data
-	for f in app.editor.map_browser_files {
-		delete(f)
+	entities.map_file_entries_destroy(&app.editor.map_browser_entries)
+	entities.map_destroy(&app.editor.map_browser_preview)
+	if app.editor.map_browser_preview_tex_valid {
+		raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
 	}
-	delete(app.editor.map_browser_files)
 
 	for &s in app.editor.undo_stack {
 		entities.map_snapshot_destroy(&s)

@@ -13,17 +13,23 @@ Laser_Beam :: struct {
 	end_y: f32,
 	duration: f32,
 	max_duration: f32,
+	color: raylib.Color,  // Beam color (laser = red, tesla arc = electric blue)
 }
 
 // Initialize laser beam
-laser_beam_init :: proc(start_x, start_y, end_x, end_y: f32) -> Laser_Beam {
+laser_beam_init :: proc(
+	start_x, start_y, end_x, end_y: f32,
+	color: raylib.Color = constants.TOWER_LASER_COLOR,
+	duration: f32 = 0.1,
+) -> Laser_Beam {
 	return Laser_Beam{
-		start_x = start_x,
-		start_y = start_y,
-		end_x = end_x,
-		end_y = end_y,
-		duration = 0.1,
-		max_duration = 0.1,
+		start_x     = start_x,
+		start_y     = start_y,
+		end_x       = end_x,
+		end_y       = end_y,
+		duration     = duration,
+		max_duration = duration,
+		color        = color,
 	}
 }
 

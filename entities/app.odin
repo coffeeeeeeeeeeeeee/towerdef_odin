@@ -1,6 +1,7 @@
 package entities
 
 import "../constants"
+import "vendor:raylib"
 
 // Game_State must be defined before App_State
 // It's now defined in constants package as Game_State
@@ -127,11 +128,16 @@ Editor :: struct {
 	load_map_active: bool,
 
 	// Map save/load state
-	current_map_name: string,         // Nombre del mapa cargado/guardado
-	show_map_browser: bool,           // Si el browser de mapas está abierto
-	map_browser_files: [dynamic]string, // Lista de archivos .map disponibles
-	map_browser_scroll: i32,          // Scroll offset del browser
-	map_browser_play_mode: bool,      // True cuando el browser fue abierto desde el menú Play (lanza simulación al seleccionar)
+	current_map_name: string,              // Nombre del mapa cargado/guardado
+	show_map_browser: bool,               // Si el browser de mapas está abierto
+	map_browser_entries:       [dynamic]Map_File_Entry, // Lista de archivos .map disponibles
+	map_browser_scroll:        i32,       // Scroll offset del browser
+	map_browser_play_mode:     bool,      // True cuando el browser fue abierto desde el menú Play
+	map_browser_selected:      i32,       // Índice seleccionado en la lista (-1 = ninguno)
+	map_browser_preview:           Map,             // Mapa cargado para vista previa
+	map_browser_preview_valid:     bool,            // True cuando hay una vista previa válida
+	map_browser_preview_tex:       raylib.RenderTexture2D, // Textura del preview renderizado
+	map_browser_preview_tex_valid: bool,            // True cuando la textura es válida
 
 	// Undo / Redo
 	undo_stack: [dynamic]Map_Snapshot, // Snapshots anteriores (el último es el más reciente)
@@ -215,6 +221,25 @@ App_State :: struct {
 	
 	// Quit flag
 	should_quit: bool,
+
+	// Meta-progression (persisted to savegame.bin)
+	meta: Meta_State,
+
+	// Cristales earned in the last run — set when transitioning to .RUN_COMPLETE
+	run_cristales: i32,
+
+	// Tooltip layer — written during UI render, drawn last so it's always on top.
+	// Only one tooltip can be visible per frame; first writer wins.
+	pending_tooltip: Pending_Tooltip,
+}
+
+Tooltip_Kind :: enum { NONE, LABEL, CARD }
+
+Pending_Tooltip :: struct {
+	kind:    Tooltip_Kind,
+	trigger: raylib.Rectangle,
+	label:   string,         // used when kind == .LABEL
+	card:    Card,           // used when kind == .CARD
 }
 
 // Get selected tower by searching sim.towers for the stored (r, c).
@@ -249,12 +274,25 @@ app_set_state :: proc(app: ^App_State, new_state: constants.Game_State) {
 	app.state = new_state
 }
 
-// Take damage
+// Take damage — triggers RUN_COMPLETE (defeat) when health reaches zero.
 app_take_damage :: proc(app: ^App_State, damage: i32) {
 	app.sim.health -= damage
 	if app.sim.health <= 0 {
-		app_set_state(app, .GAME_OVER)
+		app.sim.health = 0
+		app_finish_run(app, false)
 	}
+}
+
+// Finalize a run (victory or defeat), tally cristales, persist meta, then transition to RUN_COMPLETE.
+app_finish_run :: proc(app: ^App_State, victory: bool) {
+	app.sim.is_victory = victory
+	lives := app.sim.health if victory else 0
+	cristales := meta_calc_cristales(app.sim.enemies_killed, lives, app.sim.wave_number)
+	app.run_cristales   = cristales
+	app.meta.cristales  += cristales
+	app.meta.total_runs += 1
+	meta_save(&app.meta)
+	app_set_state(app, .RUN_COMPLETE)
 }
 
 // Add money

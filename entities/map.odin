@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:strconv"
+import "core:time"
 import "../constants"
 
 // Map/Grid structure
@@ -418,6 +419,47 @@ map_list_saved :: proc() -> [dynamic]string {
 	}
 
 	return files
+}
+
+// Entry for the split-panel map viewer (name + formatted modification date).
+Map_File_Entry :: struct {
+	name:     string,
+	mod_date: string, // "YYYY-MM-DD"
+}
+
+// List map files with modification dates for the map viewer.
+map_list_saved_entries :: proc() -> [dynamic]Map_File_Entry {
+	entries := make([dynamic]Map_File_Entry)
+
+	fd, err := os.open("maps")
+	if err != os.ERROR_NONE { return entries }
+	defer os.close(fd)
+
+	fis, read_err := os.read_dir(fd, -1)
+	if read_err != os.ERROR_NONE { return entries }
+	defer os.file_info_slice_delete(fis)
+
+	for fi in fis {
+		if !fi.is_dir && strings.has_suffix(fi.name, ".map") {
+			year, month, day := time.date(fi.modification_time)
+			date_str := fmt.tprintf("%04d-%02d-%02d", year, int(month), day)
+			append(&entries, Map_File_Entry{
+				name     = strings.clone(fi.name),
+				mod_date = strings.clone(date_str),
+			})
+		}
+	}
+
+	return entries
+}
+
+// Free all memory owned by a map_browser_entries slice.
+map_file_entries_destroy :: proc(entries: ^[dynamic]Map_File_Entry) {
+	for e in entries^ {
+		delete(e.name)
+		delete(e.mod_date)
+	}
+	delete(entries^)
 }
 
 // Devuelve true si la celda es una esquina o unión del camino.

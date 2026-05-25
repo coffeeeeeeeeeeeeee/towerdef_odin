@@ -41,36 +41,129 @@ render_tooltip :: proc(rect: raylib.Rectangle) -> raylib.Rectangle {
 	return r
 }
 
-// Tooltip de texto simple.
-render_label_tooltip :: proc(label: string, trigger_rect: raylib.Rectangle) {
-	mouse := raylib.GetMousePosition()
-	if !raylib.CheckCollisionPointRec(mouse, trigger_rect) {
-		return
+// Encola un tooltip de texto simple para que se dibuje al final del frame.
+// Solo el primer llamado por frame tiene efecto (first-writer wins).
+render_label_tooltip :: proc(app: ^entities.App_State, label: string, trigger_rect: raylib.Rectangle) {
+	if app.pending_tooltip.kind != .NONE { return }
+	if !raylib.CheckCollisionPointRec(raylib.GetMousePosition(), trigger_rect) { return }
+	app.pending_tooltip = {
+		kind    = .LABEL,
+		trigger = trigger_rect,
+		label   = label,
 	}
+}
 
-	pad      := f32(10)
-	font_sz  := f32(constants.UI_TOOLTIP_FONT_SIZE)
-	label_cstr := strings.clone_to_cstring(label, context.temp_allocator)
-	label_w := raylib.MeasureTextEx(constants.game_fonts.bold, label_cstr, font_sz, 0).x
+// Encola un tooltip de carta para que se dibuje al final del frame.
+render_card_tooltip :: proc(app: ^entities.App_State, card: entities.Card, trigger_rect: raylib.Rectangle) {
+	if app.pending_tooltip.kind != .NONE { return }
+	if !raylib.CheckCollisionPointRec(raylib.GetMousePosition(), trigger_rect) { return }
+	app.pending_tooltip = {
+		kind    = .CARD,
+		trigger = trigger_rect,
+		card    = card,
+	}
+}
 
-	tip_w := label_w + pad * 2
-	tip_h := font_sz + pad
+// Dibuja el tooltip encolado este frame y limpia el estado.
+// Llamar al final de render_game, después de todo lo demás.
+render_tooltip_layer :: proc(app: ^entities.App_State) {
+	defer app.pending_tooltip.kind = .NONE
 
-	tip_x := trigger_rect.x + trigger_rect.width/2 - tip_w/2
-	tip_y := trigger_rect.y - tip_h - f32(constants.UI_TOOLTIP_OFFSET)
+	switch app.pending_tooltip.kind {
+	case .NONE:
+		return
 
-	// render_tooltip clampea a pantalla con TOOLTIP_MARGIN_X/Y y devuelve el rect final
-	r := render_tooltip({tip_x, tip_y, tip_w, tip_h})
-	tip_x = r.x
-	tip_y = r.y
+	case .LABEL:
+		tip   := &app.pending_tooltip
+		pad   := f32(10)
+		fsz   := f32(constants.UI_TOOLTIP_FONT_SIZE)
+		cs    := strings.clone_to_cstring(tip.label, context.temp_allocator)
+		lw    := raylib.MeasureTextEx(constants.game_fonts.bold, cs, fsz, 0).x
+		tip_w := lw + pad * 2
+		tip_h := fsz + pad
+		tip_x := tip.trigger.x + tip.trigger.width/2 - tip_w/2
+		tip_y := tip.trigger.y - tip_h - f32(constants.UI_TOOLTIP_OFFSET)
+		r     := render_tooltip({tip_x, tip_y, tip_w, tip_h})
+		raylib.DrawTextEx(
+			constants.game_fonts.bold, cs,
+			{r.x + r.width/2 - lw/2, r.y + r.height/2 - fsz/2},
+			fsz, 0, constants.UI_PANEL_TEXT_COLOR,
+		)
 
-	// Texto centrado verticalmente
-	text_x := tip_x + tip_w/2 - label_w/2
-	text_y := tip_y + tip_h/2 - font_sz/2
-	raylib.DrawTextEx(
-		constants.game_fonts.bold, label_cstr,
-		{text_x, text_y}, font_sz, 0, constants.UI_PANEL_TEXT_COLOR,
-	)
+	case .CARD:
+		tip      := &app.pending_tooltip
+		card     := tip.card
+		FONT_SIZE : f32 = f32(constants.UI_TOOLTIP_FONT_SIZE)
+		PAD       : f32 = 10
+		LINE_H    : f32 = FONT_SIZE + 4
+
+		lines : [4]string
+		n     := 0
+		push :: proc(lines: ^[4]string, n: ^int, text: string) {
+			if n^ >= 4 { return }
+			lines[n^] = text
+			n^ += 1
+		}
+
+		#partial switch card.kind {
+		case .TOWER:
+			tower_desc_key : string
+			switch card.tower_type {
+			case .ARCHER:  tower_desc_key = "TOOLTIP_ARCHER_DESC"
+			case .CANNON:  tower_desc_key = "TOOLTIP_CANNON_DESC"
+			case .SNIPER:  tower_desc_key = "TOOLTIP_SNIPER_DESC"
+			case .MISSILE: tower_desc_key = "TOOLTIP_MISSILE_DESC"
+			case .LASER:   tower_desc_key = "TOOLTIP_LASER_DESC"
+			case .ICE:     tower_desc_key = "TOOLTIP_ICE_DESC"
+			case .ENHANCE: tower_desc_key = "TOOLTIP_ENHANCE_DESC"
+			case .TESLA:   tower_desc_key = "TOOLTIP_TESLA_DESC"
+			case .MORTAR:  tower_desc_key = "TOOLTIP_MORTAR_DESC"
+			}
+			push(&lines, &n, constants.get_text(tower_desc_key))
+		case .OBSTACLE:
+			push(&lines, &n, constants.get_text("TOOLTIP_OBSTACLE_DESC"))
+		case:
+			rspec, rok := entities.relic_spec_for(card.kind)
+			if rok { push(&lines, &n, constants.get_text(rspec.desc_key)) }
+		}
+
+		#partial switch card.kind {
+		case .TOWER:
+			tspec := constants.TOWER_SPECS[card.tower_type]
+			push(&lines, &n, fmt.tprintf("DMG %.1f  CD %.2fs  RNG %.1f", tspec.damage, tspec.cooldown, tspec.range))
+			if tspec.aoe > 0 {
+				push(&lines, &n, fmt.tprintf("AoE %.1f", tspec.aoe))
+			}
+		case .OBSTACLE:
+			// sin stat numérico
+		case:
+			rspec, rok := entities.relic_spec_for(card.kind)
+			if rok && rspec.stat_format != nil {
+				push(&lines, &n, rspec.stat_format())
+			}
+		}
+
+		max_w : f32 = 0
+		for i in 0 ..< n {
+			w := raylib.MeasureTextEx(constants.game_fonts.bold,
+				strings.clone_to_cstring(lines[i], context.temp_allocator), FONT_SIZE, 0).x
+			if w > max_w { max_w = w }
+		}
+		tip_w := max_w + PAD * 2
+		tip_h := f32(n) * LINE_H + PAD * 2 - 4
+		tip_x := tip.trigger.x + tip.trigger.width/2 - tip_w/2
+		tip_y := tip.trigger.y - tip_h - f32(constants.UI_TOOLTIP_OFFSET)
+		r     := render_tooltip({tip_x, tip_y, tip_w, tip_h})
+		for i in 0 ..< n {
+			col := constants.UI_PANEL_TEXT_COLOR if i == 0 else raylib.Color{60, 100, 160, 255}
+			raylib.DrawTextEx(
+				constants.game_fonts.bold,
+				strings.clone_to_cstring(lines[i], context.temp_allocator),
+				{r.x + PAD, r.y + PAD + f32(i) * LINE_H},
+				FONT_SIZE, 0, col,
+			)
+		}
+	}
 }
 ui_active_dropdown_id: string = ""
 
@@ -700,7 +793,7 @@ render_panel :: proc(rect: raylib.Rectangle, title: string = "") -> raylib.Recta
 // Render info panel: icon + large bold value filling the panel, tooltip on hover.
 // Delegates shadow + background + click-blocking to render_panel (called with no title).
 // Returns the content rectangle so callers can draw additional content.
-render_info_panel :: proc(rect: raylib.Rectangle, tooltip: string, value: string = "", icon: raylib.Texture2D = {}) -> raylib.Rectangle {
+render_info_panel :: proc(app: ^entities.App_State, rect: raylib.Rectangle, tooltip: string, value: string = "", icon: raylib.Texture2D = {}) -> raylib.Rectangle {
 	// render_panel handles: drop shadow, rounded background, ui_click_blocks registration.
 	_ = render_panel(rect)
 
@@ -750,7 +843,7 @@ render_info_panel :: proc(rect: raylib.Rectangle, tooltip: string, value: string
 
 	// Tooltip on hover
 	if tooltip != "" {
-		render_label_tooltip(tooltip, rect)
+		render_label_tooltip(app, tooltip, rect)
 	}
 
 	return raylib.Rectangle{content_x, content_y, content_w, content_h}
@@ -833,7 +926,7 @@ render_card :: proc(
 		dummy := entities.tower_init(card.tower_type, 0, 0)
 		old_show_range := app.settings.show_tower_range
 		app.settings.show_tower_range = false
-		render_tower(app, &dummy, preview_x, preview_y, preview_size)
+		render_tower(&dummy, preview_x, preview_y, preview_size)
 		app.settings.show_tower_range = old_show_range
 	} else if entities.is_relic(card.kind) {
 		// Relictos: icono PNG + badge de stacks acumulados
@@ -895,91 +988,6 @@ render_card :: proc(
 	render_rarity(entities.card_rarity(card), x, y + CARD_H - 24, CARD_W)
 }
 
-// Tooltip de carta — aparece al hacer hover sobre card_rect.
-// Usada tanto en la tienda como en la mano. Usa render_tooltip para el fondo.
-// Los valores numéricos vienen de constants.odin.
-draw_card_tooltip :: proc(card: entities.Card, card_rect: raylib.Rectangle) {
-	mouse := raylib.GetMousePosition()
-	if !raylib.CheckCollisionPointRec(mouse, card_rect) { return }
-
-	FONT_SIZE : f32 = f32(constants.UI_TOOLTIP_FONT_SIZE)
-	PAD       : f32 = 10
-	LINE_H    : f32 = FONT_SIZE + 4
-
-	// ── Construir líneas ─────────────────────────────────────────────────────
-	lines : [4]string
-	n     := 0
-
-	push :: proc(lines: ^[4]string, n: ^int, text: string) {
-		if n^ >= 4 { return }
-		lines[n^] = text
-		n^ += 1
-	}
-
-	// Línea 1: descripción (sin números)
-	#partial switch card.kind {
-	case .TOWER:
-		tower_desc_key : string
-		switch card.tower_type {
-		case .ARCHER:  tower_desc_key = "TOOLTIP_ARCHER_DESC"
-		case .CANNON:  tower_desc_key = "TOOLTIP_CANNON_DESC"
-		case .SNIPER:  tower_desc_key = "TOOLTIP_SNIPER_DESC"
-		case .MISSILE: tower_desc_key = "TOOLTIP_MISSILE_DESC"
-		case .LASER:   tower_desc_key = "TOOLTIP_LASER_DESC"
-		case .ICE:     tower_desc_key = "TOOLTIP_ICE_DESC"
-		case .ENHANCE: tower_desc_key = "TOOLTIP_ENHANCE_DESC"
-		}
-		push(&lines, &n, constants.get_text(tower_desc_key))
-	case .OBSTACLE:
-		push(&lines, &n, constants.get_text("TOOLTIP_OBSTACLE_DESC"))
-	case:
-		rspec, rok := entities.relic_spec_for(card.kind)
-		if rok { push(&lines, &n, constants.get_text(rspec.desc_key)) }
-	}
-
-	// Línea 2+: valores numéricos desde constants.odin
-	#partial switch card.kind {
-	case .TOWER:
-		tspec := constants.TOWER_SPECS[card.tower_type]
-		push(&lines, &n, fmt.tprintf("DMG %.1f  CD %.2fs  RNG %.1f", tspec.damage, tspec.cooldown, tspec.range))
-		if tspec.aoe > 0 {
-			push(&lines, &n, fmt.tprintf("AoE %.1f", tspec.aoe))
-		}
-	case .OBSTACLE:
-		// sin stat numérico
-	case:
-		rspec, rok := entities.relic_spec_for(card.kind)
-		if rok && rspec.stat_format != nil {
-			push(&lines, &n, rspec.stat_format())
-		}
-	}
-
-	// ── Dimensiones y posición ───────────────────────────────────────────────
-	max_w : f32 = 0
-	for i in 0 ..< n {
-		w := raylib.MeasureTextEx(constants.game_fonts.bold,
-			strings.clone_to_cstring(lines[i], context.temp_allocator), FONT_SIZE, 0).x
-		if w > max_w { max_w = w }
-	}
-	tip_w := max_w + PAD * 2
-	tip_h := f32(n) * LINE_H + PAD * 2 - 4  // -4 quita espacio extra final
-	tip_x := card_rect.x + card_rect.width / 2 - tip_w / 2
-	tip_y := card_rect.y - tip_h - f32(constants.UI_TOOLTIP_OFFSET)
-
-	// ── Fondo via render_tooltip (clampea a pantalla automáticamente) ────────
-	r := render_tooltip({tip_x, tip_y, tip_w, tip_h})
-
-	// ── Texto ────────────────────────────────────────────────────────────────
-	for i in 0 ..< n {
-		col := constants.UI_PANEL_TEXT_COLOR if i == 0 else raylib.Color{60, 100, 160, 255}
-		raylib.DrawTextEx(
-			constants.game_fonts.bold,
-			strings.clone_to_cstring(lines[i], context.temp_allocator),
-			{r.x + PAD, r.y + PAD + f32(i) * LINE_H},
-			FONT_SIZE, 0, col,
-		)
-	}
-}
 // Devuelve el color de acento (badge/borde) según rareza.
 rarity_border_color :: proc(rarity: constants.Card_Rarity) -> raylib.Color {
 	switch rarity {

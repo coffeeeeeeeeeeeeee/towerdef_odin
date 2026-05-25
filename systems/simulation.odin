@@ -84,9 +84,8 @@ update_wave :: proc(app: ^entities.App_State, dt: f32) {
 	// and enemies_to_spawn > 0 to avoid triggering before the first wave is launched.
 	if sim.started && sim.enemies_to_spawn > 0 &&
 	   sim.enemies_spawned >= sim.enemies_to_spawn && len(sim.enemies) == 0 {
-		if sim.wave_number >= constants.MAX_WAVE {
-			sim.is_victory = app.sim.health > 0
-			entities.app_set_state(app, .GAME_OVER)
+		if sim.wave_number >= constants.RUN_MAX_WAVES {
+			entities.app_finish_run(app, true)
 		} else {
 			// STEAL: roba cartas al terminar la oleada, independientemente del auto_start.
 			// steal_last_wave evita que se dispare más de una vez por oleada.
@@ -288,7 +287,7 @@ start_next_wave :: proc(app: ^entities.App_State) {
 
 	// Shop al final de cada oleada (excepto la primera — el jugador ya tiene mano inicial)
 	if sim.wave_number > 1 && sim.wave_number % constants.DECK_SELECTION_INTERVAL == 0 {
-		generate_card_selection(sim)
+		generate_card_selection(app)
 		sim.card_selection_active = true
 		simulation_set_pause(app, true)
 	}
@@ -296,12 +295,15 @@ start_next_wave :: proc(app: ^entities.App_State) {
 
 // Rellena sim.card_selection_choices con 3 cartas:
 //   slot 0 — torre o obstáculo (al azar, sin pesos de rareza)
-//   slot 1 — relicto (con pesos de rareza)
+//   slot 1 — relicto (con pesos de rareza, solo relictos desbloqueados)
 //   slot 2 — torre/obstáculo o relicto al 50%
 // Puede llamarse desde start_next_wave o desde el botón de reroll.
-generate_card_selection :: proc(sim: ^entities.Simulation) {
+generate_card_selection :: proc(app: ^entities.App_State) {
+	sim := &app.sim
 	sim.card_selection_bought = {}  // reinicia compras al generar nuevas cartas
-	tower_pool := [9]entities.Card{
+
+	// Build tower pool from unlocked towers only + 2 obstacle slots.
+	all_tower_cards := [9]entities.Card{
 		{kind = .TOWER, tower_type = .ARCHER},
 		{kind = .TOWER, tower_type = .CANNON},
 		{kind = .TOWER, tower_type = .SNIPER},
@@ -309,10 +311,23 @@ generate_card_selection :: proc(sim: ^entities.Simulation) {
 		{kind = .TOWER, tower_type = .LASER},
 		{kind = .TOWER, tower_type = .ICE},
 		{kind = .TOWER, tower_type = .ENHANCE},
-		{kind = .OBSTACLE},
-		{kind = .OBSTACLE},
+		{kind = .TOWER, tower_type = .TESLA},
+		{kind = .TOWER, tower_type = .MORTAR},
 	}
-	relic_pool := [16]entities.Card{
+	tower_pool  := [11]entities.Card{}
+	tower_count := 0
+	for c in all_tower_cards {
+		if entities.meta_is_tower_unlocked(&app.meta, c.tower_type) {
+			tower_pool[tower_count] = c
+			tower_count += 1
+		}
+	}
+	tower_pool[tower_count]     = {kind = .OBSTACLE}
+	tower_pool[tower_count + 1] = {kind = .OBSTACLE}
+	tower_count += 2
+
+	// All possible relics — filtered below to only include unlocked ones.
+	all_relics := [16]entities.Card{
 		{kind = .INTEREST_BOOST},
 		{kind = .STEAL},
 		{kind = .WEAKEN},
@@ -330,19 +345,37 @@ generate_card_selection :: proc(sim: ^entities.Simulation) {
 		{kind = .WARMED_UP},
 		{kind = .CRYPTOBRO},
 	}
-	tower_used := [9]bool{}
+
+	// Build the relic pool from only unlocked relics.
+	relic_pool : [16]entities.Card
+	relic_count := 0
+	for c in all_relics {
+		if app.meta.unlocked_relics[c.kind] {
+			relic_pool[relic_count] = c
+			relic_count += 1
+		}
+	}
+
+	tower_used := [11]bool{}
 	relic_used := [16]bool{}
 	cands      : [16]int
 
 	// helper: elige una torre al azar y la asigna al slot indicado
-	pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 0)
-	// helper: elige un relicto ponderado y lo asigna al slot indicado
-	pick_relic_slot(sim, &relic_pool, &relic_used, &cands, 1)
-	// slot 2: torre o relicto al 50%
-	if rand.float32() < 0.5 {
-		if pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 2) { return }
+	pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 0, tower_count)
+
+	// Si no hay relictos desbloqueados, todos los slots son torres/obstáculos
+	if relic_count == 0 {
+		pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 1, tower_count)
+		pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 2, tower_count)
+	} else {
+		// helper: elige un relicto ponderado y lo asigna al slot indicado
+		pick_relic_slot(sim, &relic_pool, relic_count, &relic_used, &cands, 1)
+		// slot 2: torre o relicto al 50%
+		if rand.float32() < 0.5 {
+			if pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 2, tower_count) { return }
+		}
+		pick_relic_slot(sim, &relic_pool, relic_count, &relic_used, &cands, 2)
 	}
-	pick_relic_slot(sim, &relic_pool, &relic_used, &cands, 2)
 
 	// VETERAN: aplica bonus_level a cartas de torre del shop según probabilidad por stack
 	if sim.relic_stacks[.VETERAN] > 0 {
@@ -356,9 +389,9 @@ generate_card_selection :: proc(sim: ^entities.Simulation) {
 	}
 }
 
-pick_tower_slot :: proc(sim: ^entities.Simulation, pool: ^[9]entities.Card, used: ^[9]bool, buf: ^[16]int, slot: int) -> bool {
+pick_tower_slot :: proc(sim: ^entities.Simulation, pool: ^[11]entities.Card, used: ^[11]bool, buf: ^[16]int, slot: int, count: int = 11) -> bool {
 	n := 0
-	for j in 0 ..< 9 { if !used[j] { buf[n] = j; n += 1 } }
+	for j in 0 ..< count { if !used[j] { buf[n] = j; n += 1 } }
 	if n == 0 { return false }
 	idx := buf[rand.int_max(n)]
 	used[idx] = true
@@ -366,7 +399,7 @@ pick_tower_slot :: proc(sim: ^entities.Simulation, pool: ^[9]entities.Card, used
 	return true
 }
 
-pick_relic_slot :: proc(sim: ^entities.Simulation, pool: ^[16]entities.Card, used: ^[16]bool, buf: ^[16]int, slot: int) -> bool {
+pick_relic_slot :: proc(sim: ^entities.Simulation, pool: ^[16]entities.Card, count: int, used: ^[16]bool, buf: ^[16]int, slot: int) -> bool {
 	rval := rand.float32()
 	target: constants.Card_Rarity
 	if rval < constants.RARITY_PROB_UNIQUE {
@@ -379,17 +412,17 @@ pick_relic_slot :: proc(sim: ^entities.Simulation, pool: ^[16]entities.Card, use
 		target = .COMMON
 	}
 	n := 0
-	for j in 0 ..< 16 {
+	for j in 0 ..< count {
 		if !used[j] && entities.card_rarity(pool[j]) == target { buf[n] = j; n += 1 }
 	}
 	if n == 0 && target == .UNIQUE {
-		for j in 0 ..< 16 { if !used[j] && entities.card_rarity(pool[j]) == .RARE     { buf[n] = j; n += 1 } }
+		for j in 0 ..< count { if !used[j] && entities.card_rarity(pool[j]) == .RARE     { buf[n] = j; n += 1 } }
 	}
 	if n == 0 {
-		for j in 0 ..< 16 { if !used[j] && entities.card_rarity(pool[j]) == .UNCOMMON { buf[n] = j; n += 1 } }
+		for j in 0 ..< count { if !used[j] && entities.card_rarity(pool[j]) == .UNCOMMON { buf[n] = j; n += 1 } }
 	}
 	if n == 0 {
-		for j in 0 ..< 16 { if !used[j] { buf[n] = j; n += 1 } }
+		for j in 0 ..< count { if !used[j] { buf[n] = j; n += 1 } }
 	}
 	if n == 0 { return false }
 	idx := buf[rand.int_max(n)]
@@ -674,6 +707,18 @@ update_towers :: proc(app: ^entities.App_State, dt: f32) {
 			continue
 		}
 
+		// TESLA: instant chain lightning — no barrel rotation needed
+		if tower.type == .TESLA {
+			update_tesla_tower(app, &tower)
+			continue
+		}
+
+		// MORTAR: fires without alignment (ballistic, indirect fire)
+		if tower.type == .MORTAR {
+			update_mortar_tower(app, &tower)
+			continue
+		}
+
 		// Find target
 		target_enemy := find_target(app, &tower)
 		tower.target = target_enemy
@@ -702,7 +747,7 @@ update_towers :: proc(app: ^entities.App_State, dt: f32) {
 					update_laser_tower(app, &tower, dt)
 				case .ARCHER, .CANNON, .SNIPER, .MISSILE:
 					update_projectile_tower(app, &tower, dt)
-				case .ICE, .ENHANCE:
+				case .ICE, .ENHANCE, .TESLA, .MORTAR:
 					// Handled above via continue
 				}
 			}
@@ -746,6 +791,117 @@ update_ice_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 	)
 	append(&app.sim.ice_pulses, pulse)
 	play_sound(.TOWER_ICE, .SFX)
+}
+
+// Update TESLA tower — instant chain lightning hitting up to TESLA_CHAIN_COUNT enemies
+update_tesla_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
+	if tower.timer > 0 { return }
+
+	// Find primary target
+	primary := find_target(app, tower)
+	if primary == nil { return }
+
+	tower.timer = entities.tower_get_effective_cooldown(tower)
+	sim        := &app.sim
+
+	// Chain: track which enemy indices have already been hit
+	MAX_CHAIN :: constants.TESLA_CHAIN_COUNT
+	hit_idx   : [MAX_CHAIN]int
+	hit_count := 0
+
+	cur_x  := f32(tower.c) + 0.5
+	cur_y  := f32(tower.r) + 0.5
+	cur_dmg := tower.damage
+
+	for chain in 0 ..< MAX_CHAIN {
+		// Slot 0 = primary target; later slots = nearest unhit within chain range
+		next  : ^entities.Enemy = nil
+		next_i    := -1
+
+		if chain == 0 {
+			next = primary
+			for i in 0 ..< len(sim.enemies) {
+				if &sim.enemies[i] == primary { next_i = i; break }
+			}
+		} else {
+			best_dist := constants.TESLA_CHAIN_RANGE
+			for i in 0 ..< len(sim.enemies) {
+				already := false
+				for j in 0 ..< hit_count {
+					if hit_idx[j] == i { already = true; break }
+				}
+				if already { continue }
+				e  := &sim.enemies[i]
+				dx := (e.x + 0.5) - cur_x
+				dy := (e.y + 0.5) - cur_y
+				d  := math.sqrt_f32(dx*dx + dy*dy)
+				if d <= best_dist {
+					best_dist = d
+					next      = e
+					next_i    = i
+				}
+			}
+		}
+
+		if next == nil { break }
+
+		if hit_count < MAX_CHAIN {
+			hit_idx[hit_count] = next_i
+			hit_count += 1
+		}
+
+		// Apply damage
+		is_crit := rand.float32() < entities.tower_get_critical_chance(tower)
+		dmg := cur_dmg
+		if is_crit { dmg *= constants.CRIT_DAMAGE_MULTIPLIER }
+		dmg = calc_damage(app, dmg, tower, next)
+		next.hp -= dmg
+		tower.total_damage += dmg
+		spawn_damage_number(app, next.x + 0.5, next.y + 0.5, dmg, is_crit)
+
+		// Spawn lightning arc (reuse laser_beam with TESLA color and arc duration)
+		beam := entities.laser_beam_init(
+			cur_x, cur_y,
+			next.x + 0.5, next.y + 0.5,
+			constants.TOWER_TESLA_ARC,
+			constants.TESLA_ARC_DURATION,
+		)
+		append(&sim.laser_beams, beam)
+
+		cur_x   = next.x + 0.5
+		cur_y   = next.y + 0.5
+		cur_dmg *= constants.TESLA_CHAIN_FALLOFF
+	}
+
+	play_sound(.TOWER_ICE, .SFX)
+}
+
+// Update MORTAR tower — fires a slow ballistic shell without waiting for alignment
+update_mortar_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
+	if tower.timer > 0 { return }
+
+	target := find_target(app, tower)
+	if target == nil { return }
+
+	tower.timer = entities.tower_get_effective_cooldown(tower)
+	sim        := &app.sim
+
+	cx := f32(tower.c) + 0.5
+	cy := f32(tower.r) + 0.5
+
+	proj := entities.projectile_init(
+		cx, cy,
+		target,
+		constants.PROJECTILE_SPEED_MORTAR,
+		tower.damage,
+		.FIRST,
+		tower.type,
+		tower.aoe,
+		tower.r,
+		tower.c,
+	)
+	append(&sim.projectiles, proj)
+	play_sound(.TOWER_CANNON, .SFX)
 }
 
 // Recalcula el enhance_bonus de cada torre según los Potenciadores activos en rango.
@@ -878,7 +1034,7 @@ update_projectile_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower
 		case .CANNON:  play_sound(.TOWER_CANNON, .SFX)
 		case .SNIPER:  play_sound(.TOWER_SNIPER, .SFX)
 		case .MISSILE: play_sound(.TOWER_MISSILE, .SFX)
-		case .LASER, .ICE, .ENHANCE: // handled separately
+		case .LASER, .ICE, .ENHANCE, .TESLA, .MORTAR: // handled separately
 		}
 	}
 }
@@ -900,10 +1056,11 @@ find_target :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> ^entiti
 		dist := math.sqrt_f32(dx * dx + dy * dy)
 
 		if dist <= tower.range {
-			// CANNON and SNIPER cannot target flying enemies
-			// Only ARCHER, MISSILE, and LASER can target flying enemies
+			// CANNON, SNIPER, MORTAR cannot target flying enemies
+			// Only ARCHER, MISSILE, LASER, TESLA can target flying enemies
 			can_target_flying :=
-				tower.type == .ARCHER || tower.type == .MISSILE || tower.type == .LASER
+				tower.type == .ARCHER || tower.type == .MISSILE ||
+				tower.type == .LASER  || tower.type == .TESLA
 			if !(.FLYING in enemy.flags) || can_target_flying {
 				if n < MAX_ELIGIBLE {
 					eligible[n] = enemy
@@ -1396,7 +1553,8 @@ simulation_init_from_editor :: proc(app: ^entities.App_State) -> bool {
 			tile := app.editor.game_map.grid[row][col]
 
 			#partial switch tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE, .TOWER_ENHANCE:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
+			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
 				// Convert tile to tower type
 				tower_type: constants.Tower_Type
 				#partial switch tile {
@@ -1414,6 +1572,10 @@ simulation_init_from_editor :: proc(app: ^entities.App_State) -> bool {
 					tower_type = .ICE
 				case .TOWER_ENHANCE:
 					tower_type = .ENHANCE
+				case .TOWER_TESLA:
+					tower_type = .TESLA
+				case .TOWER_MORTAR:
+					tower_type = .MORTAR
 				case:
 					tower_type = .ARCHER
 				}

@@ -33,6 +33,10 @@ render_ui :: proc(app: ^entities.App_State) {
 		render_game_over_ui(app)
 	case .SETTINGS:
 		render_settings_menu(app)
+	case .RUN_COMPLETE:
+		render_run_complete_ui(app)
+	case .PROGRESSION:
+		render_progression_ui(app)
 	}
 
 	// Shop — capa superior: siempre encima del resto de la UI de juego
@@ -129,7 +133,7 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	menu_button_height := i32(constants.UI_BUTTON_HEIGHT)
 	button_font_size := f32(constants.UI_BUTTON_FONT_SIZE)
 	// Calculate vertical centering for all buttons
-	total_buttons_height := 4 * menu_button_height + 3 * i32(10)
+	total_buttons_height := 5 * menu_button_height + 4 * i32(10)
 	start_y := (i32(screen_height) - total_buttons_height) / 2
 
 	// Play button
@@ -143,10 +147,12 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 		{f32(play_x), f32(play_button_y), f32(play_width), f32(menu_button_height)},
 	) {
 		// Abrir el browser de mapas en play mode para que el usuario elija el mapa
-		for f in app.editor.map_browser_files { delete(f) }
-		delete(app.editor.map_browser_files)
-		app.editor.map_browser_files = entities.map_list_saved()
-		app.editor.map_browser_scroll = 0
+		entities.map_file_entries_destroy(&app.editor.map_browser_entries)
+		app.editor.map_browser_entries = entities.map_list_saved_entries()
+		app.editor.map_browser_scroll   = 0
+		app.editor.map_browser_selected = -1
+		app.editor.map_browser_preview  = entities.map_init()
+		app.editor.map_browser_preview_valid = false
 		app.editor.show_map_browser = true
 		app.editor.map_browser_play_mode = true
 	}
@@ -177,9 +183,22 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 		entities.app_set_state(app, .SETTINGS)
 	}
 
+	// Progression button
+	prog_text := constants.get_text("MENU_BUTTON_PROGRESSION")
+	prog_button_y := settings_button_y + menu_button_height + i32(10)
+	prog_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(prog_text, context.temp_allocator), button_font_size, 0).x)
+	prog_width := prog_text_width
+	prog_x := screen_width / 2 - prog_width / 2
+	if render_button(
+		prog_text,
+		{f32(prog_x), f32(prog_button_y), f32(prog_width), f32(menu_button_height)},
+	) {
+		entities.app_set_state(app, .PROGRESSION)
+	}
+
 	// Exit button
 	exit_text := constants.get_text("MENU_BUTTON_EXIT")
-	exit_button_y := settings_button_y + menu_button_height + i32(10)
+	exit_button_y := prog_button_y + menu_button_height + i32(10)
 	exit_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(exit_text, context.temp_allocator), button_font_size, 0).x)
 	exit_width := exit_text_width
 	exit_x := screen_width / 2 - exit_width / 2
@@ -215,6 +234,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 
 	// Money
 	render_info_panel(
+		app,
 		{hud_px, hud_py, hud_panel_w, hud_panel_h},
 		constants.get_text("UI_MONEY"),
 		format_short(app.sim.money),
@@ -224,6 +244,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	// Health
 	hud_py += hud_panel_h + hud_panel_gap
 	render_info_panel(
+		app,
 		{hud_px, hud_py, hud_panel_w, hud_panel_h},
 		constants.get_text("UI_HEALTH"),
 		fmt.tprintf("%d", app.sim.health),
@@ -236,6 +257,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		display_wave := app.sim.wave_number
 		if display_wave == 0 { display_wave = 1 }
 		render_info_panel(
+			app,
 			{hud_px, hud_py, hud_panel_w, hud_panel_h},
 			constants.get_text("UI_WAVE"),
 			fmt.tprintf("%d", display_wave),
@@ -246,7 +268,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	// Upcoming waves preview — 3 icons horizontal
 	hud_py += hud_panel_h + hud_panel_gap
 	{
-		c := render_info_panel({hud_px, hud_py, hud_panel_w, hud_panel_h}, constants.get_text("UI_UPCOMING"))
+		c := render_info_panel(app, {hud_px, hud_py, hud_panel_w, hud_panel_h}, constants.get_text("UI_UPCOMING"))
 
 		base_wave := app.sim.wave_number
 		icon_r    : f32 = 9
@@ -333,7 +355,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			// Tooltip
 			hit_r    := icon_r + 4
 			hit_rect := raylib.Rectangle{cx - hit_r, cy - hit_r, hit_r * 2, hit_r * 2}
-			render_label_tooltip(tooltip, hit_rect)
+			render_label_tooltip(app, tooltip, hit_rect)
 		}
 	}
 
@@ -546,6 +568,8 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 			{constants.get_text("TOWER_LASER_NAME"), .TOWER_LASER},
 			{constants.get_text("TOWER_ICE_NAME"), .TOWER_ICE},
 			{constants.get_text("TOWER_ENHANCE_NAME"), .TOWER_ENHANCE},
+			{constants.get_text("TOWER_TESLA_NAME"), .TOWER_TESLA},
+			{constants.get_text("TOWER_MORTAR_NAME"), .TOWER_MORTAR},
 			{constants.get_text("EDITOR_TOOL_OBSTACLE"), .OBSTACLE},
 			{constants.get_text("EDITOR_TOOL_TREE"), .ACCESSORY_TREE},
 			{constants.get_text("EDITOR_TOOL_BLOCK"), .ACCESSORY_BLOCK},
@@ -584,7 +608,8 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 			preview_y := f32(y) + 2 // Small top padding
 
 			switch tool.tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER, .TOWER_ICE, .TOWER_ENHANCE:
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
+			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
 				tower_type := tile_to_tower_type(tool.tile)
 				draw_tower_tile(preview_x, preview_y, preview_size, tower_type, 0, false)
 			case .OBSTACLE:
@@ -731,14 +756,20 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 		{f32(current_x), f32(y_pos), f32(w_browse), f32(constants.UI_BUTTON_HEIGHT)},
 	) {
 		if app.editor.show_map_browser {
+			entities.map_destroy(&app.editor.map_browser_preview)
+			app.editor.map_browser_preview_valid = false
+			if app.editor.map_browser_preview_tex_valid {
+				raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
+				app.editor.map_browser_preview_tex_valid = false
+			}
 			app.editor.show_map_browser = false
 		} else {
-			for f in app.editor.map_browser_files {
-				delete(f)
-			}
-			delete(app.editor.map_browser_files)
-			app.editor.map_browser_files = entities.map_list_saved()
-			app.editor.map_browser_scroll = 0
+			entities.map_file_entries_destroy(&app.editor.map_browser_entries)
+			app.editor.map_browser_entries = entities.map_list_saved_entries()
+			app.editor.map_browser_scroll   = 0
+			app.editor.map_browser_selected = -1
+			app.editor.map_browser_preview  = entities.map_init()
+			app.editor.map_browser_preview_valid = false
 			app.editor.show_map_browser = true
 			play_sound(.OPEN, .UI)
 		}
@@ -771,227 +802,315 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 	}
 }
 
-// Render modal de selección de mapas guardados
+// Render modal de selección de mapas (visor split: lista izq. + preview der.)
 render_map_browser :: proc(app: ^entities.App_State) {
 	screen_width  := raylib.GetScreenWidth()
 	screen_height := raylib.GetScreenHeight()
 
-	// Fondo semi-transparente que oscurece el editor debajo
+	// Overlay
 	raylib.DrawRectangle(0, 0, screen_width, screen_height, constants.UI_MAP_BROWSER_OVERLAY_COLOR)
 
-	// Posición y dimensiones del panel (todo i32 para aritmética limpia)
 	panel_w := i32(constants.UI_MAP_BROWSER_WIDTH)
 	panel_h := i32(constants.UI_MAP_BROWSER_HEIGHT)
-	panel_x := screen_width / 2 - panel_w / 2
+	panel_x := screen_width  / 2 - panel_w / 2
 	panel_y := screen_height / 2 - panel_h / 2
 
-	// Dibuja el shell del panel (sombra + fondo + título via render_panel)
 	render_panel(
 		{f32(panel_x), f32(panel_y), f32(panel_w), f32(panel_h)},
 		constants.get_text("EDITOR_MAP_BROWSER_TITLE"),
 	)
 
-	// El contenido de la lista comienza debajo de la cabecera del panel
-	list_top      := panel_y + constants.UI_MAP_BROWSER_HEADER_HEIGHT
+	header_h      := i32(constants.UI_MAP_BROWSER_HEADER_HEIGHT)
+	footer_h      := i32(constants.UI_MAP_BROWSER_FOOTER_HEIGHT)
+	list_w        := i32(constants.UI_MAP_BROWSER_LIST_WIDTH)
+	content_y     := panel_y + header_h
+	content_h     := panel_h - header_h - footer_h
 	item_h        := i32(constants.UI_MAP_BROWSER_ITEM_HEIGHT)
-	list_h        := panel_h - constants.UI_MAP_BROWSER_HEADER_HEIGHT - constants.UI_MAP_BROWSER_FOOTER_HEIGHT
-	visible_items := list_h / item_h
 	item_font     := f32(constants.UI_MAP_BROWSER_ITEM_FONT_SIZE)
+	visible_items := content_h / item_h
+	side_pad      := i32(constants.UI_MAP_BROWSER_ITEM_SIDE_PADDING)
+	vert_gap      := i32(constants.UI_MAP_BROWSER_ITEM_VERT_GAP)
 
-	// Mensaje cuando no hay mapas guardados
-	if len(app.editor.map_browser_files) == 0 {
-		no_maps_cs := strings.clone_to_cstring("No saved maps found", context.temp_allocator)
+	// ── Left: map list ────────────────────────────────────────────────────────
+	list_x     := panel_x
+	divider_x  := panel_x + list_w
+	mouse      := raylib.GetMousePosition()
+
+	// Vertical divider
+	raylib.DrawLine(
+		divider_x, content_y,
+		divider_x, content_y + content_h,
+		constants.UI_MAP_BROWSER_SEPARATOR_COLOR,
+	)
+
+	if len(app.editor.map_browser_entries) == 0 {
+		no_maps_cs := strings.clone_to_cstring("No hay mapas guardados", context.temp_allocator)
 		nw := raylib.MeasureTextEx(constants.game_fonts.regular, no_maps_cs, item_font, 0).x
 		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			no_maps_cs,
-			{
-				f32(panel_x) + f32(panel_w) / 2 - nw / 2,
-				f32(list_top) + f32(list_h) / 2 - item_font / 2,
-			},
-			item_font, 0,
-			constants.UI_MAP_BROWSER_MUTED_COLOR,
+			constants.game_fonts.regular, no_maps_cs,
+			{f32(list_x) + f32(list_w)/2 - nw/2, f32(content_y) + f32(content_h)/2 - item_font/2},
+			item_font, 0, constants.UI_MAP_BROWSER_MUTED_COLOR,
 		)
 	}
 
-	mouse := raylib.GetMousePosition()
-
 	for i in 0 ..< visible_items {
-		idx := i + app.editor.map_browser_scroll
-		if idx >= i32(len(app.editor.map_browser_files)) {
-			break
-		}
+		idx    := i + app.editor.map_browser_scroll
+		if idx >= i32(len(app.editor.map_browser_entries)) { break }
 
-		fname  := app.editor.map_browser_files[idx]
-		item_y := list_top + i * item_h
+		entry  := app.editor.map_browser_entries[idx]
+		item_y := content_y + i * item_h
 
-		// Rect del item con margen vertical entre filas
 		item_rect := raylib.Rectangle{
-			f32(panel_x + constants.UI_MAP_BROWSER_ITEM_SIDE_PADDING),
-			f32(item_y + constants.UI_MAP_BROWSER_ITEM_VERT_GAP / 2),
-			f32(panel_w - constants.UI_MAP_BROWSER_ITEM_SIDE_PADDING * 2),
-			f32(item_h  - constants.UI_MAP_BROWSER_ITEM_VERT_GAP),
+			f32(list_x + side_pad),
+			f32(item_y + vert_gap / 2),
+			f32(list_w - side_pad * 2),
+			f32(item_h - vert_gap),
 		}
 
-		hovered := raylib.CheckCollisionPointRec(mouse, item_rect)
-		if hovered {
+		is_selected := idx == app.editor.map_browser_selected
+		hovered     := raylib.CheckCollisionPointRec(mouse, item_rect)
+
+		if is_selected {
 			raylib.DrawRectangleRounded(
-				item_rect,
-				constants.UI_BUTTON_ROUNDNESS,
-				constants.TOWER_CORNER_SEGMENTS,
+				item_rect, constants.UI_BUTTON_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS,
+				constants.UI_MAP_BROWSER_SELECTED_BG_COLOR,
+			)
+		} else if hovered {
+			raylib.DrawRectangleRounded(
+				item_rect, constants.UI_BUTTON_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS,
 				constants.UI_BUTTON_HOVER_COLOR,
 			)
 		}
 
-		// El mapa actualmente cargado se muestra en verde
-		text_color := constants.UI_TEXT_COLOR
-		if fname == app.editor.current_map_name {
+		text_color: raylib.Color
+		if is_selected || entry.name == app.editor.current_map_name {
 			text_color = constants.UI_MAP_BROWSER_LOADED_COLOR
+		} else {
+			text_color = constants.UI_TEXT_COLOR
 		}
 
-		fname_cs := strings.clone_to_cstring(fname, context.temp_allocator)
-		// Centrar el texto verticalmente dentro del item rect
-		text_y := item_rect.y + (f32(item_h - constants.UI_MAP_BROWSER_ITEM_VERT_GAP) - item_font) / 2
+		fname_cs := strings.clone_to_cstring(entry.name, context.temp_allocator)
+		text_y   := item_rect.y + (f32(item_h - vert_gap) - item_font) / 2
 		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			fname_cs,
+			constants.game_fonts.regular, fname_cs,
 			{item_rect.x + f32(constants.UI_MAP_BROWSER_ITEM_TEXT_INDENT), text_y},
-			item_font, 0,
-			text_color,
+			item_font, 0, text_color,
 		)
 
-		// Click para cargar el mapa seleccionado
+		// Click selecciona y carga la vista previa
 		if hovered && raylib.IsMouseButtonPressed(.LEFT) {
-			editor_push_undo(app)
-			if entities.map_load(&app.editor.game_map, fname) {
-				app.editor.current_biome    = app.editor.game_map.biome
-				app.editor.current_map_name = strings.clone(fname)
-				app.editor.show_map_browser = false
-				if app.editor.map_browser_play_mode {
-					// Modo Play: lanzar simulación directamente
-					app.editor.map_browser_play_mode = false
-					if simulation_init_from_editor(app) {
-						entities.app_set_state(app, .PLAYING)
-					} else {
-						entities.add_toast(app, constants.get_text("EDITOR_ERROR_NO_PATH"), .ERROR, 3.0)
-						play_sound(.ERROR, .UI)
-					}
-				} else {
-					entities.add_toast(app, fmt.tprintf("Loaded: %s", fname), .SUCCESS, 2.0)
-					play_sound(.CONFIRMATION, .UI)
-				}
-			} else {
-				// Roll back the undo push since nothing changed
-				if len(app.editor.undo_stack) > 0 {
-					last := len(app.editor.undo_stack) - 1
-					snap := app.editor.undo_stack[last]
-					ordered_remove(&app.editor.undo_stack, last)
-					entities.map_snapshot_destroy(&snap)
-				}
-				entities.add_toast(app, fmt.tprintf("Failed to load: %s", fname), .ERROR, 3.0)
-				play_sound(.ERROR, .UI)
-			}
+			app.editor.map_browser_selected = idx
+			entities.map_load(&app.editor.map_browser_preview, entry.name)
+			app.editor.map_browser_preview_valid = true
+			render_map_preview_to_texture(app)
 		}
 	}
 
-	// Indicador de scroll cuando hay más mapas que los visibles
-	total := i32(len(app.editor.map_browser_files))
+	// Scroll indicator
+	total := i32(len(app.editor.map_browser_entries))
 	if total > visible_items {
 		last_visible := min(app.editor.map_browser_scroll + visible_items, total)
-		scroll_text  := fmt.tprintf(
-			"%d-%d / %d  (scroll para navegar)",
-			app.editor.map_browser_scroll + 1,
-			last_visible,
-			total,
-		)
-		scroll_font := f32(constants.UI_MAP_BROWSER_SCROLL_FONT_SIZE)
-		scroll_cs   := strings.clone_to_cstring(scroll_text, context.temp_allocator)
-		sw          := raylib.MeasureTextEx(constants.game_fonts.regular, scroll_cs, scroll_font, 0).x
-		// Posición: centrado, justo arriba del botón Close
-		scroll_y := f32(panel_y + panel_h - constants.UI_MAP_BROWSER_FOOTER_HEIGHT) + scroll_font
+		scroll_text  := fmt.tprintf("%d–%d / %d", app.editor.map_browser_scroll + 1, last_visible, total)
+		scroll_font  := f32(constants.UI_MAP_BROWSER_SCROLL_FONT_SIZE)
+		scroll_cs    := strings.clone_to_cstring(scroll_text, context.temp_allocator)
+		sw           := raylib.MeasureTextEx(constants.game_fonts.regular, scroll_cs, scroll_font, 0).x
+		scroll_y     := f32(content_y + content_h) - scroll_font - 6
 		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			scroll_cs,
-			{f32(panel_x) + f32(panel_w) / 2 - sw / 2, scroll_y},
-			scroll_font, 0,
-			constants.UI_MAP_BROWSER_MUTED_COLOR,
+			constants.game_fonts.regular, scroll_cs,
+			{f32(list_x) + f32(list_w)/2 - sw/2, scroll_y},
+			scroll_font, 0, constants.UI_MAP_BROWSER_MUTED_COLOR,
 		)
 	}
 
-	// Botón Close centrado en la parte inferior del panel
-	close_w := i32(constants.UI_BUTTON_WIDTH)
-	close_h := i32(constants.UI_MAP_BROWSER_CLOSE_HEIGHT)
-	close_x := panel_x + panel_w / 2 - close_w / 2
-	close_y := panel_y + panel_h - close_h - constants.UI_MAP_BROWSER_CLOSE_BTN_MARGIN
-	if render_button(
-		"Close",
-		{f32(close_x), f32(close_y), f32(close_w), f32(close_h)},
-	) {
+	// ── Right: preview ────────────────────────────────────────────────────────
+	preview_pad  := i32(constants.UI_MAP_BROWSER_PREVIEW_PAD)
+	preview_x    := divider_x + 1 + preview_pad
+	preview_w    := panel_x + panel_w - preview_x - preview_pad
+	info_h       := i32(constants.UI_MAP_BROWSER_INFO_HEIGHT)
+	mini_area_h  := content_h - info_h - 4
+	info_font    := f32(constants.UI_MAP_BROWSER_INFO_FONT_SIZE)
+
+	if !app.editor.map_browser_preview_valid {
+		hint    := strings.clone_to_cstring("← Selecciona un mapa", context.temp_allocator)
+		hw      := raylib.MeasureTextEx(constants.game_fonts.regular, hint, item_font, 0).x
+		raylib.DrawTextEx(
+			constants.game_fonts.regular, hint,
+			{f32(preview_x) + f32(preview_w)/2 - hw/2, f32(content_y) + f32(content_h)/2 - item_font/2},
+			item_font, 0, constants.UI_MAP_BROWSER_MUTED_COLOR,
+		)
+	} else {
+		pmap := &app.editor.map_browser_preview
+
+		map_w := pmap.width  if pmap.width  > 0 else 1
+		map_h := pmap.height if pmap.height > 0 else 1
+
+		if app.editor.map_browser_preview_tex_valid {
+			tex   := app.editor.map_browser_preview_tex
+			tex_w := f32(tex.texture.width)
+			tex_h := f32(tex.texture.height)
+
+			// Fit texture inside preview area preserving aspect ratio
+			scale  := min(f32(preview_w) / tex_w, f32(mini_area_h) / tex_h)
+			dest_w := tex_w * scale
+			dest_h := tex_h * scale
+			dest_x := f32(preview_x) + (f32(preview_w) - dest_w) / 2
+			dest_y := f32(content_y)  + (f32(mini_area_h) - dest_h) / 2
+
+			// Negative source height corrects OpenGL Y-flip in RenderTexture2D
+			src  := raylib.Rectangle{0, 0, tex_w, -tex_h}
+			dest := raylib.Rectangle{dest_x, dest_y, dest_w, dest_h}
+			raylib.DrawTexturePro(tex.texture, src, dest, {0, 0}, 0, raylib.WHITE)
+
+			// Border
+			raylib.DrawRectangleLines(
+				i32(dest_x), i32(dest_y), i32(dest_w), i32(dest_h),
+				constants.UI_MAP_BROWSER_SEPARATOR_COLOR,
+			)
+		}
+
+		// Info: filename + dimensions + date below the mini-map
+		if app.editor.map_browser_selected >= 0 &&
+		   int(app.editor.map_browser_selected) < len(app.editor.map_browser_entries) {
+			sel := app.editor.map_browser_entries[app.editor.map_browser_selected]
+			info_y := f32(content_y + mini_area_h + 4)
+
+			name_cs := strings.clone_to_cstring(sel.name, context.temp_allocator)
+			raylib.DrawTextEx(
+				constants.game_fonts.regular, name_cs,
+				{f32(preview_x), info_y},
+				info_font, 0, constants.UI_TEXT_COLOR,
+			)
+
+			dims_str := fmt.tprintf("%dx%d  •  %s", map_w, map_h, sel.mod_date)
+			dims_cs  := strings.clone_to_cstring(dims_str, context.temp_allocator)
+			raylib.DrawTextEx(
+				constants.game_fonts.regular, dims_cs,
+				{f32(preview_x), info_y + info_font + 3},
+				info_font, 0, constants.UI_MAP_BROWSER_MUTED_COLOR,
+			)
+		}
+	}
+
+	// ── Footer: Cerrar (left) + Abrir (right, when selection exists) ──────────
+	btn_h  := i32(constants.UI_MAP_BROWSER_CLOSE_HEIGHT)
+	btn_y  := panel_y + panel_h - btn_h - i32(constants.UI_MAP_BROWSER_CLOSE_BTN_MARGIN)
+	btn_w  := i32(constants.UI_BUTTON_WIDTH)
+
+	close_x := panel_x + side_pad * 2
+	if render_button("Cerrar", {f32(close_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
+		entities.map_destroy(&app.editor.map_browser_preview)
+		app.editor.map_browser_preview_valid = false
+		if app.editor.map_browser_preview_tex_valid {
+			raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
+			app.editor.map_browser_preview_tex_valid = false
+		}
 		app.editor.show_map_browser = false
 		app.editor.map_browser_play_mode = false
 		play_sound(.CLOSE, .UI)
+	}
+
+	if app.editor.map_browser_preview_valid {
+		open_x := panel_x + panel_w - btn_w - side_pad * 2
+		if render_button("Abrir", {f32(open_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
+			sel := app.editor.map_browser_selected
+			if sel >= 0 && int(sel) < len(app.editor.map_browser_entries) {
+				fname := app.editor.map_browser_entries[sel].name
+				editor_push_undo(app)
+				if entities.map_load(&app.editor.game_map, fname) {
+					app.editor.current_biome    = app.editor.game_map.biome
+					app.editor.current_map_name = strings.clone(fname)
+					entities.map_destroy(&app.editor.map_browser_preview)
+					app.editor.map_browser_preview_valid = false
+					if app.editor.map_browser_preview_tex_valid {
+						raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
+						app.editor.map_browser_preview_tex_valid = false
+					}
+					app.editor.show_map_browser = false
+					if app.editor.map_browser_play_mode {
+						app.editor.map_browser_play_mode = false
+						if simulation_init_from_editor(app) {
+							entities.app_set_state(app, .PLAYING)
+						} else {
+							entities.add_toast(app, constants.get_text("EDITOR_ERROR_NO_PATH"), .ERROR, 3.0)
+							play_sound(.ERROR, .UI)
+						}
+					} else {
+						entities.add_toast(app, fmt.tprintf("Loaded: %s", fname), .SUCCESS, 2.0)
+						play_sound(.CONFIRMATION, .UI)
+					}
+				} else {
+					// Roll back the undo push since nothing changed
+					if len(app.editor.undo_stack) > 0 {
+						last := len(app.editor.undo_stack) - 1
+						snap := app.editor.undo_stack[last]
+						ordered_remove(&app.editor.undo_stack, last)
+						entities.map_snapshot_destroy(&snap)
+					}
+					entities.add_toast(app, fmt.tprintf("Failed to load: %s", fname), .ERROR, 3.0)
+					play_sound(.ERROR, .UI)
+				}
+			}
+		}
 	}
 }
 
 // Render pause menu overlay
 render_pause_menu :: proc(app: ^entities.App_State) {
-	screen_width := raylib.GetScreenWidth()
+	screen_width  := raylib.GetScreenWidth()
 	screen_height := raylib.GetScreenHeight()
 
-	// Black background
 	render_background()
 
-	// Pause title
-	title := constants.get_text("PAUSE_TITLE")
+	// Title
+	title      := constants.get_text("PAUSE_TITLE")
 	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 	title_size := f32(40)
-	title_width := raylib.MeasureTextEx(constants.game_fonts.bold, title_cstr, title_size, 0).x
-	title_x := f32(screen_width) / 2 - title_width / 2
-	title_y := f32(screen_height) / 3
+	title_w    := raylib.MeasureTextEx(constants.game_fonts.bold, title_cstr, title_size, 0).x
 	raylib.DrawTextEx(
 		constants.game_fonts.bold,
 		title_cstr,
-		{title_x, title_y},
-		title_size,
-		0,
-		raylib.WHITE,
+		{f32(screen_width) / 2 - title_w / 2, f32(screen_height) / 4},
+		title_size, 0, raylib.WHITE,
 	)
 
-	// Button dimensions
-	button_width := i32(constants.UI_BUTTON_WIDTH)
-	button_height := i32(constants.UI_BUTTON_HEIGHT)
-	button_x := screen_width / 2 - button_width / 2
-	button_spacing := i32(10)
+	// Buttons — same pattern as main menu: centered in full screen, width = text width
+	btn_h      := i32(constants.UI_BUTTON_HEIGHT)
+	btn_gap    := i32(10)
+	btn_fs     := f32(constants.UI_BUTTON_FONT_SIZE)
 
-	// Centrar el grupo de botones en el espacio debajo del título
-	total_buttons_height := 3 * button_height + 2 * button_spacing
-	area_top  := i32(title_y + title_size + 20)
-	start_y   := area_top + (screen_height - area_top - total_buttons_height) / 2
+	total_h := 3 * btn_h + 2 * btn_gap
+	start_y := (screen_height - total_h) / 2
 
-	// Resume button
-	resume_y := start_y
+	// Resume
+	resume_txt := constants.get_text("PAUSE_RESUME")
+	resume_w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(resume_txt, context.temp_allocator), btn_fs, 0).x)
+	resume_y   := start_y
 	if render_button(
-		constants.get_text("PAUSE_RESUME"),
-		{f32(button_x), f32(resume_y), f32(button_width), f32(button_height)},
+		resume_txt,
+		{f32(screen_width / 2 - resume_w / 2), f32(resume_y), f32(resume_w), f32(btn_h)},
 	) {
 		simulation_set_pause(app, false)
 		entities.app_set_state(app, .PLAYING)
 	}
 
-	// Settings button
-	settings_y := resume_y + button_height + button_spacing
+	// Settings
+	settings_txt := constants.get_text("MENU_BUTTON_SETTINGS")
+	settings_w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(settings_txt, context.temp_allocator), btn_fs, 0).x)
+	settings_y   := resume_y + btn_h + btn_gap
 	if render_button(
-		constants.get_text("MENU_BUTTON_SETTINGS"),
-		{f32(button_x), f32(settings_y), f32(button_width), f32(button_height)},
+		settings_txt,
+		{f32(screen_width / 2 - settings_w / 2), f32(settings_y), f32(settings_w), f32(btn_h)},
 	) {
 		entities.app_set_state(app, .SETTINGS)
 	}
 
-	// Main Menu button
-	menu_y := settings_y + button_height + button_spacing
+	// Main Menu
+	menu_txt := constants.get_text("PAUSE_MENU")
+	menu_w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(menu_txt, context.temp_allocator), btn_fs, 0).x)
+	menu_y   := settings_y + btn_h + btn_gap
 	if render_button(
-		constants.get_text("PAUSE_MENU"),
-		{f32(button_x), f32(menu_y), f32(button_width), f32(button_height)},
+		menu_txt,
+		{f32(screen_width / 2 - menu_w / 2), f32(menu_y), f32(menu_w), f32(btn_h)},
 	) {
 		simulation_set_pause(app, false)
 		entities.app_set_state(app, .MENU)
@@ -1647,6 +1766,10 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 		type_name = constants.get_text("TOWER_ICE_NAME")
 	case .ENHANCE:
 		type_name = constants.get_text("TOWER_ENHANCE_NAME")
+	case .TESLA:
+		type_name = constants.get_text("TOWER_TESLA_NAME")
+	case .MORTAR:
+		type_name = constants.get_text("TOWER_MORTAR_NAME")
 	}
 
 	// Level subtitle — separate from type_name so the title doesn't overflow at size 22
@@ -1968,7 +2091,7 @@ render_relic_tray :: proc(app: ^entities.App_State) {
 		}
 
 		// Tooltip al hacer hover — mismo contenido que la carta en mano/tienda
-		draw_card_tooltip(entities.Card{kind = kind}, raylib.Rectangle{sx, sy, ICON_SIZE, ICON_SIZE})
+		render_card_tooltip(app, entities.Card{kind = kind}, raylib.Rectangle{sx, sy, ICON_SIZE, ICON_SIZE})
 
 		slot_idx += 1
 	}
@@ -2043,7 +2166,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 
 		if !bought {
 			lifted_rect := raylib.Rectangle{cx, draw_cy, CARD_W, CARD_H}
-			draw_card_tooltip(card, lifted_rect)
+			render_card_tooltip(app, card, lifted_rect)
 		}
 
 		// Etiqueta de precio / comprado debajo de la carta
@@ -2116,7 +2239,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 	) {
 		if can_reroll {
 			sim.money -= constants.CARD_REROLL_COST
-			generate_card_selection(sim)
+			generate_card_selection(app)
 			play_sound(.CLICK, .UI)
 		}
 	}
@@ -2183,7 +2306,7 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		render_card(app, card, cx, cy, app.sim.selected_card_idx == i, true)
 		card_rect := raylib.Rectangle{cx, cy, CARD_W, CARD_H}
 		append(&ui_click_blocks, card_rect)
-		draw_card_tooltip(card, card_rect)
+		render_card_tooltip(app, card, card_rect)
 
 		// Clic para seleccionar / activar relicto
 		if raylib.IsMouseButtonPressed(.LEFT) {
@@ -2214,5 +2337,391 @@ render_card_hand :: proc(app: ^entities.App_State) {
 			}
 			play_sound(.CONFIRMATION, .UI)
 		}
+	}
+}
+
+// ─── RUN COMPLETE SCREEN ────────────────────────────────────────────────────
+
+render_run_complete_ui :: proc(app: ^entities.App_State) {
+	screen_width  := raylib.GetScreenWidth()
+	screen_height := raylib.GetScreenHeight()
+
+	render_background()
+
+	font_size  := f32(constants.UI_BUTTON_FONT_SIZE)
+	small_size := f32(13)
+	btn_height := i32(constants.UI_BUTTON_HEIGHT)
+	spacing    := i32(constants.UI_PANEL_MARGIN)
+
+	CRISTAL_COLOR :: raylib.Color{100, 200, 255, 255}
+	DIM_COLOR     :: raylib.Color{140, 140, 140, 255}
+
+	// Title
+	title_key   := "RUN_VICTORY_TITLE" if app.sim.is_victory else "RUN_DEFEAT_TITLE"
+	title_color := raylib.Color{80, 220, 80, 255} if app.sim.is_victory else raylib.Color{220, 80, 80, 255}
+	title       := constants.get_text(title_key)
+	title_cstr  := strings.clone_to_cstring(title, context.temp_allocator)
+	title_size  := f32(36)
+	title_w     := raylib.MeasureTextEx(constants.game_fonts.bold, title_cstr, title_size, 0).x
+	raylib.DrawTextEx(
+		constants.game_fonts.bold,
+		title_cstr,
+		{f32(screen_width) / 2 - title_w / 2, f32(screen_height) * 0.05},
+		title_size, 0, title_color,
+	)
+
+	// Pre-compute cristal components from sim state (still valid before simulation_reset)
+	lives_at_end := app.sim.health if app.sim.is_victory else 0
+	c_waves := entities.meta_cristales_from_waves(app.sim.wave_number)
+	c_kills := entities.meta_cristales_from_kills(app.sim.enemies_killed)
+	c_lives := entities.meta_cristales_from_lives(lives_at_end)
+
+	// ── Stats panel ──────────────────────────────────────────────────────────
+	// Layout: two columns.
+	//   Left  (60%): stat label
+	//   Right (40%): value  |  +XC badge (right-aligned)
+	// All text at small_size to avoid crowding. Separator + total row included in panel_h.
+
+	panel_w := i32(f32(screen_width) * 0.55)
+	if panel_w > 460 { panel_w = 460 }
+	if panel_w < 320 { panel_w = 320 }
+	panel_x := f32(screen_width) / 2 - f32(panel_w) / 2
+	panel_y := f32(screen_height) * 0.18
+
+	Contrib_Row :: struct {
+		label: string,
+		value: string,
+		c:     i32   // -1 = no badge
+	}
+	total_secs := i32(app.sim.play_time)
+	rows := []Contrib_Row{
+		{constants.get_text("GAME_OVER_WAVES_SURVIVED"), fmt.tprintf("%d / %d", app.sim.wave_number, constants.RUN_MAX_WAVES), c_waves},
+		{constants.get_text("GAME_OVER_TIME"),           fmt.tprintf("%d:%02d", total_secs / 60, total_secs % 60),             -1},
+		{constants.get_text("GAME_OVER_ENEMIES_KILLED"), fmt.tprintf("%d", app.sim.enemies_killed),                            c_kills},
+		{constants.get_text("RUN_LIVES_REMAINING"),      fmt.tprintf("%d", lives_at_end),                                     c_lives},
+	}
+
+	row_h := i32(small_size) + 8
+	// Panel height: data rows + separator line + total row, all with spacing between
+	num_rows  := i32(len(rows))
+	inner_h   := num_rows * (row_h + spacing) + spacing + row_h  // rows + sep gap + total row
+	panel_h   := f32(inner_h + constants.UI_PANEL_PADDING * 2)
+	content   := render_panel(raylib.Rectangle{panel_x, panel_y, f32(panel_w), panel_h})
+
+	cx     := i32(content.x)
+	cw     := i32(content.width)
+	sy     := i32(content.y)
+	col_w  := i32(f32(cw) * 0.55)  // label column width
+
+	for row in rows {
+		label_cstr := strings.clone_to_cstring(row.label, context.temp_allocator)
+		value_cstr := strings.clone_to_cstring(row.value, context.temp_allocator)
+
+		// Label — clipped to left column
+		raylib.DrawTextEx(constants.game_fonts.regular, label_cstr,
+			{f32(cx), f32(sy)}, small_size, 0, constants.UI_PANEL_TEXT_COLOR)
+
+		// Right column: value flush-right, badge flush-far-right
+		right_x := cx + col_w  // start of right column
+
+		if row.c >= 0 {
+			badge     := fmt.tprintf("+%dC", row.c)
+			badge_c   := strings.clone_to_cstring(badge, context.temp_allocator)
+			badge_w   := raylib.MeasureTextEx(constants.game_fonts.semibold, badge_c, small_size, 0).x
+			badge_col := CRISTAL_COLOR if row.c > 0 else DIM_COLOR
+			raylib.DrawTextEx(constants.game_fonts.semibold, badge_c,
+				{f32(cx + cw) - badge_w, f32(sy)}, small_size, 0, badge_col)
+
+			val_w := raylib.MeasureTextEx(constants.game_fonts.semibold, value_cstr, small_size, 0).x
+			raylib.DrawTextEx(constants.game_fonts.semibold, value_cstr,
+				{f32(cx + cw) - badge_w - val_w - 10, f32(sy)}, small_size, 0, constants.UI_PANEL_TEXT_COLOR)
+		} else {
+			val_w := raylib.MeasureTextEx(constants.game_fonts.semibold, value_cstr, small_size, 0).x
+			_ = right_x
+			raylib.DrawTextEx(constants.game_fonts.semibold, value_cstr,
+				{f32(cx + cw) - val_w, f32(sy)}, small_size, 0, constants.UI_PANEL_TEXT_COLOR)
+		}
+
+		sy += row_h + spacing
+	}
+
+	// Separator
+	raylib.DrawLine(cx, sy, cx + cw, sy, raylib.Color{180, 180, 180, 100})
+	sy += spacing
+
+	// Total row
+	total_lbl   := constants.get_text("RUN_TOTAL_CRISTALES")
+	total_lbl_c := strings.clone_to_cstring(total_lbl, context.temp_allocator)
+	total_val   := fmt.tprintf("+%d C", app.run_cristales)
+	total_val_c := strings.clone_to_cstring(total_val, context.temp_allocator)
+	total_val_w := raylib.MeasureTextEx(constants.game_fonts.bold, total_val_c, font_size, 0).x
+	raylib.DrawTextEx(constants.game_fonts.semibold, total_lbl_c,
+		{f32(cx), f32(sy)}, font_size, 0, constants.UI_PANEL_TEXT_COLOR)
+	raylib.DrawTextEx(constants.game_fonts.bold, total_val_c,
+		{f32(cx + cw) - total_val_w, f32(sy)}, font_size, 0, CRISTAL_COLOR)
+
+	// Acumulado (debajo del panel)
+	acum_y   := panel_y + panel_h + f32(spacing) * 2
+	acum_txt := fmt.tprintf("%s: %d C", constants.get_text("RUN_ACUM_CRISTALES"), app.meta.cristales)
+	acum_c   := strings.clone_to_cstring(acum_txt, context.temp_allocator)
+	acum_w   := raylib.MeasureTextEx(constants.game_fonts.regular, acum_c, font_size, 0).x
+	raylib.DrawTextEx(constants.game_fonts.regular, acum_c,
+		{f32(screen_width) / 2 - acum_w / 2, acum_y}, font_size, 0, raylib.Color{180, 220, 255, 255})
+
+	// Buttons
+	btn_w        := i32(constants.UI_BUTTON_WIDTH) * 2
+	gap          := i32(10)
+	total_w_btns := btn_w * 2 + gap
+	btn_left_x   := screen_width / 2 - total_w_btns / 2
+	btns_y       := i32(acum_y) + i32(font_size) + spacing * 2
+
+	if render_button(
+		constants.get_text("RUN_BUTTON_PROGRESSION"),
+		{f32(btn_left_x), f32(btns_y), f32(btn_w), f32(btn_height)},
+	) {
+		simulation_reset(app)
+		entities.app_set_state(app, .PROGRESSION)
+	}
+	if render_button(
+		constants.get_text("GAME_OVER_BUTTON_MENU"),
+		{f32(btn_left_x + btn_w + gap), f32(btns_y), f32(btn_w), f32(btn_height)},
+	) {
+		simulation_reset(app)
+		entities.app_set_state(app, .MENU)
+	}
+}
+
+// ─── PROGRESSION SCREEN ─────────────────────────────────────────────────────
+
+render_progression_ui :: proc(app: ^entities.App_State) {
+	screen_width  := raylib.GetScreenWidth()
+	screen_height := raylib.GetScreenHeight()
+
+	render_background()
+
+	font_size  := f32(constants.UI_BUTTON_FONT_SIZE)
+	small_size := f32(12)
+	btn_height := i32(constants.UI_BUTTON_HEIGHT)
+	spacing    := i32(constants.UI_PANEL_MARGIN)
+
+	// Title
+	title := constants.get_text("PROGRESSION_TITLE")
+	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
+	title_size := f32(30)
+	title_w := raylib.MeasureTextEx(constants.game_fonts.bold, title_cstr, title_size, 0).x
+	raylib.DrawTextEx(
+		constants.game_fonts.bold,
+		title_cstr,
+		{f32(screen_width) / 2 - title_w / 2, f32(spacing) * 2},
+		title_size,
+		0,
+		raylib.WHITE,
+	)
+
+	// Cristales display
+	cristal_txt := fmt.tprintf("%s: %d", constants.get_text("RUN_TOTAL_CRISTALES"), app.meta.cristales)
+	cristal_cstr := strings.clone_to_cstring(cristal_txt, context.temp_allocator)
+	cristal_w := raylib.MeasureTextEx(constants.game_fonts.semibold, cristal_cstr, font_size, 0).x
+	raylib.DrawTextEx(
+		constants.game_fonts.semibold,
+		cristal_cstr,
+		{f32(screen_width) / 2 - cristal_w / 2, f32(spacing) * 2 + title_size + 4},
+		font_size,
+		0,
+		raylib.Color{100, 200, 255, 255},
+	)
+
+	// Tower unlock row
+	lockable_towers := [4]constants.Tower_Type{.MISSILE, .LASER, .TESLA, .MORTAR}
+	tower_card_w  := f32(120)
+	tower_card_h  := f32(160)
+	tower_card_gap := f32(12)
+	tower_total_w := f32(len(lockable_towers)) * tower_card_w + f32(len(lockable_towers) - 1) * tower_card_gap
+	tower_cards_x := f32(screen_width) / 2 - tower_total_w / 2
+	tower_cards_y := f32(spacing) * 2 + title_size + font_size + f32(spacing) * 2
+	tower_btn_h   := f32(26)
+
+	for i in 0 ..< len(lockable_towers) {
+		t        := lockable_towers[i]
+		cx       := tower_cards_x + f32(i) * (tower_card_w + tower_card_gap)
+		cy       := tower_cards_y
+		unlocked := entities.meta_is_tower_unlocked(&app.meta, t)
+		cost     := entities.meta_tower_unlock_cost(t)
+		can_buy  := !unlocked && app.meta.cristales >= cost
+
+		bg_color     := raylib.Color{40, 55, 40, 220} if unlocked else raylib.Color{40, 40, 55, 220}
+		border_color := raylib.Color{80, 200, 80, 200} if unlocked else raylib.Color{80, 80, 130, 200}
+		raylib.DrawRectangleRounded({cx, cy, tower_card_w, tower_card_h}, constants.UI_BUTTON_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, bg_color)
+		raylib.DrawRectangleRoundedLines({cx, cy, tower_card_w, tower_card_h}, constants.UI_BUTTON_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, 1.0, border_color)
+
+		preview_sz := tower_card_w * 0.40
+		draw_tower_tile(cx + (tower_card_w - preview_sz) / 2, cy + 10, preview_sz, t, 0, false)
+
+		name    := constants.get_tower_name(t)
+		name_cs := strings.clone_to_cstring(name, context.temp_allocator)
+		name_w  := raylib.MeasureTextEx(constants.game_fonts.semibold, name_cs, small_size, 0).x
+		raylib.DrawTextEx(constants.game_fonts.semibold, name_cs,
+			{cx + (tower_card_w - name_w) / 2, cy + preview_sz + 14}, small_size, 0, raylib.WHITE)
+
+		cost_y := cy + preview_sz + 14 + small_size + 4
+		if unlocked {
+			badge_cs := strings.clone_to_cstring(constants.get_text("PROGRESSION_UNLOCKED"), context.temp_allocator)
+			badge_w  := raylib.MeasureTextEx(constants.game_fonts.regular, badge_cs, small_size, 0).x
+			raylib.DrawTextEx(constants.game_fonts.regular, badge_cs,
+				{cx + (tower_card_w - badge_w) / 2, cost_y}, small_size, 0, raylib.Color{80, 200, 80, 255})
+		} else {
+			cost_str := fmt.tprintf("%d C", cost)
+			cost_cs  := strings.clone_to_cstring(cost_str, context.temp_allocator)
+			cost_col := raylib.Color{255, 215, 0, 255} if can_buy else raylib.Color{180, 120, 60, 255}
+			cst_w    := raylib.MeasureTextEx(constants.game_fonts.semibold, cost_cs, small_size, 0).x
+			raylib.DrawTextEx(constants.game_fonts.semibold, cost_cs,
+				{cx + (tower_card_w - cst_w) / 2, cost_y}, small_size, 0, cost_col)
+
+			btn_y := cy + tower_card_h - tower_btn_h - 8
+			btn_label := constants.get_text("PROGRESSION_UNLOCK")
+			if render_button(btn_label, {cx + 6, btn_y, tower_card_w - 12, tower_btn_h}) && can_buy {
+				app.meta.cristales -= cost
+				app.meta.unlocked_towers[int(t)] = true
+				entities.meta_save(&app.meta)
+				play_sound(.CONFIRMATION, .UI)
+			}
+		}
+	}
+
+	// Tier grid — 3 tiers, relics per tier
+	tier_relics := [3][dynamic]entities.Card_Kind{
+		{},  // Tier 1
+		{},  // Tier 2
+		{},  // Tier 3
+	}
+	for spec in entities.RELIC_SPECS {
+		tier := entities.meta_relic_tier(spec.kind)
+		if tier >= 1 && tier <= 3 {
+			append(&tier_relics[int(tier) - 1], spec.kind)
+		}
+	}
+	defer {
+		delete(tier_relics[0])
+		delete(tier_relics[1])
+		delete(tier_relics[2])
+	}
+
+	tier_names := [3]string{
+		constants.get_text("PROGRESSION_TIER1"),
+		constants.get_text("PROGRESSION_TIER2"),
+		constants.get_text("PROGRESSION_TIER3"),
+	}
+	tier_costs := [3]i32{5, 10, 20}
+	tier_colors := [3]raylib.Color{
+		{160, 160, 160, 255},  // grey (common)
+		{ 50, 200, 100, 255},  // green (uncommon)
+		{255, 160,  20, 255},  // gold (rare)
+	}
+
+	panel_w    := i32(f32(screen_width) * 0.85)
+	if panel_w > 700 { panel_w = 700 }
+	panel_x    := f32(screen_width) / 2 - f32(panel_w) / 2
+	content_y  := tower_cards_y + tower_card_h + f32(spacing) * 2
+
+	icon_size  := f32(36)
+	cell_w     := f32(panel_w) / 3
+	cell_pad   := f32(spacing)
+
+	for ti in 0 ..< 3 {
+		relics := tier_relics[ti][:]
+		col_x  := panel_x + f32(ti) * cell_w
+
+		// Tier header
+		tier_label := tier_names[ti]
+		tier_cstr  := strings.clone_to_cstring(tier_label, context.temp_allocator)
+		tier_lw    := raylib.MeasureTextEx(constants.game_fonts.semibold, tier_cstr, font_size, 0).x
+		tier_lx    := col_x + cell_w / 2 - tier_lw / 2
+		raylib.DrawTextEx(constants.game_fonts.semibold, tier_cstr, {tier_lx, content_y}, font_size, 0, tier_colors[ti])
+
+		cost_txt  := fmt.tprintf("%d %s", tier_costs[ti], constants.get_text("RUN_CRISTALES"))
+		cost_cstr := strings.clone_to_cstring(cost_txt, context.temp_allocator)
+		cost_lw   := raylib.MeasureTextEx(constants.game_fonts.regular, cost_cstr, small_size, 0).x
+		cost_lx   := col_x + cell_w / 2 - cost_lw / 2
+		raylib.DrawTextEx(constants.game_fonts.regular, cost_cstr, {cost_lx, content_y + font_size + 2}, small_size, 0, raylib.Color{180, 180, 180, 255})
+
+		row_y := content_y + font_size + small_size + f32(spacing) + 4
+
+		for kind in relics {
+			unlocked  := app.meta.unlocked_relics[kind]
+			name      := entities.card_name(entities.Card{kind = kind})
+			cost      := tier_costs[ti]
+			icon_x    := col_x + cell_pad
+			icon_tex  := entities.relic_icon(kind)
+
+			// Icon
+			if icon_tex.id > 0 {
+				tint := raylib.WHITE if unlocked else raylib.Color{80, 80, 80, 200}
+				raylib.DrawTextureEx(icon_tex, {icon_x, row_y}, 0, icon_size / f32(icon_tex.width), tint)
+			} else {
+				bg := tier_colors[ti] if unlocked else raylib.Color{60, 60, 60, 255}
+				raylib.DrawRectangleRounded({icon_x, row_y, icon_size, icon_size}, 0.3, 8, bg)
+			}
+
+			// Name
+			name_cstr := strings.clone_to_cstring(name, context.temp_allocator)
+			raylib.DrawTextEx(
+				constants.game_fonts.regular,
+				name_cstr,
+				{icon_x + icon_size + 4, row_y + icon_size / 2 - small_size / 2},
+				small_size,
+				0,
+				raylib.WHITE if unlocked else raylib.Color{120, 120, 120, 255},
+			)
+
+			if !unlocked {
+				can_afford := app.meta.cristales >= cost
+				btn_label  := fmt.tprintf("%d C", cost)
+				btn_w      := raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(btn_label, context.temp_allocator), small_size, 0).x + 12
+				btn_rect  := raylib.Rectangle{
+					col_x + cell_w - btn_w - cell_pad,
+					row_y + icon_size / 2 - f32(btn_height) / 2,
+					btn_w,
+					f32(btn_height),
+				}
+				if render_button(
+					btn_label,
+					btn_rect,
+					1, can_afford,
+					raylib.WHITE if can_afford else raylib.Color{100, 100, 100, 255},
+					constants.UI_BUTTON_ACTION_COLOR if can_afford else raylib.Color{50, 50, 50, 255},
+					constants.UI_BUTTON_ACTION_HOVER if can_afford else raylib.Color{50, 50, 50, 255},
+					constants.UI_BUTTON_ACTION_PRESS if can_afford else raylib.Color{50, 50, 50, 255},
+				) {
+					if can_afford {
+						app.meta.cristales -= cost
+						app.meta.unlocked_relics[kind] = true
+						entities.meta_save(&app.meta)
+						play_sound(.CONFIRMATION, .UI)
+					}
+				}
+			} else {
+				badge_txt  := constants.get_text("PROGRESSION_UNLOCKED")
+				badge_cstr := strings.clone_to_cstring(badge_txt, context.temp_allocator)
+				badge_w    := raylib.MeasureTextEx(constants.game_fonts.regular, badge_cstr, small_size, 0).x
+				badge_x    := col_x + cell_w - badge_w - cell_pad
+				badge_y    := row_y + icon_size / 2 - small_size / 2
+				raylib.DrawTextEx(constants.game_fonts.regular, badge_cstr, {badge_x, badge_y}, small_size, 0, raylib.Color{80, 220, 80, 255})
+			}
+
+			row_y += icon_size + f32(spacing)
+		}
+	}
+
+	// Back button
+	back_y   := f32(screen_height) - f32(btn_height) - f32(spacing) * 2
+	back_txt := constants.get_text("PROGRESSION_BACK")
+	back_cstr := strings.clone_to_cstring(back_txt, context.temp_allocator)
+	back_w   := raylib.MeasureTextEx(constants.game_fonts.semibold, back_cstr, font_size, 0).x + 20
+	back_x   := f32(screen_width) / 2 - back_w / 2
+	if render_button(
+		back_txt,
+		{back_x, back_y, back_w, f32(btn_height)},
+	) {
+		entities.app_set_state(app, .MENU)
 	}
 }
