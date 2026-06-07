@@ -5,6 +5,7 @@ import "../entities"
 import "core:fmt"
 import "core:math"
 import "core:math/rand"
+import "vendor:raylib"
 
 // Forward declaration - App_State will be passed directly
 simulation_update :: proc(app: ^entities.App_State, dt: f32) {
@@ -73,6 +74,11 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 			sim.auto_upgrade_timer = constants.AUTO_UPGRADE_INTERVAL
 			update_auto_upgrade(app)
 		}
+	}
+
+	// Airdrop: only while simulation has started and shop is not open
+	if sim.started && !sim.card_selection_active {
+		airdrop_update(app, dt)  // uses real dt (not s_dt) — visual effect
 	}
 }
 
@@ -197,29 +203,9 @@ start_next_wave :: proc(app: ^entities.App_State) {
 	sim.lookahead_bonus[2] = (next_preview_wave % constants.BOSS_WAVE_INTERVAL != 0) && next_preview_wave >= constants.BONUS_WAVE_MIN_WAVE && rand.float32() < constants.BONUS_WAVE_CHANCE
 	if is_bonus { sim.wave_flags |= {.BONUS} }
 
-	// SCOUT: anuncia el tipo de la PRÓXIMA oleada (wave_number+1).
-	// Después del shift, lookahead_bonus[0] corresponde exactamente a wave_number+1.
+	// SCOUT: el panel de próximas oleadas se muestra en el HUD (menus.odin).
 	if sim.relic_stacks[.SCOUT] > 0 {
-		next_wn := sim.wave_number + 1
-		if next_wn <= constants.MAX_WAVE {
-			next_is_boss  := next_wn % constants.BOSS_WAVE_INTERVAL == 0
-			next_is_bonus := !next_is_boss && next_wn >= constants.BONUS_WAVE_MIN_WAVE && sim.lookahead_bonus[0]
-			wave_type: string
-			if next_is_boss {
-				wave_type = "Jefe"
-			} else if next_is_bonus {
-				wave_type = "Bonus"
-			} else {
-				switch next_wn % 4 {
-				case 1: wave_type = "Verde"
-				case 2: wave_type = "Voladores"
-				case 3: wave_type = "Azul"
-				case 0: wave_type = "Divisores"
-				}
-			}
-			entities.add_toast(app, fmt.tprintf("Scout: próx. oleada → %s", wave_type), .INFO)
-			relic_flash(sim, .SCOUT)
-		}
+		relic_flash(sim, .SCOUT)
 	}
 
 	// Sub-types: on bonus waves all flags are active; on normal waves rotate by wave number.
@@ -287,20 +273,74 @@ start_next_wave :: proc(app: ^entities.App_State) {
 
 	// Shop al final de cada oleada (excepto la primera — el jugador ya tiene mano inicial)
 	if sim.wave_number > 1 && sim.wave_number % constants.DECK_SELECTION_INTERVAL == 0 {
+		// Reset por-visita: locks, reroll counter y purchases.
+		// El pity counter (shops_since_unique) y el skip streak persisten entre shops.
+		sim.card_selection_locked     = {}
+		sim.rerolls_this_shop         = 0
+		sim.shop_purchases_this_visit = 0
 		generate_card_selection(app)
 		sim.card_selection_active = true
 		simulation_set_pause(app, true)
+
+		// "Skip Shop" automático: cierra la tienda de inmediato, igual que si el
+		// jugador presionara el botón Skip manualmente.
+		if app.settings.auto_skip_shop {
+			shop_perform_skip(app)
+		}
 	}
 }
 
-// Rellena sim.card_selection_choices con 3 cartas:
-//   slot 0 — torre o obstáculo (al azar, sin pesos de rareza)
-//   slot 1 — relicto (con pesos de rareza, solo relictos desbloqueados)
-//   slot 2 — torre/obstáculo o relicto al 50%
+// Cierra la tienda aplicando el bonus de oro por skip (si no se compró nada),
+// reseteando selección/locks y reanudando la simulación. Comparte lógica entre
+// el botón Skip manual (menus.odin) y el auto-skip ("Skip Shop" toggle).
+shop_perform_skip :: proc(app: ^entities.App_State) {
+	sim := &app.sim
+	if sim.shop_purchases_this_visit == 0 {
+		sim.skip_streak_count += 1
+		bonus := sim.skip_streak_count * constants.SHOP_SKIP_BONUS_PER_SKIP
+		if bonus > constants.SHOP_SKIP_BONUS_CAP { bonus = constants.SHOP_SKIP_BONUS_CAP }
+		entities.app_add_money(app, bonus)
+		entities.add_toast(app, fmt.tprintf("+$%d skip racha x%d", bonus, sim.skip_streak_count), .INFO)
+	}
+	sim.card_selection_active = false
+	sim.card_selection_bought = {}
+	sim.card_selection_locked = {}
+	simulation_set_pause(app, false)
+}
+
+// Rellena sim.card_selection_choices.
+// Layout por slot:
+//   slot 0           — torre o obstáculo (al azar, sin pesos de rareza)
+//   slot 1           — relicto (con pesos de rareza, solo relictos desbloqueados)
+//   slot 2 en adelante — torre/relicto al 50%
+//
+// Respeta sim.card_selection_locked: los slots con lock NO se regeneran y
+// sus card_selection_bought se preservan.
+//
+// El número de slots activos viene del bioma (SHOP_BASE_SLOTS + extra_slots).
+// Pity UNIQUE: si pasaron SHOP_PITY_UNIQUE_THRESHOLD shops sin ver UNIQUE,
+// fuerza una en el primer slot relic no-locked.
+//
 // Puede llamarse desde start_next_wave o desde el botón de reroll.
 generate_card_selection :: proc(app: ^entities.App_State) {
 	sim := &app.sim
-	sim.card_selection_bought = {}  // reinicia compras al generar nuevas cartas
+
+	// Determinar slot_count desde el bioma activo (mapa cargado)
+	biome     := app.editor.game_map.biome
+	biome_mod := constants.BIOME_SHOP_MODS[biome]
+	slot_count := constants.SHOP_BASE_SLOTS + biome_mod.extra_slots
+	if slot_count > constants.MAX_SHOP_SLOTS { slot_count = constants.MAX_SHOP_SLOTS }
+	if slot_count < 1 { slot_count = 1 }
+	sim.shop_slot_count = slot_count
+
+	// Reset compras solo de slots no bloqueados — los bloqueados preservan su estado
+	new_bought := [constants.MAX_SHOP_SLOTS]bool{}
+	for i in 0 ..< constants.MAX_SHOP_SLOTS {
+		if sim.card_selection_locked[i] {
+			new_bought[i] = sim.card_selection_bought[i]
+		}
+	}
+	sim.card_selection_bought = new_bought
 
 	// Build tower pool from unlocked towers only + 2 obstacle slots.
 	all_tower_cards := [9]entities.Card{
@@ -346,11 +386,11 @@ generate_card_selection :: proc(app: ^entities.App_State) {
 		{kind = .CRYPTOBRO},
 	}
 
-	// Build the relic pool from only unlocked relics.
+	// Build the relic pool from only unlocked and non-maxed relics.
 	relic_pool : [16]entities.Card
 	relic_count := 0
 	for c in all_relics {
-		if app.meta.unlocked_relics[c.kind] {
+		if app.meta.unlocked_relics[c.kind] && !entities.relic_is_maxed(&app.sim, c.kind) {
 			relic_pool[relic_count] = c
 			relic_count += 1
 		}
@@ -360,27 +400,72 @@ generate_card_selection :: proc(app: ^entities.App_State) {
 	relic_used := [16]bool{}
 	cands      : [16]int
 
-	// helper: elige una torre al azar y la asigna al slot indicado
-	pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 0, tower_count)
+	// Pity counter — sube siempre; si rolamos un UNIQUE abajo, se resetea
+	sim.shops_since_unique += 1
 
-	// Si no hay relictos desbloqueados, todos los slots son torres/obstáculos
-	if relic_count == 0 {
-		pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 1, tower_count)
-		pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 2, tower_count)
-	} else {
-		// helper: elige un relicto ponderado y lo asigna al slot indicado
-		pick_relic_slot(sim, &relic_pool, relic_count, &relic_used, &cands, 1)
-		// slot 2: torre o relicto al 50%
-		if rand.float32() < 0.5 {
-			if pick_tower_slot(sim, &tower_pool, &tower_used, &cands, 2, tower_count) { return }
+	// Generar cada slot según su patrón. Locked slots se saltan.
+	for slot in 0 ..< int(slot_count) {
+		if sim.card_selection_locked[slot] { continue }
+
+		switch slot {
+		case 0:
+			pick_tower_slot(sim, &tower_pool, &tower_used, &cands, slot, tower_count)
+		case 1:
+			if relic_count == 0 {
+				pick_tower_slot(sim, &tower_pool, &tower_used, &cands, slot, tower_count)
+			} else {
+				pick_relic_slot(sim, &relic_pool, relic_count, &relic_used, &cands, slot)
+			}
+		case:
+			// 50/50 torre o relicto, con fallback
+			if relic_count == 0 || rand.float32() < 0.5 {
+				if !pick_tower_slot(sim, &tower_pool, &tower_used, &cands, slot, tower_count) {
+					pick_relic_slot(sim, &relic_pool, relic_count, &relic_used, &cands, slot)
+				}
+			} else {
+				if !pick_relic_slot(sim, &relic_pool, relic_count, &relic_used, &cands, slot) {
+					pick_tower_slot(sim, &tower_pool, &tower_used, &cands, slot, tower_count)
+				}
+			}
 		}
-		pick_relic_slot(sim, &relic_pool, relic_count, &relic_used, &cands, 2)
+	}
+
+	// Pity UNIQUE: si pasó el threshold y no rolamos UNIQUE, forzamos una
+	has_unique := false
+	for slot in 0 ..< int(slot_count) {
+		if entities.card_rarity(sim.card_selection_choices[slot]) == .UNIQUE {
+			has_unique = true
+			break
+		}
+	}
+	if has_unique {
+		sim.shops_since_unique = 0
+	} else if sim.shops_since_unique >= constants.SHOP_PITY_UNIQUE_THRESHOLD && relic_count > 0 {
+		// Buscar la primera UNIQUE en el pool de relics
+		unique_idx := -1
+		for i in 0 ..< relic_count {
+			if entities.card_rarity(relic_pool[i]) == .UNIQUE {
+				unique_idx = i
+				break
+			}
+		}
+		if unique_idx >= 0 {
+			// Colocarla en el primer slot relic no-locked, no-tower-only
+			for slot in 0 ..< int(slot_count) {
+				if sim.card_selection_locked[slot] { continue }
+				if slot == 0 { continue } // slot 0 es siempre torre
+				sim.card_selection_choices[slot] = relic_pool[unique_idx]
+				sim.shops_since_unique = 0
+				break
+			}
+		}
 	}
 
 	// VETERAN: aplica bonus_level a cartas de torre del shop según probabilidad por stack
 	if sim.relic_stacks[.VETERAN] > 0 {
 		chance := min(f32(1.0), f32(sim.relic_stacks[.VETERAN]) * constants.VETERAN_BOOST_CHANCE)
-		for slot in 0 ..< 3 {
+		for slot in 0 ..< int(slot_count) {
+			if sim.card_selection_locked[slot] { continue }
 			card := &sim.card_selection_choices[slot]
 			if card.kind == .TOWER && rand.float32() < chance {
 				card.bonus_level = sim.relic_stacks[.VETERAN]
@@ -404,9 +489,11 @@ pick_relic_slot :: proc(sim: ^entities.Simulation, pool: ^[16]entities.Card, cou
 	target: constants.Card_Rarity
 	if rval < constants.RARITY_PROB_UNIQUE {
 		target = .UNIQUE
-	} else if rval < constants.RARITY_PROB_UNIQUE + constants.RARITY_PROB_RARE {
+	} else if rval < constants.RARITY_PROB_UNIQUE + constants.RARITY_PROB_EPIC {
+		target = .EPIC
+	} else if rval < constants.RARITY_PROB_UNIQUE + constants.RARITY_PROB_EPIC + constants.RARITY_PROB_RARE {
 		target = .RARE
-	} else if rval < constants.RARITY_PROB_UNIQUE + constants.RARITY_PROB_RARE + constants.RARITY_PROB_UNCOMMON {
+	} else if rval < constants.RARITY_PROB_UNIQUE + constants.RARITY_PROB_EPIC + constants.RARITY_PROB_RARE + constants.RARITY_PROB_UNCOMMON {
 		target = .UNCOMMON
 	} else {
 		target = .COMMON
@@ -415,7 +502,11 @@ pick_relic_slot :: proc(sim: ^entities.Simulation, pool: ^[16]entities.Card, cou
 	for j in 0 ..< count {
 		if !used[j] && entities.card_rarity(pool[j]) == target { buf[n] = j; n += 1 }
 	}
+	// Fallback chain: UNIQUE → EPIC → RARE → UNCOMMON → any
 	if n == 0 && target == .UNIQUE {
+		for j in 0 ..< count { if !used[j] && entities.card_rarity(pool[j]) == .EPIC     { buf[n] = j; n += 1 } }
+	}
+	if n == 0 && (target == .UNIQUE || target == .EPIC) {
 		for j in 0 ..< count { if !used[j] && entities.card_rarity(pool[j]) == .RARE     { buf[n] = j; n += 1 } }
 	}
 	if n == 0 {
@@ -593,6 +684,12 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			sim.enemies_killed += 1
 			sim.money_earned   += reward
 
+			// Número flotante amarillo con el dinero obtenido
+			if app.settings.show_damage_numbers && reward > 0 {
+				mn := entities.damage_number_money_init(enemy.x, enemy.y, reward)
+				append(&sim.damage_numbers, mn)
+			}
+
 			// Bloodlust: micro-bonus de daño por cada kill
 			if sim.relic_stacks[.BLOODLUST] > 0 {
 				sim.bloodlust_mult += constants.BLOODLUST_BONUS_PER_KILL * f32(sim.relic_stacks[.BLOODLUST])
@@ -601,51 +698,76 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 
 			// Carta aleatoria al matar — solo si el jugador tiene la reliquia LOOT
 			if sim.relic_stacks[.LOOT] > 0 && rand.float32() < f32(sim.relic_stacks[.LOOT]) * constants.DECK_CARD_DROP_CHANCE {
-				drop_pool := [24]entities.Card{
+				// Build drop pool: unlocked towers + obstacles + unlocked non-maxed relics
+				all_loot_towers := [9]entities.Card{
 					{kind = .TOWER, tower_type = .ARCHER},
 					{kind = .TOWER, tower_type = .CANNON},
 					{kind = .TOWER, tower_type = .SNIPER},
 					{kind = .TOWER, tower_type = .MISSILE},
 					{kind = .TOWER, tower_type = .LASER},
 					{kind = .TOWER, tower_type = .ICE},
-					{kind = .OBSTACLE},
-					{kind = .OBSTACLE},
-					{kind = .INTEREST_BOOST},
-					{kind = .STEAL},
-					{kind = .WEAKEN},
-					{kind = .DIVIDEND},
-					{kind = .AUTO_UPGRADE},
-					{kind = .BLOODLUST},
-					{kind = .FLAWLESS},
-					{kind = .FORMATION},
-					{kind = .FROZEN_AMP},
-					{kind = .VETERAN},
-					{kind = .LOOT},
-					{kind = .SCOUT},
-					{kind = .RECYCLER},
-					{kind = .MEMENTO},
-					{kind = .WARMED_UP},
+					{kind = .TOWER, tower_type = .ENHANCE},
+					{kind = .TOWER, tower_type = .TESLA},
+					{kind = .TOWER, tower_type = .MORTAR},
+				}
+				all_loot_relics := [16]entities.Card{
+					{kind = .INTEREST_BOOST}, {kind = .STEAL},     {kind = .WEAKEN},
+					{kind = .DIVIDEND},       {kind = .AUTO_UPGRADE}, {kind = .BLOODLUST},
+					{kind = .FLAWLESS},       {kind = .FORMATION},  {kind = .FROZEN_AMP},
+					{kind = .VETERAN},        {kind = .LOOT},       {kind = .SCOUT},
+					{kind = .RECYCLER},       {kind = .MEMENTO},    {kind = .WARMED_UP},
 					{kind = .CRYPTOBRO},
 				}
-				dropped := drop_pool[rand.int_max(24)]
-				entities.card_add_to_hand(sim, dropped)
-				entities.add_toast(
-					app,
-					fmt.tprintf("¡Carta encontrada: %s!", entities.card_name(dropped)),
-					.SUCCESS,
-					4.0,
-				)
-				play_sound(.CARD_GAINED, .SFX)
-				relic_flash(sim, .LOOT)
+
+				MAX_DROP :: 28
+				drop_pool: [MAX_DROP]entities.Card
+				drop_count := 0
+
+				for c in all_loot_towers {
+					if entities.meta_is_tower_unlocked(&app.meta, c.tower_type) && drop_count < MAX_DROP {
+						drop_pool[drop_count] = c
+						drop_count += 1
+					}
+				}
+				// Two obstacle slots
+				if drop_count < MAX_DROP { drop_pool[drop_count] = {kind = .OBSTACLE}; drop_count += 1 }
+				if drop_count < MAX_DROP { drop_pool[drop_count] = {kind = .OBSTACLE}; drop_count += 1 }
+				for c in all_loot_relics {
+					if app.meta.unlocked_relics[c.kind] && !entities.relic_is_maxed(sim, c.kind) && drop_count < MAX_DROP {
+						drop_pool[drop_count] = c
+						drop_count += 1
+					}
+				}
+
+				if drop_count > 0 {
+					dropped := drop_pool[rand.int_max(drop_count)]
+					entities.card_add_to_hand(sim, dropped)
+					entities.add_toast(
+						app,
+						fmt.tprintf("¡Carta encontrada: %s!", entities.card_name(dropped)),
+						.SUCCESS,
+						4.0,
+					)
+					play_sound(.CARD_GAINED, .SFX)
+					relic_flash(sim, .LOOT)
+				}
 			}
 
-			// CRYPTOBRO: la torre que mató al jefe gana +1 nivel permanente
+			// CRYPTOBRO: la torre que mató al jefe gana tantos niveles permanentes como
+			// stacks tenga la reliquia. Estos niveles son adicionales a los manuales y
+			// al bonus de Potenciador — no respetan el tope manual, solo TOWER_MAX_LEVEL.
 			if .BOSS in enemy.flags && sim.relic_stacks[.CRYPTOBRO] > 0 && enemy.last_attacker_r >= 0 {
 				for &t in sim.towers {
 					if t.r == enemy.last_attacker_r && t.c == enemy.last_attacker_c {
-						if t.level < constants.TOWER_MAX_LEVEL {
-							entities.tower_upgrade(&t)
-							entities.add_toast(app, fmt.tprintf("¡Cryptobro! Torre → Nv%d", t.level), .SUCCESS, 4.0)
+						stacks := sim.relic_stacks[.CRYPTOBRO]
+						room   := constants.TOWER_MAX_LEVEL - t.level
+						gained := stacks
+						if gained > room { gained = room }
+						if gained > 0 {
+							t.cryptobro_bonus += gained
+							t.level           += gained
+							entities.tower_recompute_stats(&t)
+							entities.add_toast(app, fmt.tprintf("¡Cryptobro! Torre +%d Nv → Nv%d", gained, t.level), .SUCCESS, 4.0)
 							relic_flash(sim, .CRYPTOBRO)
 						}
 						break
@@ -922,8 +1044,8 @@ update_enhance_bonuses :: proc(app: ^entities.App_State) {
 			}
 		}
 
-		manual_level := t.level - t.enhance_bonus
-		max_bonus    := constants.TOWER_MAX_LEVEL - manual_level
+		manual_level := t.level - t.enhance_bonus - t.cryptobro_bonus
+		max_bonus    := constants.TOWER_MAX_LEVEL - manual_level - t.cryptobro_bonus
 		if new_bonus > max_bonus                   { new_bonus = max_bonus }
 		if new_bonus > constants.ENHANCE_MAX_LEVEL { new_bonus = constants.ENHANCE_MAX_LEVEL }
 		if new_bonus < 0                           { new_bonus = 0 }
@@ -1314,7 +1436,7 @@ update_auto_upgrade :: proc(app: ^entities.App_State) {
 		t := &sim.towers[i]
 		if t.level >= constants.TOWER_MAX_LEVEL do continue
 		manual_cap := constants.ENHANCE_MAX_LEVEL if t.type == .ENHANCE else constants.TOWER_MAX_MANUAL_LEVEL
-		if t.level - t.enhance_bonus >= manual_cap do continue
+		if t.level - t.enhance_bonus - t.cryptobro_bonus >= manual_cap do continue
 		if nc < MAX_CANDS {
 			cands[nc] = Auto_Candidate{entities.tower_get_upgrade_cost(t), i, -1, -1}
 			nc += 1
@@ -1466,6 +1588,7 @@ simulation_cleanup :: proc(app: ^entities.App_State) {
 	delete(app.sim.deck)
 	delete(app.sim.hand)
 	delete(app.sim.discard)
+	delete(app.sim.airdrops)
 }
 
 // Reset simulation
@@ -1505,6 +1628,12 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		card_selection_active  = false,
 		card_selection_choices = {},
 		card_selection_bought  = {},
+		card_selection_locked  = {},
+		shop_slot_count        = constants.SHOP_BASE_SLOTS,
+		rerolls_this_shop      = 0,
+		shops_since_unique     = 0,
+		skip_streak_count      = 0,
+		shop_purchases_this_visit = 0,
 		auto_upgrade_timer     = 0,
 		wave_start_money       = 0,
 		steal_last_wave        = 0,
@@ -1512,6 +1641,8 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		wave_start_health      = 0,
 		inter_wave_timer       = 0,
 
+		airdrops         = make([dynamic]entities.Airdrop),
+		airdrop_timer    = constants.AIRDROP_SPAWN_INTERVAL_MIN + rand.float32() * (constants.AIRDROP_SPAWN_INTERVAL_MAX - constants.AIRDROP_SPAWN_INTERVAL_MIN),
 		enemies_killed   = 0,
 		money_earned     = 0,
 		towers_built     = 0,
@@ -1528,7 +1659,7 @@ simulation_reset :: proc(app: ^entities.App_State) {
 
 	// Inicializar mazo inicial y mano de apertura garantizada
 	// (build_starter_deck puebla sim.hand directamente con la composición garantizada)
-	entities.build_starter_deck(&app.sim)
+	entities.build_starter_deck(&app.sim, &app.meta)
 
 	// Pre-roll bonus status for the first 3 upcoming waves (waves 1, 2, 3).
 	for i in 0 ..< 3 {
@@ -1620,4 +1751,269 @@ simulation_init_from_editor :: proc(app: ^entities.App_State) -> bool {
 
 	update_formation_cache(app)
 	return len(app.sim.spawns) > 0
+}
+
+// Ajusta zoom y cámara para que la grilla del editor quepa centrada en pantalla.
+// Llamar después de simulation_init_from_editor, desde un sitio que tenga acceso al screen size.
+simulation_fit_camera :: proc(app: ^entities.App_State, screen_w, screen_h: f32) {
+	MARGIN :: f32(24)
+	m  := &app.editor.game_map
+	cs := f32(app.settings.cell_size)
+
+	zoom_x := (screen_w - MARGIN * 2) / (f32(m.width)  * cs)
+	zoom_y := (screen_h - MARGIN * 2) / (f32(m.height) * cs)
+	zoom   := clamp(min(zoom_x, zoom_y), constants.ZOOM_MIN, constants.ZOOM_MAX)
+
+	grid_w := f32(m.width)  * cs * zoom
+	grid_h := f32(m.height) * cs * zoom
+
+	app.zoom                   = zoom
+	app.target_zoom            = zoom
+	app.camera_offset_x        = i32((screen_w - grid_w) / 2)
+	app.camera_offset_y        = i32((screen_h - grid_h) / 2)
+	app.target_camera_offset_x = app.camera_offset_x
+	app.target_camera_offset_y = app.camera_offset_y
+}
+// =============================================================================
+// Airdrop
+// =============================================================================
+
+// Elige un tile EMPTY (no camino, no torre, no agua, no obstáculo) aleatorio.
+// Devuelve false si no hay ninguno disponible.
+airdrop_pick_tile :: proc(app: ^entities.App_State) -> (row, col: i32, ok: bool) {
+	m := &app.editor.game_map
+	candidates : [dynamic]struct{r, c: i32}
+	defer delete(candidates)
+
+	for r in 0 ..< m.height {
+		for c in 0 ..< m.width {
+			tile     := m.grid[r][c]
+			is_empty := tile == .EMPTY
+			no_obs   := m.obstacle_grid[r][c] == .EMPTY
+			no_water := !m.water_grid[r][c]
+			if is_empty && no_obs && no_water {
+				append(&candidates, struct{r, c: i32}{r, c})
+			}
+		}
+	}
+	if len(candidates) == 0 { return 0, 0, false }
+	idx := rand.int_max(len(candidates))
+	return candidates[idx].r, candidates[idx].c, true
+}
+
+// Spawnea un nuevo airdrop con trayectoria angular aleatoria que pasa por el tile destino.
+airdrop_spawn :: proc(app: ^entities.App_State) {
+	r, c, ok := airdrop_pick_tile(app)
+	if !ok { return }
+
+	m  := &app.editor.game_map
+	cs := f32(app.settings.cell_size)
+
+	// Centro del tile destino en world space
+	target_wx := (f32(c) + 0.5) * cs
+	target_wy := (f32(r) + 0.5) * cs
+
+	// Ángulo aleatorio (evitamos ángulos casi perpendiculares al grid que quedan raros)
+	angle := rand.float32() * (math.PI * 2)
+	dir_x := math.cos_f32(angle)
+	dir_y := math.sin_f32(angle)
+
+	// Calcular punto de entrada: retroceder desde el tile destino a lo largo de (-dir)
+	// hasta salir del mapa con margen de 80 world px
+	MARGIN :: f32(80)
+	map_w  := f32(m.width)  * cs
+	map_h  := f32(m.height) * cs
+
+	// Intersección del rayo (target - dir*t) con cada borde extendido por MARGIN
+	t_entry := f32(1e9)
+	if dir_x > 0.0001 {
+		t := (target_wx - (-MARGIN)) / dir_x
+		if t > 0 && t < t_entry { t_entry = t }
+	} else if dir_x < -0.0001 {
+		t := (target_wx - (map_w + MARGIN)) / dir_x
+		if t > 0 && t < t_entry { t_entry = t }
+	}
+	if dir_y > 0.0001 {
+		t := (target_wy - (-MARGIN)) / dir_y
+		if t > 0 && t < t_entry { t_entry = t }
+	} else if dir_y < -0.0001 {
+		t := (target_wy - (map_h + MARGIN)) / dir_y
+		if t > 0 && t < t_entry { t_entry = t }
+	}
+
+	plane_x := target_wx - dir_x * t_entry
+	plane_y := target_wy - dir_y * t_entry
+
+	drop := entities.Airdrop{
+		plane_x     = plane_x,
+		plane_y     = plane_y,
+		plane_dir_x = dir_x,
+		plane_dir_y = dir_y,
+		target_row  = r,
+		target_col  = c,
+		target_wx   = target_wx,
+		target_wy   = target_wy,
+		phase       = .PLANE_FLYING,
+		chute_t     = 1.0,
+		dropped     = false,
+	}
+	append(&app.sim.airdrops, drop)
+}
+
+// Actualiza todos los airdrops activos y el timer de spawn.
+airdrop_update :: proc(app: ^entities.App_State, dt: f32) {
+	sim := &app.sim
+	m   := &app.editor.game_map
+	cs  := f32(app.settings.cell_size)
+
+	// Spawn timer
+	sim.airdrop_timer -= dt
+	if sim.airdrop_timer <= 0 {
+		airdrop_spawn(app)
+		sim.airdrop_timer = constants.AIRDROP_SPAWN_INTERVAL_MIN +
+		                    rand.float32() * (constants.AIRDROP_SPAWN_INTERVAL_MAX - constants.AIRDROP_SPAWN_INTERVAL_MIN)
+	}
+
+	// Update each airdrop
+	i := 0
+	for i < len(sim.airdrops) {
+		drop := &sim.airdrops[i]
+
+		switch drop.phase {
+		case .PLANE_FLYING:
+			// Mover avión a lo largo de su dirección
+			speed := constants.AIRDROP_PLANE_SPEED
+			drop.plane_x += drop.plane_dir_x * speed * dt
+			drop.plane_y += drop.plane_dir_y * speed * dt
+
+			// Samplear estela jet
+			drop.trail_timer += dt
+			if drop.trail_timer >= constants.AIRDROP_TRAIL_INTERVAL {
+				drop.trail_timer = 0
+				idx := (drop.trail_head + drop.trail_len) % i32(len(drop.trail))
+				drop.trail[idx] = {drop.plane_x, drop.plane_y}
+				if drop.trail_len < i32(len(drop.trail)) {
+					drop.trail_len += 1
+				} else {
+					drop.trail_head = (drop.trail_head + 1) % i32(len(drop.trail))
+				}
+			}
+
+			// Soltar caja cuando el avión supera el tile destino (producto punto >= 0)
+			to_target_x := drop.target_wx - drop.plane_x
+			to_target_y := drop.target_wy - drop.plane_y
+			passed := (to_target_x * drop.plane_dir_x + to_target_y * drop.plane_dir_y) <= 0
+
+			if !drop.dropped && passed {
+				drop.dropped = true
+				drop.chute_t = 1.0
+				drop.phase   = .BOX_FALLING
+			}
+
+			// Eliminar avión cuando sale de la PANTALLA (igual que los pájaros)
+			sw     := f32(raylib.GetScreenWidth())
+			sh     := f32(raylib.GetScreenHeight())
+			screen_x := drop.plane_x * app.zoom + f32(app.camera_offset_x)
+			screen_y := drop.plane_y * app.zoom + f32(app.camera_offset_y)
+			MARGIN :: f32(100)
+			out := screen_x < -MARGIN || screen_x > sw + MARGIN ||
+			       screen_y < -MARGIN || screen_y > sh + MARGIN
+			if out && drop.dropped {
+				// El avión salió de pantalla tras soltar la carga — lo eliminamos
+				// La caja sigue en su propio ciclo (phase BOX_FALLING/LANDED)
+				drop.plane_x = -99999 // marca invisible para el renderer
+			}
+			if out && !drop.dropped {
+				// Nunca soltó (caso extremo): eliminar todo
+				ordered_remove(&sim.airdrops, i)
+				continue
+			}
+
+		case .BOX_FALLING:
+			// chute_t shrinks from 1.0 to 0.0 over AIRDROP_BOX_FALL_SPEED seconds
+			drop.chute_t -= dt / constants.AIRDROP_BOX_FALL_SPEED
+			if drop.chute_t <= 0 {
+				drop.chute_t = 0
+				drop.phase   = .BOX_LANDED
+			}
+			airdrop_update_ping(drop, dt)
+
+		case .BOX_LANDED:
+			// Waiting for player click
+			airdrop_update_ping(drop, dt)
+		}
+
+		i += 1
+	}
+}
+
+// Recoge una caja en (row, col). Aplica loot y devuelve true si había una caja.
+airdrop_collect :: proc(app: ^entities.App_State, row, col: i32) -> bool {
+	sim := &app.sim
+	for i in 0 ..< len(sim.airdrops) {
+		drop := &sim.airdrops[i]
+		if drop.phase != .BOX_LANDED { continue }
+		if drop.target_row != row || drop.target_col != col { continue }
+
+		// ── Loot ─────────────────────────────────────────────────────────────
+		// 1. Dinero
+		money := constants.AIRDROP_MONEY_MIN +
+		         i32(rand.float32() * f32(constants.AIRDROP_MONEY_MAX - constants.AIRDROP_MONEY_MIN + 1))
+		entities.app_add_money(app, money)
+
+		// 2. Reliquia aleatoria (de las desbloqueadas y no maxeadas)
+		relic_given := false
+		candidates  : [dynamic]entities.Card_Kind
+		defer delete(candidates)
+		for spec in entities.RELIC_SPECS {
+			if app.meta.unlocked_relics[spec.kind] && !entities.relic_is_maxed(sim, spec.kind) {
+				append(&candidates, spec.kind)
+			}
+		}
+		if len(candidates) > 0 {
+			idx  := rand.int_max(len(candidates))
+			kind := candidates[idx]
+			entities.relic_apply(sim, kind)
+			sim.relic_flash_timers[kind] = constants.RELIC_FLASH_DURATION
+			relic_given = true
+			relic_name  := entities.card_name(entities.Card{kind = kind})
+			entities.add_toast(app, fmt.tprintf("📦 %s + $%d", relic_name, money), .SUCCESS, 3.0)
+		} else {
+			entities.add_toast(app, fmt.tprintf("📦 $%d", money), .SUCCESS, 2.5)
+		}
+
+		// 3. Cristales (10% chance)
+		if rand.float32() < constants.AIRDROP_CRYSTAL_CHANCE {
+			crystals := constants.AIRDROP_CRYSTAL_MIN +
+			            i32(rand.float32() * f32(constants.AIRDROP_CRYSTAL_MAX - constants.AIRDROP_CRYSTAL_MIN + 1))
+			app.meta.cristales += crystals
+			entities.meta_save(&app.meta)
+			entities.add_toast(app, fmt.tprintf("+%d cristales!", crystals), .INFO, 2.5)
+		}
+
+		_ = relic_given
+		ordered_remove(&sim.airdrops, i)
+		play_sound(.CONFIRMATION, .UI)
+		return true
+	}
+	return false
+}
+
+// Actualiza el estado del ping convergente de un airdrop.
+// Llamar desde las fases BOX_FALLING y BOX_LANDED.
+airdrop_update_ping :: proc(drop: ^entities.Airdrop, dt: f32) {
+	if drop.ping_t > 0 {
+		// Anillo activo: encoger hasta 0
+		drop.ping_t -= dt / constants.AIRDROP_PING_DURATION
+		if drop.ping_t <= 0 {
+			drop.ping_t     = -1  // marcar inactivo
+			drop.ping_timer = constants.AIRDROP_PING_INTERVAL
+		}
+	} else {
+		// Esperar el intervalo antes del próximo ping
+		drop.ping_timer -= dt
+		if drop.ping_timer <= 0 {
+			drop.ping_t = 1.0  // lanzar nuevo ping
+		}
+	}
 }

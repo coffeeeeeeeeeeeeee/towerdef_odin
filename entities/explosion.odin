@@ -46,6 +46,7 @@ Damage_Number :: struct {
 	max_life: f32,
 	color: raylib.Color,
 	is_critical: bool,
+	is_money: bool,   // true = mostrar como "+$X" en amarillo
 }
 
 // Initialize damage number
@@ -63,6 +64,19 @@ damage_number_init :: proc(x, y, value: f32, is_critical: bool) -> Damage_Number
 		max_life = 1.0,
 		color = color,
 		is_critical = is_critical,
+	}
+}
+
+// Initialize money reward number (amarillo, formato +$X)
+damage_number_money_init :: proc(x, y: f32, amount: i32) -> Damage_Number {
+	return Damage_Number{
+		x        = x,
+		y        = y,
+		value    = f32(amount),
+		life     = 1.2,
+		max_life = 1.2,
+		color    = raylib.Color{255, 220, 60, 255},
+		is_money = true,
 	}
 }
 

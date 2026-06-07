@@ -262,10 +262,10 @@ RELIC_SPECS := []Relic_Spec{
 		desc_key     = "TOOLTIP_CRYPTOBRO_DESC",
 		icon_path    = "images/icon_cryptobro.png",
 		stat_format  = proc() -> string {
-			return "+1 nivel permanente a la torre que mata al jefe"
+			return "Otorga tantos niveles permanentes como stacks tenga a la torre que mata al jefe"
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Cryptobro x%d (+1 nv al matar jefe)", stacks)
+			return fmt.tprintf("Cryptobro x%d (+%d nv al matar jefe)", stacks, stacks)
 		},
 	},
 }
@@ -316,9 +316,16 @@ relic_stacks :: proc(sim: ^Simulation, kind: Card_Kind) -> i32 {
 	return sim.relic_stacks[kind]
 }
 
-// Incrementa en 1 el stack del relicto.
+// Incrementa en 1 el stack del relicto, respetando el máximo.
 relic_apply :: proc(sim: ^Simulation, kind: Card_Kind) {
-	sim.relic_stacks[kind] += 1
+	if sim.relic_stacks[kind] < constants.MAX_RELIC_STACKS {
+		sim.relic_stacks[kind] += 1
+	}
+}
+
+// Devuelve true si el relicto ya alcanzó el máximo de stacks.
+relic_is_maxed :: proc(sim: ^Simulation, kind: Card_Kind) -> bool {
+	return sim.relic_stacks[kind] >= constants.MAX_RELIC_STACKS
 }
 
 // ---------------------------------------------------------------------------
@@ -404,46 +411,80 @@ card_add_to_hand :: proc(sim: ^Simulation, card: Card) {
 // Mano: 3 torres de daño (ARCHER/CANNON/SNIPER/MISSILE),
 //       1 de utilidad (ICE o ENHANCE), 1 reliquia aleatoria.
 // Mazo: las cartas restantes, mezcladas.
-deal_guaranteed_hand :: proc(sim: ^Simulation) {
+deal_guaranteed_hand :: proc(sim: ^Simulation, meta: ^Meta_State) {
 	clear(&sim.hand)
 	clear(&sim.deck)
 
-	// Pools — se eligen con índices aleatorios para evitar bias
-	damage_kinds  := []constants.Tower_Type{.ARCHER, .ARCHER, .CANNON, .CANNON, .SNIPER, .MISSILE}
-	utility_kinds := []constants.Tower_Type{.ICE, .ENHANCE}
-	relic_kinds   := []Card_Kind{.INTEREST_BOOST, .WEAKEN, .BLOODLUST, .FLAWLESS}
+	// Base damage pool — always unlocked towers only
+	dmg_base := [4]constants.Tower_Type{.ARCHER, .ARCHER, .CANNON, .SNIPER}
+	// Premium damage candidates — only added if unlocked
+	dmg_premium := [2]constants.Tower_Type{.MISSILE, .TESLA}
 
-	// Copias mutables para poder permutar in-place (Fisher-Yates)
-	dmg  := [6]constants.Tower_Type{damage_kinds[0],  damage_kinds[1],  damage_kinds[2],
-	                                  damage_kinds[3],  damage_kinds[4],  damage_kinds[5]}
-	util := [2]constants.Tower_Type{utility_kinds[0], utility_kinds[1]}
-	rel  := [4]Card_Kind{relic_kinds[0], relic_kinds[1], relic_kinds[2], relic_kinds[3]}
-
+	dmg := make([dynamic]constants.Tower_Type, context.temp_allocator)
+	for t in dmg_base { append(&dmg, t) }
+	for t in dmg_premium {
+		if meta_is_tower_unlocked(meta, t) { append(&dmg, t) }
+	}
 	slice_shuffle(dmg[:])
+
+	// Utility pool — only include ICE/ENHANCE if unlocked
+	util_candidates := [2]constants.Tower_Type{.ICE, .ENHANCE}
+	util := make([dynamic]constants.Tower_Type, context.temp_allocator)
+	for t in util_candidates {
+		if meta_is_tower_unlocked(meta, t) { append(&util, t) }
+	}
 	slice_shuffle(util[:])
+
+	// Relic pool — only include relics that are unlocked and not maxed
+	rel_candidates := [4]Card_Kind{.INTEREST_BOOST, .WEAKEN, .BLOODLUST, .FLAWLESS}
+	rel := make([dynamic]Card_Kind, context.temp_allocator)
+	for k in rel_candidates {
+		if meta.unlocked_relics[k] && !relic_is_maxed(sim, k) { append(&rel, k) }
+	}
 	slice_shuffle(rel[:])
 
-	// -- Mano garantizada --
+	// -- Mano garantizada: 3 daño + (1 utilidad si disponible) + (1 reliquia si disponible) --
 	append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[0]})
 	append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[1]})
 	append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[2]})
-	append(&sim.hand, Card{kind = .TOWER, tower_type = util[0]})
-	append(&sim.hand, Card{kind = rel[0]})
+	if len(util) > 0 {
+		append(&sim.hand, Card{kind = .TOWER, tower_type = util[0]})
+	} else {
+		// No utility towers unlocked — add an extra damage tower instead
+		extra_idx := 0
+		if len(dmg) > 3 { extra_idx = 3 }
+		append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[extra_idx]})
+	}
+	if len(rel) > 0 {
+		append(&sim.hand, Card{kind = rel[0]})
+	} else {
+		// No relics unlocked — add an extra damage tower instead
+		extra_idx := 0
+		if len(dmg) > 3 { extra_idx = 3 }
+		append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[extra_idx]})
+	}
 
 	// -- Resto al mazo --
-	append(&sim.deck, Card{kind = .TOWER, tower_type = dmg[3]})
-	append(&sim.deck, Card{kind = .TOWER, tower_type = dmg[4]})
-	append(&sim.deck, Card{kind = .TOWER, tower_type = dmg[5]})
-	append(&sim.deck, Card{kind = .TOWER, tower_type = util[1]})
-	append(&sim.deck, Card{kind = .TOWER, tower_type = .LASER})
+	for i in 3 ..< len(dmg) {
+		append(&sim.deck, Card{kind = .TOWER, tower_type = dmg[i]})
+	}
+	if len(util) > 1 {
+		append(&sim.deck, Card{kind = .TOWER, tower_type = util[1]})
+	}
+	// Add a premium deck card only if at least one is unlocked
+	if meta_is_tower_unlocked(meta, .LASER) {
+		append(&sim.deck, Card{kind = .TOWER, tower_type = .LASER})
+	} else if meta_is_tower_unlocked(meta, .MORTAR) {
+		append(&sim.deck, Card{kind = .TOWER, tower_type = .MORTAR})
+	}
 	append(&sim.deck, Card{kind = .OBSTACLE})
 	append(&sim.deck, Card{kind = .OBSTACLE})
 	deck_shuffle(&sim.deck)
 }
 
 // Construye el mazo inicial. Delega en deal_guaranteed_hand.
-build_starter_deck :: proc(sim: ^Simulation) {
-	deal_guaranteed_hand(sim)
+build_starter_deck :: proc(sim: ^Simulation, meta: ^Meta_State) {
+	deal_guaranteed_hand(sim, meta)
 }
 
 // Devuelve el nombre traducido de una carta
@@ -504,7 +545,8 @@ card_rarity :: proc(card: Card) -> constants.Card_Rarity {
 		switch card.tower_type {
 		case .ARCHER, .CANNON:                  return .COMMON
 		case .SNIPER, .ICE, .ENHANCE:           return .UNCOMMON
-		case .LASER, .MISSILE, .TESLA, .MORTAR: return .RARE
+		case .LASER, .MISSILE: return .RARE
+		case .TESLA, .MORTAR:  return .EPIC
 		}
 	}
 	if card.kind == .OBSTACLE { return .COMMON }
@@ -520,6 +562,7 @@ card_shop_price :: proc(card: Card) -> i32 {
 	case .COMMON:   return constants.SHOP_PRICE_COMMON
 	case .UNCOMMON: return constants.SHOP_PRICE_UNCOMMON
 	case .RARE:     return constants.SHOP_PRICE_RARE
+	case .EPIC:     return constants.SHOP_PRICE_EPIC
 	case .UNIQUE:   return constants.SHOP_PRICE_UNIQUE
 	}
 	return constants.SHOP_PRICE_COMMON
@@ -537,6 +580,7 @@ card_sell_price :: proc(card: Card) -> i32 {
 	case .COMMON:   return constants.SELL_PRICE_COMMON
 	case .UNCOMMON: return constants.SELL_PRICE_UNCOMMON
 	case .RARE:     return constants.SELL_PRICE_RARE
+	case .EPIC:     return constants.SELL_PRICE_EPIC
 	case .UNIQUE:   return constants.SELL_PRICE_UNIQUE
 	}
 	return constants.CARD_SELL_PRICE

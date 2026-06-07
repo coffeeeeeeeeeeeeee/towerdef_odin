@@ -7,13 +7,202 @@ import "core:math"
 import "core:strings"
 import "vendor:raylib"
 
+// ── Nebula background shader ──────────────────────────────────────────────────
+
+Nebula_Shader :: struct {
+	shader:   raylib.Shader,
+	loc_time: i32,
+	loc_res:  i32,
+}
+
+nebula_shader: Nebula_Shader
+
+nebula_init :: proc() {
+	s := raylib.LoadShader(nil, "assets/nebula.glsl")
+	nebula_shader = Nebula_Shader{
+		shader   = s,
+		loc_time = raylib.GetShaderLocation(s, "u_time"),
+		loc_res  = raylib.GetShaderLocation(s, "u_resolution"),
+	}
+}
+
+nebula_unload :: proc() {
+	raylib.UnloadShader(nebula_shader.shader)
+}
+
+nebula_draw :: proc() {
+	// Shader id == 1 means Raylib returned the default shader (load failed).
+	// In that case skip to avoid corrupting rendering state.
+	if nebula_shader.shader.id <= 1 { return }
+
+	w := f32(raylib.GetRenderWidth())
+	h := f32(raylib.GetRenderHeight())
+
+	t   := f32(raylib.GetTime())
+	res := [2]f32{w, h}
+
+	if nebula_shader.loc_time >= 0 {
+		raylib.SetShaderValue(nebula_shader.shader, nebula_shader.loc_time, &t, .FLOAT)
+	}
+	if nebula_shader.loc_res >= 0 {
+		raylib.SetShaderValue(nebula_shader.shader, nebula_shader.loc_res, &res, .VEC2)
+	}
+
+	raylib.BeginShaderMode(nebula_shader.shader)
+	raylib.DrawRectangle(0, 0, i32(w), i32(h), raylib.WHITE)
+	raylib.EndShaderMode()
+}
+
+// ── Water blob shader ────────────────────────────────────────────────────────
+
+Water_Shader :: struct {
+	shader:    raylib.Shader,
+	loc_texel: i32,
+	loc_water: i32,
+	loc_edge:  i32,
+	mask_tex:  raylib.RenderTexture2D,
+	tex_w:     i32,
+	tex_h:     i32,
+}
+
+water_shader: Water_Shader
+
+water_shader_init :: proc() {
+	s := raylib.LoadShader(nil, "assets/water.glsl")
+	water_shader.shader    = s
+	water_shader.loc_texel = raylib.GetShaderLocation(s, "texelSize")
+	water_shader.loc_water = raylib.GetShaderLocation(s, "waterColor")
+	water_shader.loc_edge  = raylib.GetShaderLocation(s, "edgeColor")
+	water_shader_resize()
+}
+
+water_shader_resize :: proc() {
+	w := raylib.GetRenderWidth()
+	h := raylib.GetRenderHeight()
+	if water_shader.tex_w == w && water_shader.tex_h == h { return }
+	if water_shader.tex_w > 0 {
+		raylib.UnloadRenderTexture(water_shader.mask_tex)
+	}
+	water_shader.mask_tex = raylib.LoadRenderTexture(w, h)
+	water_shader.tex_w    = w
+	water_shader.tex_h    = h
+}
+
+water_shader_unload :: proc() {
+	raylib.UnloadShader(water_shader.shader)
+	if water_shader.tex_w > 0 {
+		raylib.UnloadRenderTexture(water_shader.mask_tex)
+	}
+}
+
+// ── Heightmap overlay shader ─────────────────────────────────────────────────
+
+Heightmap_Shader :: struct {
+	shader:               raylib.Shader,
+	loc_contrast:         i32,
+	loc_alpha_max:        i32,
+	loc_contour_steps:    i32,
+	loc_contour_strength: i32,
+	loc_contour_width:    i32,
+}
+
+heightmap_shader: Heightmap_Shader
+
+heightmap_shader_init :: proc() {
+	s := raylib.LoadShader(nil, "assets/heightmap.glsl")
+	heightmap_shader = Heightmap_Shader{
+		shader               = s,
+		loc_contrast         = raylib.GetShaderLocation(s, "u_contrast"),
+		loc_alpha_max        = raylib.GetShaderLocation(s, "u_alpha_max"),
+		loc_contour_steps    = raylib.GetShaderLocation(s, "u_contour_steps"),
+		loc_contour_strength = raylib.GetShaderLocation(s, "u_contour_strength"),
+		loc_contour_width    = raylib.GetShaderLocation(s, "u_contour_width"),
+	}
+}
+
+heightmap_shader_unload :: proc() {
+	raylib.UnloadShader(heightmap_shader.shader)
+}
+
+// ── Cloud layer shader ───────────────────────────────────────────────────────
+
+Cloud_Shader :: struct {
+	shader:            raylib.Shader,
+	loc_res:           i32,
+	loc_time:          i32,
+	loc_opacity:       i32,
+	loc_camera_offset: i32,
+}
+
+cloud_shader: Cloud_Shader
+
+cloud_shader_init :: proc() {
+	s := raylib.LoadShader(nil, "assets/clouds.glsl")
+	cloud_shader = Cloud_Shader{
+		shader            = s,
+		loc_res           = raylib.GetShaderLocation(s, "u_resolution"),
+		loc_time          = raylib.GetShaderLocation(s, "u_time"),
+		loc_opacity       = raylib.GetShaderLocation(s, "u_opacity"),
+		loc_camera_offset = raylib.GetShaderLocation(s, "u_camera_offset"),
+	}
+}
+
+cloud_shader_unload :: proc() {
+	raylib.UnloadShader(cloud_shader.shader)
+}
+
+cloud_shader_draw :: proc(app: ^entities.App_State) {
+	// Opacity: 1.0 at ZOOM_MIN, 0.0 at ZOOM_FADE_OUT
+	// smoothstep maps zoom → [0,1] then we invert
+	zoom_fade_out :: f32(1.3)
+	opacity := 1.0 - math.smoothstep(constants.ZOOM_MIN, zoom_fade_out, app.zoom)
+	if opacity <= 0.001 { return }
+
+	w   := f32(raylib.GetRenderWidth())
+	h   := f32(raylib.GetRenderHeight())
+	t   := f32(raylib.GetTime())
+	res := [2]f32{w, h}
+	cam := [2]f32{f32(app.camera_offset_x), f32(app.camera_offset_y)}
+
+	if cloud_shader.loc_res >= 0 {
+		raylib.SetShaderValue(cloud_shader.shader, cloud_shader.loc_res, &res, .VEC2)
+	}
+	if cloud_shader.loc_time >= 0 {
+		raylib.SetShaderValue(cloud_shader.shader, cloud_shader.loc_time, &t, .FLOAT)
+	}
+	if cloud_shader.loc_opacity >= 0 {
+		raylib.SetShaderValue(cloud_shader.shader, cloud_shader.loc_opacity, &opacity, .FLOAT)
+	}
+	if cloud_shader.loc_camera_offset >= 0 {
+		raylib.SetShaderValue(cloud_shader.shader, cloud_shader.loc_camera_offset, &cam, .VEC2)
+	}
+
+	raylib.BeginShaderMode(cloud_shader.shader)
+	raylib.DrawRectangle(0, 0, i32(w), i32(h), raylib.WHITE)
+	raylib.EndShaderMode()
+}
+
 // Render the entire game
 render_game :: proc(app: ^entities.App_State) {
-	ui_blocks_clear() // Reset click-blocking registry for this frame
-	render_map(app, &app.editor.game_map)
-	render_tower_ranges(app)
-	render_map_objects(app, &app.editor.game_map)
-	render_gameplay(app)
+	ui_blocks_clear()
+	raylib.ClearBackground(raylib.BLACK)
+	nebula_draw()
+
+	// Map and gameplay are only visible while actually playing or editing.
+	// In menu/overlay states the nebula is the sole background.
+	if app.state == .PLAYING || app.state == .PAUSED || app.state == .EDITOR {
+		render_map(app, &app.editor.game_map)
+		render_tower_ranges(app)
+		render_map_objects(app, &app.editor.game_map)
+		render_gameplay(app)
+		render_airdrops(app)
+	}
+
+	if app.state == .PLAYING || app.state == .PAUSED || app.state == .EDITOR {
+		update_bird_flock(app, app.delta_time)
+		render_bird_flock(app)
+		cloud_shader_draw(app)
+	}
 	render_ui(app)
 	render_tooltip_layer(app) // Always last — draws on top of everything
 }
@@ -82,7 +271,11 @@ render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
 				render_goal(x, y, cs)
 
 			case .ACCESSORY_TREE:
-				render_tree(x, y, cs, m.biome, i32(row), i32(col))
+				if m.water_grid[row][col] {
+					render_water_lily(x, y, cs, i32(row), i32(col))
+				} else {
+					render_tree(x, y, cs, m.biome, i32(row), i32(col))
+				}
 
 			case .ACCESSORY_BLOCK:
 				render_block(x, y, cs)
@@ -129,8 +322,62 @@ render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	}
 }
 
+// Overlay de heightmap — dibuja un gradient continuo (vía shader) que tinta el
+// terreno según el heightmap del mapa. Hace upload lazy de la textura GPU si
+// está marcada como dirty (típicamente después de map_load o map_init).
+// La intensidad/contraste/isolíneas dependen del bioma (BIOME_HEIGHTMAP_STYLES).
+render_heightmap_overlay :: proc(app: ^entities.App_State, m: ^entities.Map, cs: f32) {
+	style := constants.BIOME_HEIGHTMAP_STYLES[m.biome]
+	if style.alpha_max <= 0 && style.contour_strength <= 0 { return }
+
+	// Lazy upload: si dirty o nunca subida, regenerar la textura desde m.heightmap.
+	if m.heightmap_tex_dirty || !m.heightmap_tex_valid {
+		entities.map_upload_heightmap_to_gpu(m)
+	}
+	if !m.heightmap_tex_valid { return }
+
+	// Si el shader no cargó (id <= 1 = default fallback), salir.
+	if heightmap_shader.shader.id <= 1 { return }
+
+	// Pasar uniforms del bioma.
+	contrast        := style.contrast_mult
+	alpha_max       := style.alpha_max
+	contour_steps   := style.contour_steps
+	contour_strength := style.contour_strength
+	contour_width   := style.contour_width
+	if heightmap_shader.loc_contrast >= 0 {
+		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_contrast, &contrast, .FLOAT)
+	}
+	if heightmap_shader.loc_alpha_max >= 0 {
+		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_alpha_max, &alpha_max, .FLOAT)
+	}
+	if heightmap_shader.loc_contour_steps >= 0 {
+		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_contour_steps, &contour_steps, .FLOAT)
+	}
+	if heightmap_shader.loc_contour_strength >= 0 {
+		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_contour_strength, &contour_strength, .FLOAT)
+	}
+	if heightmap_shader.loc_contour_width >= 0 {
+		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_contour_width, &contour_width, .FLOAT)
+	}
+
+	// src: solo la porción del heightmap que corresponde al mapa real (m.width × m.height).
+	// dst: el área del mapa en pantalla.
+	src := raylib.Rectangle{0, 0, f32(m.width), f32(m.height)}
+	dst := raylib.Rectangle{
+		f32(app.camera_offset_x),
+		f32(app.camera_offset_y),
+		f32(m.width) * cs,
+		f32(m.height) * cs,
+	}
+
+	raylib.BeginShaderMode(heightmap_shader.shader)
+	raylib.DrawTexturePro(m.heightmap_tex, src, dst, {0, 0}, 0, raylib.WHITE)
+	raylib.EndShaderMode()
+}
+
 // Render map (grid, paths, obstacles)
-render_map :: proc(app: ^entities.App_State, m: ^entities.Map) {
+render_map :: proc(app: ^entities.App_State, m: ^entities.Map, for_preview: bool = false) {
 	cs := f32(app.settings.cell_size) * app.zoom
 	gs := m.width // Use map's actual dimensions
 
@@ -149,7 +396,12 @@ render_map :: proc(app: ^entities.App_State, m: ^entities.Map) {
 		biome_colors.bg_grid,
 	)
 
+	render_water_layer(m, cs, app.camera_offset_x, app.camera_offset_y, for_preview)
 	render_paths(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y)
+
+	// Heightmap overlay — desniveles sutiles por celda + contornos.
+	// Se dibuja DESPUÉS de paths/water para que tinte todo el grid (decisión del usuario).
+	render_heightmap_overlay(app, m, cs)
 
 	// Grid lines
 	if app.settings.show_grid {
@@ -222,10 +474,32 @@ render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 	app.settings.show_grid  = false
 	app.selected_cell.valid = false
 
+	// Pre-computar la máscara de agua ANTES de entrar al BeginTextureMode.
+	// La máscara se redimensiona temporalmente al tamaño del preview (1:1 pixel)
+	// para que el shader UV mapping sea exacto, luego se restaura al tamaño
+	// de pantalla para el render normal.
+	cs_preview := f32(app.settings.cell_size)  // zoom=1 en la preview
+
+	// Swap mask to preview size
+	saved_mask_w := water_shader.tex_w
+	saved_mask_h := water_shader.tex_h
+	saved_mask   := water_shader.mask_tex
+	water_shader.mask_tex = raylib.LoadRenderTexture(tex_w, tex_h)
+	water_shader.tex_w    = tex_w
+	water_shader.tex_h    = tex_h
+
+	water_render_mask(m, cs_preview, 0, 0)
+
 	raylib.BeginTextureMode(app.editor.map_browser_preview_tex)
-		render_map(app, m)
+		render_map(app, m, true)
 		render_map_objects(app, m)
 	raylib.EndTextureMode()
+
+	// Restore mask to screen size
+	raylib.UnloadRenderTexture(water_shader.mask_tex)
+	water_shader.mask_tex = saved_mask
+	water_shader.tex_w    = saved_mask_w
+	water_shader.tex_h    = saved_mask_h
 
 	// Restore
 	app.camera_offset_x     = saved_offset_x
@@ -319,6 +593,19 @@ render_paths :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset
 			}
 			if left && top {
 				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, path_color)
+			}
+
+			// Bridge railings — solo en PATH con agua debajo
+			if tile == .PATH && m.water_grid[row][col] {
+				pw := path_width
+				rt := cs * constants.BRIDGE_RAILING_THICK
+				rc := constants.COLOR_BRIDGE_RAILING
+				sg := constants.BRIDGE_RAILING_SEGS
+
+				if !top    { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      pw, rt}, 1, sg, rc) }
+				if !bottom { raylib.DrawRectangleRounded({cx - pw/2,      cy + pw/2 - rt, pw, rt}, 1, sg, rc) }
+				if !left   { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      rt, pw}, 1, sg, rc) }
+				if !right  { raylib.DrawRectangleRounded({cx + pw/2 - rt, cy - pw/2,      rt, pw}, 1, sg, rc) }
 			}
 		}
 	}
@@ -1119,18 +1406,24 @@ render_damage_numbers :: proc(app: ^entities.App_State, cs: f32) {
 		outline_color := raylib.Color{0, 0, 0, 255}
 		outline_color.a = alpha
 
-		// Redondear al entero más cercano; si queda en 0 no dibujar nada
 		display_value := i32(dn.value + 0.5)
 		if display_value == 0 {
 			continue
 		}
-		damage_text := fmt.ctprintf("%d", display_value)
-		font_size := cs * 0.25
-		if dn.is_critical {
-			font_size = cs * 0.5
-		}
 
-		draw_text_with_outline(damage_text, {x, y}, font_size, 0, color, outline_color, 1)
+		if dn.is_money {
+			// Número de dinero: "+$X" en amarillo, tamaño fijo ligeramente mayor
+			money_text := fmt.ctprintf("+$%d", display_value)
+			font_size  := cs * 0.32
+			draw_text_with_outline(money_text, {x, y}, font_size, 0, color, outline_color, 1)
+		} else {
+			damage_text := fmt.ctprintf("%d", display_value)
+			font_size := cs * 0.25
+			if dn.is_critical {
+				font_size = cs * 0.5
+			}
+			draw_text_with_outline(damage_text, {x, y}, font_size, 0, color, outline_color, 1)
+		}
 	}
 }
 draw_tower_tile :: proc(
@@ -1505,67 +1798,505 @@ render_reticle :: proc(x, y, cs: f32, color: raylib.Color) {
 	reticle_len := cs * 0.15
 	corner_thickness := max(2, cs * 0.04)
 
-	// Center position
 	cx := x + cs / 2
 	cy := y + cs / 2
-
-	// Left side
 	rx := cx - reticle_size / 2
 	ry := cy - reticle_size / 2
 
-	// Top-left corner (horizontal + vertical)
-	raylib.DrawLineEx(
-		raylib.Vector2{f32(rx), f32(ry)},
-		raylib.Vector2{f32(rx + reticle_len), f32(ry)},
-		f32(corner_thickness),
-		color,
-	)
-	raylib.DrawLineEx(
-		raylib.Vector2{f32(rx), f32(ry)},
-		raylib.Vector2{f32(rx), f32(ry + reticle_len)},
-		f32(corner_thickness),
-		color,
-	)
-
+	// Top-left corner
+	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry)}, raylib.Vector2{f32(rx + reticle_len), f32(ry)}, f32(corner_thickness), color)
+	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry)}, raylib.Vector2{f32(rx), f32(ry + reticle_len)}, f32(corner_thickness), color)
 	// Top-right corner
-	raylib.DrawLineEx(
-		raylib.Vector2{f32(rx + reticle_size - reticle_len), f32(ry)},
-		raylib.Vector2{f32(rx + reticle_size), f32(ry)},
-		f32(corner_thickness),
-		color,
-	)
-	raylib.DrawLineEx(
-		raylib.Vector2{f32(rx + reticle_size), f32(ry)},
-		raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_len)},
-		f32(corner_thickness),
-		color,
-	)
-
+	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size - reticle_len), f32(ry)}, raylib.Vector2{f32(rx + reticle_size), f32(ry)}, f32(corner_thickness), color)
+	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size), f32(ry)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_len)}, f32(corner_thickness), color)
 	// Bottom-left corner
-	raylib.DrawLineEx(
-		raylib.Vector2{f32(rx), f32(ry + reticle_size - reticle_len)},
-		raylib.Vector2{f32(rx), f32(ry + reticle_size)},
-		f32(corner_thickness),
-		color,
-	)
-	raylib.DrawLineEx(
-		raylib.Vector2{f32(rx), f32(ry + reticle_size)},
-		raylib.Vector2{f32(rx + reticle_len), f32(ry + reticle_size)},
-		f32(corner_thickness),
-		color,
-	)
-
+	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry + reticle_size - reticle_len)}, raylib.Vector2{f32(rx), f32(ry + reticle_size)}, f32(corner_thickness), color)
+	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry + reticle_size)}, raylib.Vector2{f32(rx + reticle_len), f32(ry + reticle_size)}, f32(corner_thickness), color)
 	// Bottom-right corner
-	raylib.DrawLineEx(
-		raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size - reticle_len)},
-		raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)},
-		f32(corner_thickness),
-		color,
-	)
-	raylib.DrawLineEx(
-		raylib.Vector2{f32(rx + reticle_size - reticle_len), f32(ry + reticle_size)},
-		raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)},
-		f32(corner_thickness),
-		color,
-	)
+	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size - reticle_len)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)}, f32(corner_thickness), color)
+	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size - reticle_len), f32(ry + reticle_size)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)}, f32(corner_thickness), color)
+}
+
+// =============================================================================
+// Water layer
+// =============================================================================
+
+// Fase 1: renderiza la máscara de agua (rectángulos blancos) en water_shader.mask_tex.
+// Debe llamarse FUERA de cualquier BeginTextureMode activo.
+water_render_mask :: proc(m: ^entities.Map, cs: f32, camera_offset_x, camera_offset_y: i32) {
+	// No llamar water_shader_resize() aquí: la máscara ya tiene el tamaño
+	// correcto (pantalla en el path normal, preview en render_map_preview_to_texture).
+	raylib.BeginTextureMode(water_shader.mask_tex)
+	raylib.ClearBackground(raylib.Color{0, 0, 0, 0})
+	for row in 0 ..< m.height {
+		for col in 0 ..< m.width {
+			if !m.water_grid[row][col] { continue }
+			x := f32(col) * cs + f32(camera_offset_x)
+			y := f32(row) * cs + f32(camera_offset_y)
+			raylib.DrawRectangleRec({x, y, cs, cs}, raylib.WHITE)
+		}
+	}
+	raylib.EndTextureMode()
+}
+
+// Fase 2: aplica el shader de blur+threshold sobre la máscara pre-computada.
+// Dibuja al render target activo (pantalla o una RenderTexture2D de preview).
+water_render_apply :: proc() {
+	wc := constants.COLOR_WATER
+	ec := constants.COLOR_WATER_EDGE
+	water_color := [4]f32{f32(wc.r)/255, f32(wc.g)/255, f32(wc.b)/255, f32(wc.a)/255}
+	edge_color  := [4]f32{f32(ec.r)/255, f32(ec.g)/255, f32(ec.b)/255, f32(ec.a)/255}
+	texel_size  := [2]f32{1.0 / f32(water_shader.tex_w), 1.0 / f32(water_shader.tex_h)}
+
+	raylib.SetShaderValue(water_shader.shader, water_shader.loc_texel, &texel_size, .VEC2)
+	raylib.SetShaderValue(water_shader.shader, water_shader.loc_water, &water_color, .VEC4)
+	raylib.SetShaderValue(water_shader.shader, water_shader.loc_edge,  &edge_color,  .VEC4)
+
+	raylib.BeginShaderMode(water_shader.shader)
+	src := raylib.Rectangle{
+		0, f32(water_shader.tex_h),
+		f32(water_shader.tex_w), -f32(water_shader.tex_h),
+	}
+	raylib.DrawTextureRec(water_shader.mask_tex.texture, src, {0, 0}, raylib.WHITE)
+	raylib.EndShaderMode()
+}
+
+// Render de agua completo (máscara + shader). Usado en el camino normal de juego/editor.
+render_water_layer :: proc(m: ^entities.Map, cs: f32, camera_offset_x, camera_offset_y: i32, for_preview: bool = false) {
+	// En modo preview la máscara ya fue computada antes de entrar al BeginTextureMode.
+	// Solo aplicamos el shader al render target activo (la textura de preview).
+	if for_preview {
+		water_render_apply()
+		return
+	}
+
+	// Verificar que haya agua antes de hacer los dos passes
+	has_water := false
+	for row in 0 ..< m.height {
+		for col in 0 ..< m.width {
+			if m.water_grid[row][col] { has_water = true; break }
+		}
+		if has_water { break }
+	}
+	if !has_water { return }
+
+	// Asegurar que la máscara tenga el tamaño de pantalla antes del render normal
+	water_shader_resize()
+	water_render_mask(m, cs, camera_offset_x, camera_offset_y)
+	water_render_apply()
+}
+
+// =============================================================================
+// Bird flock ambient animation
+// =============================================================================
+
+update_bird_flock :: proc(app: ^entities.App_State, dt: f32) {
+	f    := &app.bird_flock
+	zoom := app.zoom
+
+	if f.active {
+		f.anim_time += dt
+
+		// Move in world space — velocity is stored as screen px/sec,
+		// divide by zoom to get world px/sec so apparent screen speed is constant.
+		for i in 0 ..< f.bird_count {
+			f.birds[i].pos.x += f.velocity.x / zoom * dt
+			f.birds[i].pos.y += f.velocity.y / zoom * dt
+		}
+
+		// Deactivate when all birds are off-screen (convert world→screen to check)
+		sw   := f32(raylib.GetScreenWidth())
+		sh   := f32(raylib.GetScreenHeight())
+		cx   := f32(app.camera_offset_x)
+		cy   := f32(app.camera_offset_y)
+		margin := f32(100)
+		all_gone := true
+		for i in 0 ..< f.bird_count {
+			sx := f.birds[i].pos.x * zoom + cx
+			sy := f.birds[i].pos.y * zoom + cy
+			if sx > -margin && sx < sw+margin && sy > -margin && sy < sh+margin {
+				all_gone = false
+				break
+			}
+		}
+		if all_gone {
+			f.active = false
+		}
+	} else {
+		f.spawn_timer -= dt
+		if f.spawn_timer <= 0 {
+			spawn_bird_flock(app)
+		}
+	}
+}
+
+spawn_bird_flock :: proc(app: ^entities.App_State) {
+	f    := &app.bird_flock
+	zoom := app.zoom
+	cam_x := f32(app.camera_offset_x)
+	cam_y := f32(app.camera_offset_y)
+	sw   := f32(raylib.GetScreenWidth())
+	sh   := f32(raylib.GetScreenHeight())
+
+	// World-space screen edges: world = (screen - cam) / zoom
+	w_left   := (-cam_x - 60) / zoom
+	w_right  := (sw - cam_x + 60) / zoom
+	w_top    := (-cam_y - 60) / zoom
+	w_bottom := (sh - cam_y + 60) / zoom
+
+	// Use time as a cheap seed
+	t := u32(raylib.GetTime() * 1000)
+	rng :: proc(seed: ^u32) -> f32 {
+		seed^ = seed^ * 1664525 + 1013904223
+		return f32(seed^ & 0xFFFF) / f32(0xFFFF)
+	}
+
+	// Pick a random edge to spawn from (world coords)
+	edge := t % 4  // 0=top, 1=right, 2=bottom, 3=left
+	r := rng(&t)
+
+	origin: raylib.Vector2
+	target: raylib.Vector2
+	w := w_right - w_left
+	h := w_bottom - w_top
+	switch edge {
+	case 0: // top → bottom
+		origin = {w_left + r * w, w_top}
+		target = {w_left + rng(&t) * w, w_bottom}
+	case 1: // right → left
+		origin = {w_right, w_top + r * h}
+		target = {w_left, w_top + rng(&t) * h}
+	case 2: // bottom → top
+		origin = {w_left + r * w, w_bottom}
+		target = {w_left + rng(&t) * w, w_top}
+	case: // left → right
+		origin = {w_left, w_top + r * h}
+		target = {w_right, w_top + rng(&t) * h}
+	}
+
+	// Direction vector
+	dx := target.x - origin.x
+	dy := target.y - origin.y
+	dist := math.sqrt(dx*dx + dy*dy)
+	if dist < 1 { dist = 1 }
+	dir := raylib.Vector2{dx / dist, dy / dist}
+
+	// Velocity stored as screen px/sec; update divides by zoom to get world px/sec
+	f.velocity = {dir.x * constants.BIRD_SPEED, dir.y * constants.BIRD_SPEED}
+	f.anim_time = 0
+
+	// Bird count
+	count_range := constants.BIRD_COUNT_MAX - constants.BIRD_COUNT_MIN
+	f.bird_count = constants.BIRD_COUNT_MIN + i32(rng(&t) * f32(count_range + 1))
+	if f.bird_count > 12 { f.bird_count = 12 }
+
+	// Scatter in world space (BIRD_SCATTER_RADIUS is in screen px, convert)
+	scatter_world := constants.BIRD_SCATTER_RADIUS / zoom
+	for i in 0 ..< f.bird_count {
+		scatter_x := (rng(&t) - 0.5) * 2 * scatter_world
+		scatter_y := (rng(&t) - 0.5) * 2 * scatter_world
+		f.birds[i] = entities.Bird{
+			pos   = {origin.x + scatter_x, origin.y + scatter_y},
+			phase = rng(&t) * math.PI * 2,
+		}
+	}
+
+	f.active = true
+
+	// Schedule next flock
+	interval_range := constants.BIRD_SPAWN_INTERVAL_MAX - constants.BIRD_SPAWN_INTERVAL_MIN
+	f.spawn_timer = constants.BIRD_SPAWN_INTERVAL_MIN + rng(&t) * interval_range
+}
+
+render_bird_flock :: proc(app: ^entities.App_State) {
+	f := &app.bird_flock
+	if !f.active { return }
+
+	zoom  := app.zoom
+	cam_x := f32(app.camera_offset_x)
+	cam_y := f32(app.camera_offset_y)
+	s     := constants.BIRD_SIZE * zoom   // scale with zoom
+	c     := constants.COLOR_BIRD
+	flap_amp := constants.BIRD_WING_AMP * zoom
+
+	for i in 0 ..< f.bird_count {
+		bird := f.birds[i]
+
+		// World → screen
+		cx := bird.pos.x * zoom + cam_x
+		cy := bird.pos.y * zoom + cam_y
+
+		// Wing-tip vertical oscillation
+		flap := math.sin(f.anim_time * constants.BIRD_FLAP_FREQ + bird.phase) * flap_amp
+
+		// M-shape: two V strokes sharing a center point
+		tip_l  := raylib.Vector2{cx - s,     cy + flap}
+		tip_r  := raylib.Vector2{cx + s,     cy + flap}
+		mid_l  := raylib.Vector2{cx - s*0.5, cy + flap*0.4}
+		mid_r  := raylib.Vector2{cx + s*0.5, cy + flap*0.4}
+		center := raylib.Vector2{cx, cy}
+
+		thick := f32(1.5) * zoom
+		raylib.DrawLineEx(tip_l, mid_l, thick, c)
+		raylib.DrawLineEx(mid_l, center, thick, c)
+		raylib.DrawLineEx(center, mid_r, thick, c)
+		raylib.DrawLineEx(mid_r, tip_r, thick, c)
+	}
+}
+
+// =============================================================================
+// Water lily (nenúfar) — planta sobre tile de agua
+// =============================================================================
+
+render_water_lily :: proc(x, y, cs: f32, row, col: i32) {
+	seed := hash_position(row, col)
+	rng :: proc(s: ^u32) -> f32 {
+		s^ = s^ * 1664525 + 1013904223
+		return f32(s^ & 0xFFFF) / f32(0xFFFF)
+	}
+
+	// 2-4 lily pads
+	pad_count := 2 + i32(hash_random(row, col, 0) * 3)  // 2..4
+	for i in 0 ..< pad_count {
+		s := seed + u32(i) * 97
+		px := x + rng(&s) * cs * 0.70 + cs * 0.15
+		py := y + rng(&s) * cs * 0.70 + cs * 0.15
+		pr := cs * (0.14 + rng(&s) * 0.10)  // radius 0.14..0.24 of cs
+
+		// Pad shadow
+		raylib.DrawCircle(i32(px + 1), i32(py + 1), pr, raylib.Color{0, 0, 0, 40})
+		// Pad fill — verde oscuro
+		raylib.DrawCircle(i32(px), i32(py), pr, raylib.Color{40, 110, 50, 230})
+		// Pad highlight — borde más claro
+		raylib.DrawCircleLines(i32(px), i32(py), pr, raylib.Color{70, 150, 70, 160})
+
+		// 50% chance of a small pink flower on this pad
+		if rng(&s) > 0.5 {
+			fr := cs * (0.025 + rng(&s) * 0.035)  // petal radius 0.025..0.06 of cs
+			fc := raylib.Color{255, 150, 190, 240}  // rosa
+			yc := raylib.Color{255, 230, 80, 255}   // amarillo centro
+			// 5 petals around center
+			for p in 0 ..< 5 {
+				a := f32(p) * 1.2566  // 2π/5
+				fpx := px + math.cos(a) * fr * 1.6
+				fpy := py + math.sin(a) * fr * 1.6
+				raylib.DrawCircle(i32(fpx), i32(fpy), fr, fc)
+			}
+			// Yellow center
+			raylib.DrawCircle(i32(px), i32(py), fr * 0.6, yc)
+		}
+	}
+}
+
+// =============================================================================
+// Airdrop rendering
+// =============================================================================
+
+render_airdrops :: proc(app: ^entities.App_State) {
+	if app.state != .PLAYING && app.state != .PAUSED { return }
+
+	cs := f32(app.settings.cell_size) * app.zoom
+	ox := f32(app.camera_offset_x)
+	oy := f32(app.camera_offset_y)
+
+	for &drop in app.sim.airdrops {
+
+		// ── Estela jet (siempre visible mientras el avión voló) ───────────────
+		if drop.trail_len > 1 {
+			for i in 1 ..< int(drop.trail_len) {
+				// Índices en el ring buffer: más antiguo = trail_head
+				i0 := (int(drop.trail_head) + i - 1) % len(drop.trail)
+				i1 := (int(drop.trail_head) + i    ) % len(drop.trail)
+				p0 := drop.trail[i0]
+				p1 := drop.trail[i1]
+				// Alpha crece de 0 (punta vieja) a 180 (punta reciente)
+				alpha := u8(f32(i) / f32(drop.trail_len) * 180)
+				s0 := raylib.Vector2{p0.x * app.zoom + ox, p0.y * app.zoom + oy}
+				s1 := raylib.Vector2{p1.x * app.zoom + ox, p1.y * app.zoom + oy}
+				thick := max(f32(1), app.zoom * 1.5)
+				raylib.DrawLineEx(s0, s1, thick, raylib.Color{255, 255, 255, alpha})
+			}
+		}
+
+		switch drop.phase {
+
+		case .PLANE_FLYING:
+			// Solo dibujar si el avión aún está visible (no marcado como salido)
+			if drop.plane_x < -9000 { break }
+
+			angle := math.atan2_f32(drop.plane_dir_y, drop.plane_dir_x)
+			cos_a := math.cos_f32(angle)
+			sin_a := math.sin_f32(angle)
+
+			// Helper: convierte coordenadas locales (en world units) a screen
+			// lx = eje adelante/atrás, ly = eje izquierda/derecha
+			to_s :: #force_inline proc(pwx, pwy, lx, ly, cos_a, sin_a: f32,
+			                           zoom, ox, oy: f32) -> raylib.Vector2 {
+				wx := pwx + lx*cos_a - ly*sin_a
+				wy := pwy + lx*sin_a + ly*cos_a
+				return {wx*zoom + ox, wy*zoom + oy}
+			}
+			pwx := drop.plane_x
+			pwy := drop.plane_y
+			z   := app.zoom
+
+			// ── Ala delta (triángulo: punta al frente, borde trasero ancho) ────
+			//   Nose:    lx=+14,  ly=0
+			//   L-trail: lx=-7,   ly=-11
+			//   R-trail: lx=-7,   ly=+11
+			v_nose  := to_s(pwx, pwy,  14,   0, cos_a, sin_a, z, ox, oy)
+			v_left  := to_s(pwx, pwy,  -7, -11, cos_a, sin_a, z, ox, oy)
+			v_right := to_s(pwx, pwy,  -7,  11, cos_a, sin_a, z, ox, oy)
+			// Raylib DrawTriangle: CCW en screen (y↓)
+			raylib.DrawTriangle(v_nose, v_right, v_left, constants.COLOR_AIRDROP_PLANE)
+
+			// ── Fuselaje (franja central estrecha) ─────────────────────────────
+			ang_deg := angle * (180.0 / math.PI)
+			body_w  := f32(28) * z
+			body_h  := f32(4)  * z
+			raylib.DrawRectanglePro(
+				{drop.plane_x*z + ox, drop.plane_y*z + oy, body_w, body_h},
+				{body_w / 2, body_h / 2},
+				ang_deg,
+				raylib.Color{220, 220, 230, 255},
+			)
+
+			// ── Dos motores (pequeños rectángulos en el borde trasero del ala) ─
+			eng_w := f32(7) * z
+			eng_h := f32(3) * z
+			sides := [2]f32{-7.5, 7.5}
+			for side in sides {
+				// Centro del motor en world space
+				ecx := pwx + (-5)*cos_a - side*sin_a
+				ecy := pwy + (-5)*sin_a + side*cos_a
+				raylib.DrawRectanglePro(
+					{ecx*z + ox, ecy*z + oy, eng_w, eng_h},
+					{eng_w / 2, eng_h / 2},
+					ang_deg,
+					raylib.Color{80, 80, 100, 255},
+				)
+				// Llama del motor (pequeño círculo naranja en la tobera)
+				nozzle_cx := pwx + (-9)*cos_a - side*sin_a
+				nozzle_cy := pwy + (-9)*sin_a + side*cos_a
+				raylib.DrawCircleV(
+					{nozzle_cx*z + ox, nozzle_cy*z + oy},
+					f32(2.5) * z,
+					raylib.Color{255, 140, 40, 200},
+				)
+			}
+
+		case .BOX_FALLING:
+			// Paracaídas: círculo encogiendo en el tile destino
+			sx := drop.target_wx * app.zoom + ox
+			sy := drop.target_wy * app.zoom + oy
+
+			radius := drop.chute_t * constants.AIRDROP_CHUTE_RADIUS_MAX * cs
+			if radius >= 1 {
+				raylib.DrawCircleV({sx, sy}, radius, constants.COLOR_AIRDROP_CHUTE)
+				raylib.DrawCircleLinesV({sx, sy}, radius, raylib.Color{200, 200, 200, 255})
+			}
+
+		case .BOX_LANDED:
+			sx := drop.target_wx * app.zoom + ox
+			sy := drop.target_wy * app.zoom + oy
+			box_sz : f32 = cs * 0.55
+
+			raylib.DrawRectangleRec(
+				{sx - box_sz/2, sy - box_sz/2, box_sz, box_sz},
+				constants.COLOR_AIRDROP_BOX,
+			)
+			raylib.DrawRectangleLinesEx(
+				{sx - box_sz/2, sy - box_sz/2, box_sz, box_sz},
+				max(1, app.zoom), constants.COLOR_AIRDROP_BOX_DARK,
+			)
+			// Cruz en la tapa
+			pad := box_sz * 0.15
+			raylib.DrawLineEx({sx - box_sz/2 + pad, sy}, {sx + box_sz/2 - pad, sy}, max(1, app.zoom), constants.COLOR_AIRDROP_BOX_DARK)
+			raylib.DrawLineEx({sx, sy - box_sz/2 + pad}, {sx, sy + box_sz/2 - pad}, max(1, app.zoom), constants.COLOR_AIRDROP_BOX_DARK)
+
+			// Contorno pulsante amarillo
+			t     := f32(raylib.GetTime())
+			pulse := f32(0.5) + f32(0.5) * math.sin_f32(t * 4.0)
+			alpha := u8(100) + u8(pulse * 100)
+			raylib.DrawRectangleLinesEx(
+				{sx - box_sz/2 - 3, sy - box_sz/2 - 3, box_sz + 6, box_sz + 6},
+				4, raylib.Color{255, 220, 80, alpha},
+			)
+		}
+
+		// ── Ping convergente (siempre visible en pantalla) ─────────────────
+		if (drop.phase == .BOX_FALLING || drop.phase == .BOX_LANDED) && drop.ping_t > 0 {
+			raw_sx := drop.target_wx * app.zoom + ox
+			raw_sy := drop.target_wy * app.zoom + oy
+			sw_f   := f32(raylib.GetScreenWidth())
+			sh_f   := f32(raylib.GetScreenHeight())
+
+			// Clampear al área visible para que el círculo siempre se vea
+			CLAMP_PAD :: f32(30)
+			ping_sx := clamp(raw_sx, CLAMP_PAD, sw_f - CLAMP_PAD)
+			ping_sy := clamp(raw_sy, CLAMP_PAD, sh_f - CLAMP_PAD)
+
+			radius     := drop.ping_t * constants.AIRDROP_PING_RADIUS * cs
+			ping_alpha := u8(drop.ping_t * 220)
+			ping_col   := constants.COLOR_AIRDROP_PING
+			ping_col.a  = ping_alpha
+			if radius > 0.5 {
+				raylib.DrawCircleLinesV({ping_sx, ping_sy}, radius, ping_col)
+			}
+		}
+
+		// ── Indicador de borde cuando la caja está fuera de pantalla ─────────
+		if drop.phase == .BOX_FALLING || drop.phase == .BOX_LANDED {
+			sx := drop.target_wx * app.zoom + ox
+			sy := drop.target_wy * app.zoom + oy
+			sw := f32(raylib.GetScreenWidth())
+			sh := f32(raylib.GetScreenHeight())
+			PAD :: f32(20)  // distancia desde el borde de pantalla
+
+			on_screen := sx >= 0 && sx <= sw && sy >= 0 && sy <= sh
+			if !on_screen {
+				// Dirección desde el centro de la pantalla hacia la caja
+				cx := sw / 2
+				cy := sh / 2
+				dx := sx - cx
+				dy := sy - cy
+				len := math.sqrt_f32(dx*dx + dy*dy)
+				if len < 0.001 { break }
+				ndx := dx / len
+				ndy := dy / len
+
+				// Intersección con el borde de pantalla (con padding)
+				t_left   := (-PAD - cx)    / ndx if ndx < -0.001 else f32(1e9)
+				t_right  := (sw+PAD - cx)  / ndx if ndx >  0.001 else f32(1e9)
+				t_top    := (-PAD - cy)    / ndy if ndy < -0.001 else f32(1e9)
+				t_bottom := (sh+PAD - cy)  / ndy if ndy >  0.001 else f32(1e9)
+
+				t_hit := min(
+					min(t_left  if t_left  > 0 else f32(1e9), t_right  if t_right  > 0 else f32(1e9)),
+					min(t_top   if t_top   > 0 else f32(1e9), t_bottom if t_bottom > 0 else f32(1e9)),
+				)
+				// Clamp al área visible con margen interno
+				INNER :: f32(16)
+				ix := clamp(cx + ndx * t_hit, INNER, sw - INNER)
+				iy := clamp(cy + ndy * t_hit, INNER, sh - INNER)
+
+				// Triángulo apuntando hacia la caja (punta en ix,iy; base perpendicular)
+				TSIZE :: f32(20)
+				px_perp := -ndy  // perpendicular al vector dirección
+				py_perp :=  ndx
+				tip  := raylib.Vector2{ix,                    iy                   }
+				bl   := raylib.Vector2{ix - ndx*TSIZE + px_perp*TSIZE*0.6,
+				                       iy - ndy*TSIZE + py_perp*TSIZE*0.6}
+				br   := raylib.Vector2{ix - ndx*TSIZE - px_perp*TSIZE*0.6,
+				                       iy - ndy*TSIZE - py_perp*TSIZE*0.6}
+
+				raylib.DrawTriangle(tip, bl, br, constants.COLOR_AIRDROP_PING)
+				// Outline más grueso: dibujar 3 líneas
+				out_col := raylib.Color{200, 160, 20, 255}
+				raylib.DrawLineEx(tip, bl,  3, out_col)
+				raylib.DrawLineEx(bl,  br,  3, out_col)
+				raylib.DrawLineEx(br,  tip, 3, out_col)
+			}
+		}
+	}
 }

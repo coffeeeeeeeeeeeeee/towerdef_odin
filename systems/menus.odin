@@ -3,6 +3,7 @@ package systems
 import "../constants"
 import "../entities"
 import "core:fmt"
+import "core:os"
 import "core:math"
 import "core:strings"
 import "vendor:raylib"
@@ -12,6 +13,14 @@ render_ui :: proc(app: ^entities.App_State) {
 	// no respondan mientras el overlay está activo. Usa ui_modal_blocks (separado
 	// de ui_click_blocks) para no interferir con los paneles normales.
 	if app.state == .PLAYING && app.sim.card_selection_active {
+		sw := f32(raylib.GetScreenWidth())
+		sh := f32(raylib.GetScreenHeight())
+		append(&ui_modal_blocks, raylib.Rectangle{0, 0, sw, sh})
+	}
+
+	// El modal de confirmación Sí/No también es modal: bloquea toda la pantalla
+	// mientras está activo (mismo patrón que el shop, ver arriba).
+	if app.confirm_modal.active {
 		sw := f32(raylib.GetScreenWidth())
 		sh := f32(raylib.GetScreenHeight())
 		append(&ui_modal_blocks, raylib.Rectangle{0, 0, sw, sh})
@@ -44,6 +53,33 @@ render_ui :: proc(app: ^entities.App_State) {
 		render_card_selection_overlay(app)
 	}
 
+	// Modal de confirmación Sí/No — capa superior absoluta, encima de todo
+	if app.confirm_modal.active {
+		switch render_confirm_modal(app.confirm_modal.text) {
+		case .CONFIRMED:
+			action := app.confirm_modal.action
+			app.confirm_modal = entities.Confirm_Modal{}
+			switch action {
+			case .NEW_GAME:
+				app.meta = entities.Meta_State{}
+				entities.meta_save(&app.meta)
+				_open_map_browser(app)
+			case .RESTART_RUN:
+				map_name := app.editor.current_map_name
+				simulation_set_pause(app, false)
+				simulation_reset(app)
+				entities.map_load(&app.editor.game_map, map_name)
+				entities.app_set_state(app, .PLAYING)
+			case .EXIT_GAME:
+				app.should_quit = true
+			case .NONE:
+			}
+		case .CANCELLED:
+			app.confirm_modal = entities.Confirm_Modal{}
+		case .NONE:
+		}
+	}
+
 	// La mano se renderiza siempre al frente durante PLAYING:
 	// encima del shop overlay para que las cartas sean visibles y vendibles en todo momento.
 	if app.state == .PLAYING {
@@ -70,33 +106,19 @@ render_ui :: proc(app: ^entities.App_State) {
 }
 
 // Render gradient background with subtle pattern for menus
-render_background :: proc() {
-	// Use GetRenderWidth/Height for accurate fullscreen dimensions
-	width := raylib.GetRenderWidth()
-	height := raylib.GetRenderHeight()
+// render_background is a no-op: the nebula shader is drawn once at the start
+// of render_game (before render_ui), so it already sits behind everything.
+render_background :: proc() {}
 
-	// Draw gradient rectangle manually
-	for y in 0 ..< height {
-		t := f32(y) / f32(height)
-		r := u8(f32(constants.MENU_BG_TOP_COLOR.r) * (1 - t) + f32(constants.MENU_BG_BOTTOM_COLOR.r) * t)
-		g := u8(f32(constants.MENU_BG_TOP_COLOR.g) * (1 - t) + f32(constants.MENU_BG_BOTTOM_COLOR.g) * t)
-		b := u8(f32(constants.MENU_BG_TOP_COLOR.b) * (1 - t) + f32(constants.MENU_BG_BOTTOM_COLOR.b) * t)
-		raylib.DrawLine(0, y, width, y, raylib.Color{r, g, b, 255})
-	}
-
-	// Calculate diagonal offset based on time (wrap around grid spacing)
-	time := f32(raylib.GetTime())
-	offset := i32(time * constants.MENU_GRID_SPEED) % constants.MENU_GRID_SPACING
-	offset_x := offset
-	offset_y := offset
-
-	// Draw subtle grid pattern with diagonal movement
-	for x := offset_x - constants.MENU_GRID_SPACING; x < width + constants.MENU_GRID_SPACING; x += constants.MENU_GRID_SPACING {
-		raylib.DrawLine(x, 0, x, height, constants.MENU_GRID_COLOR)
-	}
-	for y := offset_y - constants.MENU_GRID_SPACING; y < height + constants.MENU_GRID_SPACING; y += constants.MENU_GRID_SPACING {
-		raylib.DrawLine(0, y, width, y, constants.MENU_GRID_COLOR)
-	}
+_open_map_browser :: proc(app: ^entities.App_State) {
+	entities.map_file_entries_destroy(&app.editor.map_browser_entries)
+	app.editor.map_browser_entries       = entities.map_list_saved_entries()
+	app.editor.map_browser_scroll        = 0
+	app.editor.map_browser_selected      = -1
+	app.editor.map_browser_preview       = entities.map_init()
+	app.editor.map_browser_preview_valid = false
+	app.editor.show_map_browser          = true
+	app.editor.map_browser_play_mode     = true
 }
 
 // Render menu UI
@@ -131,82 +153,86 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 
 	// Buttons - each with individual width based on its translation text
 	menu_button_height := i32(constants.UI_BUTTON_HEIGHT)
-	button_font_size := f32(constants.UI_BUTTON_FONT_SIZE)
-	// Calculate vertical centering for all buttons
-	total_buttons_height := 5 * menu_button_height + 4 * i32(10)
-	start_y := (i32(screen_height) - total_buttons_height) / 2
+	button_font_size   := f32(constants.UI_BUTTON_FONT_SIZE)
+	gap                := i32(10)
 
-	// Play button
-	play_text := constants.get_text("MENU_BUTTON_PLAY")
-	play_button_y := start_y
-	play_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(play_text, context.temp_allocator), button_font_size, 0).x)
-	play_width := play_text_width
-	play_x := screen_width / 2 - play_width / 2
-	if render_button(
-		play_text,
-		{f32(play_x), f32(play_button_y), f32(play_width), f32(menu_button_height)},
-	) {
-		// Abrir el browser de mapas en play mode para que el usuario elija el mapa
-		entities.map_file_entries_destroy(&app.editor.map_browser_entries)
-		app.editor.map_browser_entries = entities.map_list_saved_entries()
-		app.editor.map_browser_scroll   = 0
-		app.editor.map_browser_selected = -1
-		app.editor.map_browser_preview  = entities.map_init()
-		app.editor.map_browser_preview_valid = false
-		app.editor.show_map_browser = true
-		app.editor.map_browser_play_mode = true
+	savegame_exists := os.exists(entities.META_SAVE_PATH)
+
+	// Slot count: Continue (conditional) + Nueva Partida + Editor + Settings + Progression + Exit
+	slot_count := (4 if constants.DEVELOPER else 3) + (1 if savegame_exists else 0)
+	total_buttons_height := slot_count * int(menu_button_height) + (slot_count - 1) * int(gap)
+	start_y := (i32(screen_height) - i32(total_buttons_height)) / 2
+	current_y := start_y
+
+	// Continue (only if savegame exists)
+	if savegame_exists {
+		continue_text := constants.get_text("MENU_BUTTON_CONTINUE")
+		continue_w    := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(continue_text, context.temp_allocator), button_font_size, 0).x)
+		if render_button(
+			continue_text,
+			{f32(screen_width / 2 - continue_w / 2), f32(current_y), f32(continue_w), f32(menu_button_height)},
+		) {
+			_open_map_browser(app)
+		}
+		current_y += menu_button_height + gap
 	}
 
-	// Editor button
-	editor_text := constants.get_text("MENU_BUTTON_EDITOR")
-	editor_button_y := play_button_y + menu_button_height + i32(10)
-	editor_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(editor_text, context.temp_allocator), button_font_size, 0).x)
-	editor_width := editor_text_width
-	editor_x := screen_width / 2 - editor_width / 2
+	// Nueva Partida
+	new_game_text := constants.get_text("MENU_BUTTON_NEW_GAME")
+	new_game_w    := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(new_game_text, context.temp_allocator), button_font_size, 0).x)
 	if render_button(
-		editor_text,
-		{f32(editor_x), f32(editor_button_y), f32(editor_width), f32(menu_button_height)},
+		new_game_text,
+		{f32(screen_width / 2 - new_game_w / 2), f32(current_y), f32(new_game_w), f32(menu_button_height)},
 	) {
-		entities.app_set_state(app, .EDITOR)
+		app.confirm_modal = entities.Confirm_Modal{
+			active = true,
+			text   = "¿Iniciar una nueva campaña?\nSe reiniciará tu progreso guardado.",
+			action = .NEW_GAME,
+		}
+	}
+	current_y += menu_button_height + gap
+
+	// Editor (solo en modo Developer)
+	if constants.DEVELOPER {
+		txt := constants.get_text("MENU_BUTTON_EDITOR")
+		w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(txt, context.temp_allocator), button_font_size, 0).x)
+		if render_button(txt, {f32(screen_width / 2 - w / 2), f32(current_y), f32(w), f32(menu_button_height)}) {
+			entities.app_set_state(app, .EDITOR)
+		}
+		current_y += menu_button_height + gap
 	}
 
-	// Settings button
-	settings_text := constants.get_text("MENU_BUTTON_SETTINGS")
-	settings_button_y := editor_button_y + menu_button_height + i32(10)
-	settings_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(settings_text, context.temp_allocator), button_font_size, 0).x)
-	settings_width := settings_text_width
-	settings_x := screen_width / 2 - settings_width / 2
-	if render_button(
-		settings_text,
-		{f32(settings_x), f32(settings_button_y), f32(settings_width), f32(menu_button_height)},
-	) {
-		entities.app_set_state(app, .SETTINGS)
+	// Settings
+	{
+		txt := constants.get_text("MENU_BUTTON_SETTINGS")
+		w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(txt, context.temp_allocator), button_font_size, 0).x)
+		if render_button(txt, {f32(screen_width / 2 - w / 2), f32(current_y), f32(w), f32(menu_button_height)}) {
+			entities.app_set_state(app, .SETTINGS)
+		}
+		current_y += menu_button_height + gap
 	}
 
-	// Progression button
-	prog_text := constants.get_text("MENU_BUTTON_PROGRESSION")
-	prog_button_y := settings_button_y + menu_button_height + i32(10)
-	prog_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(prog_text, context.temp_allocator), button_font_size, 0).x)
-	prog_width := prog_text_width
-	prog_x := screen_width / 2 - prog_width / 2
-	if render_button(
-		prog_text,
-		{f32(prog_x), f32(prog_button_y), f32(prog_width), f32(menu_button_height)},
-	) {
-		entities.app_set_state(app, .PROGRESSION)
+	// Progression
+	{
+		txt := constants.get_text("MENU_BUTTON_PROGRESSION")
+		w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(txt, context.temp_allocator), button_font_size, 0).x)
+		if render_button(txt, {f32(screen_width / 2 - w / 2), f32(current_y), f32(w), f32(menu_button_height)}) {
+			entities.app_set_state(app, .PROGRESSION)
+		}
+		current_y += menu_button_height + gap
 	}
 
-	// Exit button
-	exit_text := constants.get_text("MENU_BUTTON_EXIT")
-	exit_button_y := prog_button_y + menu_button_height + i32(10)
-	exit_text_width := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(exit_text, context.temp_allocator), button_font_size, 0).x)
-	exit_width := exit_text_width
-	exit_x := screen_width / 2 - exit_width / 2
-	if render_button(
-		exit_text,
-		{f32(exit_x), f32(exit_button_y), f32(exit_width), f32(menu_button_height)},
-	) {
-		app.should_quit = true
+	// Exit
+	{
+		txt := constants.get_text("MENU_BUTTON_EXIT")
+		w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(txt, context.temp_allocator), button_font_size, 0).x)
+		if render_button(txt, {f32(screen_width / 2 - w / 2), f32(current_y), f32(w), f32(menu_button_height)}) {
+			app.confirm_modal = entities.Confirm_Modal{
+				active = true,
+				text   = "¿Salir del juego?",
+				action = .EXIT_GAME,
+			}
+		}
 	}
 
 	// Browser de mapas en play mode (encima del menú)
@@ -265,14 +291,16 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		)
 	}
 
-	// Upcoming waves preview — 3 icons horizontal
+	// Upcoming waves preview — visible solo con la reliquia Scout activa; muestra N oleadas según stacks
+	if app.sim.relic_stacks[.SCOUT] > 0 {
 	hud_py += hud_panel_h + hud_panel_gap
 	{
 		c := render_info_panel(app, {hud_px, hud_py, hud_panel_w, hud_panel_h}, constants.get_text("UI_UPCOMING"))
 
+		scout_slots := min(app.sim.relic_stacks[.SCOUT], 3)
 		base_wave := app.sim.wave_number
 		icon_r    : f32 = 9
-		slot_w    := c.width / 3
+		slot_w    := c.width / f32(scout_slots)
 		cy        := c.y + c.height / 2
 
 		// Helper: nombre del sub-tipo para el tooltip del panel de próximas oleadas
@@ -288,7 +316,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			}
 		}
 
-		for i in 0 ..< 3 {
+		for i in 0 ..< scout_slots {
 			wave_n    := base_wave + 1 + i32(i)
 			cx        := c.x + (f32(i) + 0.5) * slot_w
 
@@ -358,6 +386,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			render_label_tooltip(app, tooltip, hit_rect)
 		}
 	}
+	} // Scout panel
 
 	font_size := f32(constants.UI_BUTTON_FONT_SIZE) // usado por el resto del proc
 
@@ -415,20 +444,28 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	)
 	start_width := start_text_width + padding
 
+	// Skip Shop toggle button width
+	skip_shop_text := "Skip Shop"
+	skip_shop_text_width := i32(
+		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(skip_shop_text, context.temp_allocator), font_size, 0).x,
+	)
+	skip_shop_width := skip_shop_text_width + padding
+
 	// Calculate total width based on visible buttons
-	visible_button_count := i32(5) // Start + Pause + 1x + 2x + 3x
-	gap_count := i32(4)
+	visible_button_count := i32(6) // Start + Skip Shop + Pause + 1x + 2x + 3x
+	gap_count := i32(5)
 	if show_next_wave_button {
 		visible_button_count += 1
 		gap_count += 1
 	}
-	total_buttons_width := pause_width + speed1_width + speed2_width + speed3_width + start_width + gap * gap_count + constants.UI_MARGIN_X
+	total_buttons_width := pause_width + speed1_width + speed2_width + speed3_width + start_width + skip_shop_width + gap * gap_count + constants.UI_MARGIN_X
 	if show_next_wave_button {
 		total_buttons_width += next_wave_width
 	}
 
 	start_x  := screen_width - total_buttons_width
-	next_wave_x := start_x + start_width + gap
+	skip_shop_x := start_x + start_width + gap
+	next_wave_x := skip_shop_x + skip_shop_width + gap
 	pause_x  := next_wave_x + (show_next_wave_button ? next_wave_width + gap : 0)
 	speed1_x := pause_x + pause_width + gap
 	speed2_x := speed1_x + speed1_width + gap
@@ -458,6 +495,20 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			simulation_set_pause(app, false)
 			start_next_wave(app)
 		}
+	}
+
+	// Skip Shop toggle — activa/desactiva el cierre automático de la tienda al final de cada oleada
+	if render_button(
+		skip_shop_text,
+		{f32(skip_shop_x), f32(button_y), f32(skip_shop_width), f32(constants.UI_BUTTON_HEIGHT)},
+		1,
+		true,
+		no_color,
+		app.settings.auto_skip_shop ? active_green : no_color,
+		app.settings.auto_skip_shop ? active_green_hover : no_color,
+		app.settings.auto_skip_shop ? active_green_press : no_color,
+	) {
+		app.settings.auto_skip_shop = !app.settings.auto_skip_shop
 	}
 
 	// Next Wave button (hidden when auto-start is enabled)
@@ -573,39 +624,33 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 			{constants.get_text("EDITOR_TOOL_OBSTACLE"), .OBSTACLE},
 			{constants.get_text("EDITOR_TOOL_TREE"), .ACCESSORY_TREE},
 			{constants.get_text("EDITOR_TOOL_BLOCK"), .ACCESSORY_BLOCK},
+			{constants.get_text("EDITOR_TOOL_WATER"), .WATER},
 		}
 
-		button_width := i32(70) // slightly narrower to fit 13 buttons
-		total_width := i32(len(tools)) * button_width + i32(len(tools) - 1) * 5
-		start_x := (screen_width - total_width) / 2
+		preview_size := f32(34)
+		btn_pad      := i32(5)
+		btn_size     := i32(preview_size) + btn_pad * 2  // botón se ajusta al ícono
+		gap          := i32(4)
+		total_width  := i32(len(tools)) * btn_size + i32(len(tools) - 1) * gap
+		start_x      := (screen_width - total_width) / 2
 
 		for tool, i in tools {
-			x := start_x + i32(i) * (button_width + 5)
-			button_height := i32(45) // Fixed height to fit 2 lines at 12px
-			y := i32(screen_height - button_height - bottom_margin)
+			x := start_x + i32(i) * (btn_size + gap)
+			y := i32(screen_height) - btn_size - bottom_margin
 
-			is_selected := app.editor.current_tool == tool.tile
+			is_selected  := app.editor.current_tool == tool.tile
 			button_color := raylib.LIGHTGRAY
-			if is_selected {
-				button_color = raylib.BLUE
-			}
+			if is_selected { button_color = raylib.BLUE }
 
-			btn_rect := raylib.Rectangle{f32(x), f32(y), f32(button_width), f32(button_height)}
+			btn_rect := raylib.Rectangle{f32(x), f32(y), f32(btn_size), f32(btn_size)}
 
-			if render_button_with_color(
-				   "",
-				   btn_rect,
-				   button_color,
-				   4,
-				   12.0,
-			   ) {
+			if render_button_with_color("", btn_rect, button_color, 4, 12.0) {
 				app.editor.current_tool = tool.tile
 			}
 
-			// Render visual preview inside the button (positioned at top)
-			preview_size := f32(24) // Slightly smaller to fit better
-			preview_x := f32(x) + (f32(button_width) - preview_size) / 2
-			preview_y := f32(y) + 2 // Small top padding
+			// Preview centrado en el botón
+			preview_x := f32(x) + f32(btn_pad)
+			preview_y := f32(y) + f32(btn_pad)
 
 			switch tool.tile {
 			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
@@ -641,8 +686,16 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 				render_spawn(preview_x, preview_y, preview_size)
 			case .GOAL:
 				render_goal(preview_x, preview_y, preview_size)
+			case .WATER:
+				// Preview: rectángulo redondeado azul
+				raylib.DrawRectangleRounded(
+					{preview_x, preview_y, preview_size, preview_size},
+					0.4, 6, constants.COLOR_WATER,
+				)
 			}
 
+			// Tooltip con el nombre del tile al pasar el mouse
+			render_label_tooltip(app, tool.name, btn_rect)
 		}
 	}
 }
@@ -714,6 +767,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 		{f32(current_x), f32(y_pos), f32(w_test), f32(constants.UI_BUTTON_HEIGHT)},
 	) {
 		if simulation_init_from_editor(app) {
+			simulation_fit_camera(app, f32(raylib.GetScreenWidth()), f32(raylib.GetScreenHeight()))
 			entities.app_set_state(app, .PLAYING)
 		} else {
 			entities.add_toast(app, constants.get_text("EDITOR_ERROR_NO_PATH"), .ERROR, 3.0)
@@ -991,63 +1045,135 @@ render_map_browser :: proc(app: ^entities.App_State) {
 		}
 	}
 
-	// ── Footer: Cerrar (left) + Abrir (right, when selection exists) ──────────
-	btn_h  := i32(constants.UI_MAP_BROWSER_CLOSE_HEIGHT)
-	btn_y  := panel_y + panel_h - btn_h - i32(constants.UI_MAP_BROWSER_CLOSE_BTN_MARGIN)
-	btn_w  := i32(constants.UI_BUTTON_WIDTH)
-
+	// ── Footer ───────────────────────────────────────────────────────────────
+	btn_h   := i32(constants.UI_MAP_BROWSER_CLOSE_HEIGHT)
+	btn_y   := panel_y + panel_h - btn_h - i32(constants.UI_MAP_BROWSER_CLOSE_BTN_MARGIN)
+	btn_w   := i32(constants.UI_BUTTON_WIDTH)
 	close_x := panel_x + side_pad * 2
-	if render_button("Cerrar", {f32(close_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
-		entities.map_destroy(&app.editor.map_browser_preview)
-		app.editor.map_browser_preview_valid = false
-		if app.editor.map_browser_preview_tex_valid {
-			raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
-			app.editor.map_browser_preview_tex_valid = false
-		}
-		app.editor.show_map_browser = false
-		app.editor.map_browser_play_mode = false
-		play_sound(.CLOSE, .UI)
-	}
+	open_x  := panel_x + panel_w - btn_w - side_pad * 2
 
-	if app.editor.map_browser_preview_valid {
-		open_x := panel_x + panel_w - btn_w - side_pad * 2
-		if render_button("Abrir", {f32(open_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
-			sel := app.editor.map_browser_selected
-			if sel >= 0 && int(sel) < len(app.editor.map_browser_entries) {
-				fname := app.editor.map_browser_entries[sel].name
-				editor_push_undo(app)
-				if entities.map_load(&app.editor.game_map, fname) {
-					app.editor.current_biome    = app.editor.game_map.biome
-					app.editor.current_map_name = strings.clone(fname)
-					entities.map_destroy(&app.editor.map_browser_preview)
-					app.editor.map_browser_preview_valid = false
-					if app.editor.map_browser_preview_tex_valid {
-						raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
-						app.editor.map_browser_preview_tex_valid = false
+	if app.editor.map_browser_renaming {
+		// ── Modo rename: [Cancelar] [  input  ] [Confirmar] ──────────────────
+		input_x := f32(close_x + btn_w + 8)
+		input_w := f32(open_x - btn_w - 8) - input_x
+		confirmed := render_input(
+			&app.editor.map_browser_rename_input,
+			{input_x, f32(btn_y), input_w, f32(btn_h)},
+			app.delta_time,
+		)
+
+		if render_button("Cancelar", {f32(close_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
+			app.editor.map_browser_renaming = false
+		}
+
+		btn_confirm := render_button("Confirmar", {f32(open_x - btn_w), f32(btn_y), f32(btn_w), f32(btn_h)})
+		if confirmed || btn_confirm {
+			sel      := app.editor.map_browser_selected
+			new_name := entities.input_str(&app.editor.map_browser_rename_input)
+			if new_name == "" {
+				entities.add_toast(app, "El nombre no puede estar vacío", .ERROR, 2.5)
+				play_sound(.ERROR, .UI)
+			} else if sel >= 0 && int(sel) < len(app.editor.map_browser_entries) {
+				old_name := app.editor.map_browser_entries[sel].name
+				if new_name == old_name {
+					app.editor.map_browser_renaming = false
+				} else if entities.map_rename(old_name, new_name) {
+					// Actualizar current_map_name si se renombró el mapa activo
+					if app.editor.current_map_name == old_name {
+						delete(app.editor.current_map_name)
+						app.editor.current_map_name = strings.clone(new_name)
 					}
-					app.editor.show_map_browser = false
-					if app.editor.map_browser_play_mode {
-						app.editor.map_browser_play_mode = false
-						if simulation_init_from_editor(app) {
-							entities.app_set_state(app, .PLAYING)
+					// Refrescar la lista y seleccionar el nuevo nombre
+					entities.map_file_entries_destroy(&app.editor.map_browser_entries)
+					app.editor.map_browser_entries = entities.map_list_saved_entries()
+					app.editor.map_browser_selected = -1
+					for entry, i in app.editor.map_browser_entries {
+						if entry.name == new_name {
+							app.editor.map_browser_selected = i32(i)
+							break
+						}
+					}
+					app.editor.map_browser_renaming = false
+					entities.add_toast(app, fmt.tprintf("Renombrado a: %s", new_name), .SUCCESS, 2.0)
+					play_sound(.CONFIRMATION, .UI)
+				} else {
+					entities.add_toast(app, fmt.tprintf("No se pudo renombrar: %s", old_name), .ERROR, 3.0)
+					play_sound(.ERROR, .UI)
+				}
+			}
+		}
+	} else {
+		// ── Modo normal: [Cerrar]  [Renombrar]  [Abrir] ──────────────────────
+		if render_button("Cerrar", {f32(close_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
+			entities.map_destroy(&app.editor.map_browser_preview)
+			app.editor.map_browser_preview_valid = false
+			if app.editor.map_browser_preview_tex_valid {
+				raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
+				app.editor.map_browser_preview_tex_valid = false
+			}
+			app.editor.show_map_browser = false
+			app.editor.map_browser_play_mode = false
+			play_sound(.CLOSE, .UI)
+		}
+
+		// Renombrar — solo en modo editor (no play mode), con un mapa seleccionado
+		sel_valid := app.editor.map_browser_selected >= 0 &&
+		             int(app.editor.map_browser_selected) < len(app.editor.map_browser_entries)
+		if sel_valid && !app.editor.map_browser_play_mode {
+			rename_x := close_x + btn_w + 8
+			if render_button("Renombrar", {f32(rename_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
+				sel      := app.editor.map_browser_selected
+				old_name := app.editor.map_browser_entries[sel].name
+				entities.input_clear(&app.editor.map_browser_rename_input)
+				_input_insert_str(&app.editor.map_browser_rename_input, old_name)
+				app.editor.map_browser_rename_input.sel_anchor = 0
+				app.editor.map_browser_rename_input.cursor     = app.editor.map_browser_rename_input.len
+				app.editor.map_browser_rename_input.focused    = true
+				app.editor.map_browser_renaming = true
+				play_sound(.CLICK, .UI)
+			}
+		}
+
+		if app.editor.map_browser_preview_valid {
+			if render_button("Abrir", {f32(open_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
+				sel := app.editor.map_browser_selected
+				if sel >= 0 && int(sel) < len(app.editor.map_browser_entries) {
+					fname := app.editor.map_browser_entries[sel].name
+					editor_push_undo(app)
+					if entities.map_load(&app.editor.game_map, fname) {
+						app.editor.current_biome    = app.editor.game_map.biome
+						app.editor.current_map_name = strings.clone(fname)
+						entities.map_destroy(&app.editor.map_browser_preview)
+						app.editor.map_browser_preview_valid = false
+						if app.editor.map_browser_preview_tex_valid {
+							raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
+							app.editor.map_browser_preview_tex_valid = false
+						}
+						app.editor.show_map_browser = false
+						if app.editor.map_browser_play_mode {
+							app.editor.map_browser_play_mode = false
+							if simulation_init_from_editor(app) {
+								simulation_fit_camera(app, f32(raylib.GetScreenWidth()), f32(raylib.GetScreenHeight()))
+								entities.app_set_state(app, .PLAYING)
+							} else {
+								entities.add_toast(app, constants.get_text("EDITOR_ERROR_NO_PATH"), .ERROR, 3.0)
+								play_sound(.ERROR, .UI)
+							}
 						} else {
-							entities.add_toast(app, constants.get_text("EDITOR_ERROR_NO_PATH"), .ERROR, 3.0)
-							play_sound(.ERROR, .UI)
+							entities.add_toast(app, fmt.tprintf("Loaded: %s", fname), .SUCCESS, 2.0)
+							play_sound(.CONFIRMATION, .UI)
 						}
 					} else {
-						entities.add_toast(app, fmt.tprintf("Loaded: %s", fname), .SUCCESS, 2.0)
-						play_sound(.CONFIRMATION, .UI)
+						// Roll back the undo push since nothing changed
+						if len(app.editor.undo_stack) > 0 {
+							last := len(app.editor.undo_stack) - 1
+							snap := app.editor.undo_stack[last]
+							ordered_remove(&app.editor.undo_stack, last)
+							entities.map_snapshot_destroy(&snap)
+						}
+						entities.add_toast(app, fmt.tprintf("Failed to load: %s", fname), .ERROR, 3.0)
+						play_sound(.ERROR, .UI)
 					}
-				} else {
-					// Roll back the undo push since nothing changed
-					if len(app.editor.undo_stack) > 0 {
-						last := len(app.editor.undo_stack) - 1
-						snap := app.editor.undo_stack[last]
-						ordered_remove(&app.editor.undo_stack, last)
-						entities.map_snapshot_destroy(&snap)
-					}
-					entities.add_toast(app, fmt.tprintf("Failed to load: %s", fname), .ERROR, 3.0)
-					play_sound(.ERROR, .UI)
 				}
 			}
 		}
@@ -1078,7 +1204,7 @@ render_pause_menu :: proc(app: ^entities.App_State) {
 	btn_gap    := i32(10)
 	btn_fs     := f32(constants.UI_BUTTON_FONT_SIZE)
 
-	total_h := 3 * btn_h + 2 * btn_gap
+	total_h := 4 * btn_h + 3 * btn_gap
 	start_y := (screen_height - total_h) / 2
 
 	// Resume
@@ -1093,10 +1219,25 @@ render_pause_menu :: proc(app: ^entities.App_State) {
 		entities.app_set_state(app, .PLAYING)
 	}
 
+	// Restart
+	restart_txt := constants.get_text("PAUSE_RESTART")
+	restart_w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(restart_txt, context.temp_allocator), btn_fs, 0).x)
+	restart_y   := resume_y + btn_h + btn_gap
+	if render_button(
+		restart_txt,
+		{f32(screen_width / 2 - restart_w / 2), f32(restart_y), f32(restart_w), f32(btn_h)},
+	) {
+		app.confirm_modal = entities.Confirm_Modal{
+			active = true,
+			text   = "¿Reiniciar la partida?\nPerderás el progreso de esta corrida.",
+			action = .RESTART_RUN,
+		}
+	}
+
 	// Settings
 	settings_txt := constants.get_text("MENU_BUTTON_SETTINGS")
 	settings_w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(settings_txt, context.temp_allocator), btn_fs, 0).x)
-	settings_y   := resume_y + btn_h + btn_gap
+	settings_y   := restart_y + btn_h + btn_gap
 	if render_button(
 		settings_txt,
 		{f32(screen_width / 2 - settings_w / 2), f32(settings_y), f32(settings_w), f32(btn_h)},
@@ -1773,12 +1914,21 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	}
 
 	// Level subtitle — separate from type_name so the title doesn't overflow at size 22
+	// Desglosa las tres fuentes de nivel: manual + Potenciador (enhance) + Cryptobro
 	level_text: string
-	if tower.enhance_bonus > 0 {
-		base_level := tower.level - tower.enhance_bonus
-		level_text = fmt.tprintf("%s %d + %d", constants.get_text("PANEL_LEVEL_ABBREV"), base_level, tower.enhance_bonus)
-	} else {
-		level_text = fmt.tprintf("%s %d", constants.get_text("PANEL_LEVEL_ABBREV"), tower.level)
+	{
+		base_level := tower.level - tower.enhance_bonus - tower.cryptobro_bonus
+		abbrev     := constants.get_text("PANEL_LEVEL_ABBREV")
+		switch {
+		case tower.enhance_bonus > 0 && tower.cryptobro_bonus > 0:
+			level_text = fmt.tprintf("%s %d + %d + %d", abbrev, base_level, tower.enhance_bonus, tower.cryptobro_bonus)
+		case tower.enhance_bonus > 0:
+			level_text = fmt.tprintf("%s %d + %d", abbrev, base_level, tower.enhance_bonus)
+		case tower.cryptobro_bonus > 0:
+			level_text = fmt.tprintf("%s %d + %d", abbrev, base_level, tower.cryptobro_bonus)
+		case:
+			level_text = fmt.tprintf("%s %d", abbrev, tower.level)
+		}
 	}
 
 	// Render panel background and get content area (title = type name only)
@@ -1860,7 +2010,7 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	}
 
 	// Upgrade button — ENHANCE se limita a nivel 5; resto se limita a nivel 20
-	base_level      := tower.level - tower.enhance_bonus
+	base_level      := tower.level - tower.enhance_bonus - tower.cryptobro_bonus
 	manual_cap      := constants.TOWER_MAX_MANUAL_LEVEL if tower.type != .ENHANCE else constants.ENHANCE_MAX_LEVEL
 	at_max_manual   := base_level >= manual_cap
 	at_max_absolute := tower.level >= constants.TOWER_MAX_LEVEL
@@ -2105,9 +2255,136 @@ apply_relic_card :: proc(app: ^entities.App_State, kind: entities.Card_Kind) {
 	}
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers de sinergia para el shop — devuelven si una carta del shop combina con
+// lo que el jugador ya tiene (relictos acumulados o composición del mazo/torres).
+// ─────────────────────────────────────────────────────────────────────────────
+
+shop_player_has_tower_type :: proc(sim: ^entities.Simulation, t: constants.Tower_Type) -> bool {
+	for tower in sim.towers {
+		if tower.type == t { return true }
+	}
+	for card in sim.hand {
+		if card.kind == .TOWER && card.tower_type == t { return true }
+	}
+	for card in sim.deck {
+		if card.kind == .TOWER && card.tower_type == t { return true }
+	}
+	return false
+}
+
+shop_player_has_n_same_tower_placed :: proc(sim: ^entities.Simulation, n: int) -> bool {
+	counts: [constants.Tower_Type]int
+	for tower in sim.towers {
+		counts[tower.type] += 1
+	}
+	for t in constants.Tower_Type {
+		if counts[t] >= n { return true }
+	}
+	return false
+}
+
+shop_player_has_n_same_tower_type_placed :: proc(sim: ^entities.Simulation, t: constants.Tower_Type, n: int) -> bool {
+	count := 0
+	for tower in sim.towers {
+		if tower.type == t { count += 1 }
+	}
+	return count >= n
+}
+
+shop_player_has_any_tower_card :: proc(sim: ^entities.Simulation) -> bool {
+	for card in sim.hand {
+		if card.kind == .TOWER { return true }
+	}
+	for card in sim.deck {
+		if card.kind == .TOWER { return true }
+	}
+	return false
+}
+
+// Devuelve true si comprar la carta combina con el estado actual del jugador.
+// Se usa para dibujar un badge de sinergia en el shop.
+shop_card_has_synergy :: proc(sim: ^entities.Simulation, card: entities.Card) -> bool {
+	if entities.is_relic(card.kind) {
+		#partial switch card.kind {
+		case .FROZEN_AMP:
+			return shop_player_has_tower_type(sim, .ICE)
+		case .WARMED_UP:
+			return shop_player_has_tower_type(sim, .LASER) || shop_player_has_tower_type(sim, .MORTAR)
+		case .FORMATION:
+			return shop_player_has_n_same_tower_placed(sim, 2)
+		case .CRYPTOBRO:
+			return shop_player_has_tower_type(sim, .SNIPER) || shop_player_has_tower_type(sim, .MORTAR)
+		case .BLOODLUST:
+			return shop_player_has_tower_type(sim, .ARCHER) ||
+			       shop_player_has_tower_type(sim, .MISSILE) ||
+			       shop_player_has_tower_type(sim, .TESLA)
+		case .VETERAN:
+			return shop_player_has_any_tower_card(sim)
+		case .AUTO_UPGRADE, .DIVIDEND, .INTEREST_BOOST, .MEMENTO, .RECYCLER:
+			return len(sim.towers) >= 2
+		case .FLAWLESS:
+			return len(sim.towers) >= 3
+		case .LOOT, .STEAL:
+			return sim.relic_stacks[card.kind] > 0
+		}
+		return false
+	}
+	if card.kind == .TOWER {
+		if sim.relic_stacks[.FORMATION] > 0 &&
+		   shop_player_has_n_same_tower_type_placed(sim, card.tower_type, 2) {
+			return true
+		}
+		if card.tower_type == .ICE && sim.relic_stacks[.FROZEN_AMP] > 0 {
+			return true
+		}
+		if (card.tower_type == .LASER || card.tower_type == .MORTAR) &&
+		   sim.relic_stacks[.WARMED_UP] > 0 {
+			return true
+		}
+		if (card.tower_type == .SNIPER || card.tower_type == .MORTAR) &&
+		   sim.relic_stacks[.CRYPTOBRO] > 0 {
+			return true
+		}
+		if (card.tower_type == .ARCHER || card.tower_type == .MISSILE ||
+		    card.tower_type == .TESLA) && sim.relic_stacks[.BLOODLUST] > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Precio en el shop con el modificador del bioma aplicado (price_mult + uncommon_discount).
+shop_price_for_card :: proc(app: ^entities.App_State, card: entities.Card) -> i32 {
+	base: i32
+	if entities.is_relic(card.kind) {
+		base = entities.card_shop_price(card)
+	} else {
+		base = entities.card_cost(card)
+	}
+	biome_mod := constants.BIOME_SHOP_MODS[app.editor.game_map.biome]
+	price := f32(base) * biome_mod.price_mult
+	if entities.card_rarity(card) == .UNCOMMON && biome_mod.uncommon_discount > 0 {
+		price *= 1.0 - biome_mod.uncommon_discount
+	}
+	return i32(price)
+}
+
+// Costo del próximo reroll según el bioma y rerolls_this_shop.
+shop_next_reroll_cost :: proc(app: ^entities.App_State) -> i32 {
+	biome_mod := constants.BIOME_SHOP_MODS[app.editor.game_map.biome]
+	if biome_mod.free_reroll { return 0 }
+	idx := int(app.sim.rerolls_this_shop)
+	if idx >= len(constants.SHOP_REROLL_COSTS) {
+		idx = len(constants.SHOP_REROLL_COSTS) - 1
+	}
+	return constants.SHOP_REROLL_COSTS[idx]
+}
+
 // Renderiza el overlay de selección de carta (tienda entre oleadas).
 // El shop permanece abierto mientras el jugador compra cartas.
-// Hacer click sobre una carta la compra directamente.
+// Click izquierdo sobre una carta la compra directamente.
+// Click derecho sobre una carta la bloquea (sobrevive al reroll).
 // El shop se cierra solo con el botón Skip (o cuando se abre la siguiente oleada).
 render_card_selection_overlay :: proc(app: ^entities.App_State) {
 	// Limpiamos ui_modal_blocks: la UI de juego subyacente ya fue procesada y
@@ -2121,11 +2398,28 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 	// Fondo oscuro modal
 	raylib.DrawRectangle(0, 0, i32(screen_w), i32(screen_h), raylib.Color{0, 0, 0, 160})
 
-	// Posición del panel
-	N_CARDS :: 3
-	panel_w  := f32(N_CARDS) * CARD_W + f32(N_CARDS + 1) * CARD_GAP
+	// Cantidad de slots activos según el bioma (clamped a [1, MAX_SHOP_SLOTS]).
+	n_cards := int(sim.shop_slot_count)
+	if n_cards <= 0 { n_cards = int(constants.SHOP_BASE_SLOTS) }
+	if n_cards > int(constants.MAX_SHOP_SLOTS) { n_cards = int(constants.MAX_SHOP_SLOTS) }
+
+	// Posición del panel — se centra sobre la cantidad real de slots
+	panel_w  := f32(n_cards) * CARD_W + f32(n_cards + 1) * CARD_GAP
 	panel_x  := (screen_w - panel_w) / 2
 	panel_y  := screen_h / 2 - CARD_H / 2 - 20
+
+	biome     := app.editor.game_map.biome
+	biome_mod := constants.BIOME_SHOP_MODS[biome]
+
+	// Header de bioma — describe el efecto del bioma sobre el shop
+	biome_label   := constants.get_text(biome_mod.label_key)
+	biome_label_sz : f32 = 13
+	biome_label_w  := raylib.MeasureTextEx(constants.game_fonts.regular,
+		strings.clone_to_cstring(biome_label, context.temp_allocator), biome_label_sz, 0).x
+	raylib.DrawTextEx(constants.game_fonts.regular,
+		strings.clone_to_cstring(biome_label, context.temp_allocator),
+		{screen_w / 2 - biome_label_w / 2, panel_y - 70},
+		biome_label_sz, 0, raylib.Color{200, 200, 220, 240})
 
 	// Título
 	title   := constants.get_text("DECK_CHOOSE_CARD")
@@ -2138,17 +2432,18 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		title_sz, 0, raylib.WHITE)
 
 	mouse  := raylib.GetMousePosition()
-	PRICE_SZ : f32 = 13
 	HOVER_LIFT :: f32(8)
 
-	for i in 0 ..< N_CARDS {
+	for i in 0 ..< n_cards {
 		card     := sim.card_selection_choices[i]
 		cx       := panel_x + CARD_GAP + f32(i) * (CARD_W + CARD_GAP)
 		cy       := panel_y
 		bought   := sim.card_selection_bought[i]
+		locked   := sim.card_selection_locked[i]
 		is_relic := entities.is_relic(card.kind)
-		price    := is_relic ? entities.card_shop_price(card) : entities.card_cost(card)
+		price    := shop_price_for_card(app, card)
 		can_buy  := !bought && price <= sim.money
+		synergy  := !bought && shop_card_has_synergy(sim, card)
 
 		card_rect := raylib.Rectangle{cx, cy, CARD_W, CARD_H}
 		hovered   := !bought && raylib.CheckCollisionPointRec(mouse, card_rect)
@@ -2162,33 +2457,48 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		case is_relic:   bg = rarity_card_bg(entities.card_rarity(card))
 		}
 
-		render_card(app, card, cx, draw_cy, false, can_buy, bg, true)
+		// show_price = false: dibujamos el precio nosotros con el modificador del bioma
+		render_card(app, card, cx, draw_cy, false, can_buy, bg, false)
 
-		if !bought {
-			lifted_rect := raylib.Rectangle{cx, draw_cy, CARD_W, CARD_H}
-			render_card_tooltip(app, card, lifted_rect)
+		// Precio con modificador de bioma — sobreescribe el que dibujaría render_card
+		cost_str  := fmt.ctprintf("$%d", price)
+		cost_size : f32 = 15
+		cost_w    := raylib.MeasureTextEx(constants.game_fonts.semibold, cost_str, cost_size, 0).x
+		cost_color := can_buy ? raylib.Color{80, 220, 100, 255} : raylib.Color{200, 60, 60, 255}
+		raylib.DrawTextEx(
+			constants.game_fonts.bold, cost_str,
+			{cx + (CARD_W - cost_w) / 2, draw_cy + 102},
+			cost_size, 0, cost_color,
+		)
+
+		lifted_rect := raylib.Rectangle{cx, draw_cy, CARD_W, CARD_H}
+		render_card_tooltip(app, card, lifted_rect)
+
+		// Indicador de lock — borde dorado constante + label "[L]" esquina superior izq
+		if locked {
+			raylib.DrawRectangleRoundedLinesEx(
+				{cx, draw_cy, CARD_W, CARD_H},
+				constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 2.5,
+				raylib.Color{220, 180, 60, 240},
+			)
+			draw_text_with_outline(
+				fmt.ctprintf("[L]"), {cx + 6, draw_cy + 6}, 12, 0,
+				raylib.Color{240, 200, 60, 255}, raylib.Color{0, 0, 0, 200}, 1,
+				constants.game_fonts.bold,
+			)
 		}
 
-		// Etiqueta de precio / comprado debajo de la carta
-		label_y := cy + CARD_H + 5
-		if bought {
-			ok_str := constants.get_text("SHOP_BOUGHT")
-			ok_w   := raylib.MeasureTextEx(constants.game_fonts.semibold,
-				strings.clone_to_cstring(ok_str, context.temp_allocator), PRICE_SZ, 0).x
-			raylib.DrawTextEx(constants.game_fonts.semibold,
-				strings.clone_to_cstring(ok_str, context.temp_allocator),
-				{cx + (CARD_W - ok_w) / 2, label_y},
-				PRICE_SZ, 0, raylib.Color{100, 210, 100, 255})
-		} else {
-			price_str := fmt.ctprintf("$%d", price)
-			price_w   := raylib.MeasureTextEx(constants.game_fonts.semibold, price_str, PRICE_SZ, 0).x
-			price_col := can_buy ? raylib.Color{80, 220, 100, 255} : raylib.Color{220, 80, 80, 255}
-			raylib.DrawTextEx(constants.game_fonts.semibold, price_str,
-				{cx + (CARD_W - price_w) / 2, label_y}, PRICE_SZ, 0, price_col)
+		// Indicador de sinergia — símbolo "~" en esquina superior derecha
+		if synergy {
+			draw_text_with_outline(
+				fmt.ctprintf("~"), {cx + CARD_W - 18, draw_cy + 6}, 14, 0,
+				raylib.Color{120, 230, 255, 255}, raylib.Color{0, 0, 0, 200}, 1,
+				constants.game_fonts.bold,
+			)
 		}
 
-		// Borde dorado al hacer hover sobre carta comprable
-		if hovered && can_buy {
+		// Borde dorado al hacer hover sobre carta comprable (sin lock, que ya tiene su borde)
+		if hovered && can_buy && !locked {
 			raylib.DrawRectangleRoundedLinesEx(
 				{cx, draw_cy, CARD_W, CARD_H},
 				constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 2.5,
@@ -2197,10 +2507,12 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 			append(&ui_click_blocks, card_rect)
 		}
 
-		// Click directo sobre la carta → comprar
+		// Click izquierdo: comprar
 		if hovered && can_buy && raylib.IsMouseButtonPressed(.LEFT) {
 			sim.money -= price
 			sim.card_selection_bought[i] = true
+			sim.shop_purchases_this_visit += 1
+			sim.skip_streak_count = 0  // comprar rompe el streak
 			if is_relic {
 				apply_relic_card(app, card.kind)
 			} else {
@@ -2208,28 +2520,52 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 			}
 			play_sound(.CONFIRMATION, .UI)
 		}
+
+		// Click derecho: toggle lock (también si bought — permite "marcar" cartas)
+		if hovered && raylib.IsMouseButtonPressed(.RIGHT) {
+			sim.card_selection_locked[i] = !sim.card_selection_locked[i]
+			play_sound(.CLICK, .UI)
+		}
 	}
 
 	// Botones Skip y Reroll
-	BTN_W      : f32 = 130
+	BTN_W      : f32 = 150
 	BTN_H      : f32 = 34
 	BTN_GAP    : f32 = 12
 	total_btn_w := BTN_W * 2 + BTN_GAP
 	skip_x     := screen_w / 2 - total_btn_w / 2
 	reroll_x   := skip_x + BTN_W + BTN_GAP
 	btn_y      := panel_y + CARD_H + 36
-	can_reroll := sim.money >= constants.CARD_REROLL_COST
 
-	// Skip cierra el shop y reanuda el juego.
-	// Las cartas compradas ya están en la mano — no se hace hand_refresh.
-	if render_button(constants.get_text("SHOP_SKIP"), {skip_x, btn_y, BTN_W, BTN_H}, 1, true) {
-		sim.card_selection_active = false
-		sim.card_selection_bought = {}
-		simulation_set_pause(app, false)
+	reroll_cost := shop_next_reroll_cost(app)
+	can_reroll  := sim.money >= reroll_cost
+
+	// Skip: si el jugador no compró nada, gana bonus de oro escalado por skip_streak
+	skip_label: string
+	if sim.shop_purchases_this_visit == 0 {
+		next_bonus := (sim.skip_streak_count + 1) * constants.SHOP_SKIP_BONUS_PER_SKIP
+		if next_bonus > constants.SHOP_SKIP_BONUS_CAP { next_bonus = constants.SHOP_SKIP_BONUS_CAP }
+		skip_label = fmt.tprintf("%s (+$%d)", constants.get_text("SHOP_SKIP"), next_bonus)
+	} else {
+		skip_label = constants.get_text("SHOP_SKIP")
+	}
+
+	if render_button(skip_label, {skip_x, btn_y, BTN_W, BTN_H}, 1, true) {
+		shop_perform_skip(app)
+	}
+
+	// Reroll: costo progresivo. Si el bioma da free_reroll, label distinto.
+	reroll_label: string
+	if biome_mod.free_reroll {
+		reroll_label = fmt.tprintf("%s (gratis)", constants.get_text("DECK_REROLL_BUTTON"))
+	} else if reroll_cost == 0 {
+		reroll_label = fmt.tprintf("%s (1° gratis)", constants.get_text("DECK_REROLL_BUTTON"))
+	} else {
+		reroll_label = fmt.tprintf("%s $%d", constants.get_text("DECK_REROLL_BUTTON"), reroll_cost)
 	}
 
 	if render_button(
-		fmt.tprintf("%s $%d", constants.get_text("DECK_REROLL_BUTTON"), constants.CARD_REROLL_COST),
+		reroll_label,
 		{reroll_x, btn_y, BTN_W, BTN_H},
 		1, can_reroll,
 		constants.UI_TEXT_COLOR,
@@ -2238,9 +2574,93 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		can_reroll ? constants.UI_BUTTON_ACTION_PRESS : constants.COLOR_NONE,
 	) {
 		if can_reroll {
-			sim.money -= constants.CARD_REROLL_COST
+			sim.money -= reroll_cost
+			sim.rerolls_this_shop += 1
 			generate_card_selection(app)
 			play_sound(.CLICK, .UI)
+		}
+	}
+
+	// ── Panel de refund de stacks de relictos ─────────────────────────────────
+	// Muestra una fila debajo de los botones con un icono por relicto poseído.
+	// Click sobre el icono → -1 stack, +SHOP_RELIC_REFUND_PRICE oro.
+	render_relic_refund_row(app, screen_w, btn_y + BTN_H + 24)
+}
+
+// Fila de iconos pequeños — un slot por relicto con stacks > 0.
+// Click izquierdo: refund de 1 stack a cambio de SHOP_RELIC_REFUND_PRICE oro.
+render_relic_refund_row :: proc(app: ^entities.App_State, screen_w, y_pos: f32) {
+	sim := &app.sim
+
+	// Cuenta relictos con stacks
+	owned_kinds: [32]entities.Card_Kind
+	n_owned := 0
+	for kind in entities.Card_Kind {
+		if !entities.is_relic(kind) { continue }
+		if sim.relic_stacks[kind] <= 0 { continue }
+		if n_owned < 32 {
+			owned_kinds[n_owned] = kind
+			n_owned += 1
+		}
+	}
+	if n_owned == 0 { return }
+
+	ICON_SIZE :: f32(40)
+	ICON_GAP  :: f32(8)
+	row_w     := f32(n_owned) * ICON_SIZE + f32(n_owned - 1) * ICON_GAP
+	start_x   := (screen_w - row_w) / 2
+
+	// Label arriba de la fila
+	label   := fmt.tprintf("%s ($%d/stack)", constants.get_text("SHOP_RELIC_REFUND"), constants.SHOP_RELIC_REFUND_PRICE)
+	label_sz : f32 = 12
+	label_w := raylib.MeasureTextEx(constants.game_fonts.regular,
+		strings.clone_to_cstring(label, context.temp_allocator), label_sz, 0).x
+	raylib.DrawTextEx(constants.game_fonts.regular,
+		strings.clone_to_cstring(label, context.temp_allocator),
+		{screen_w / 2 - label_w / 2, y_pos - 16},
+		label_sz, 0, raylib.Color{200, 200, 220, 220})
+
+	mouse := raylib.GetMousePosition()
+
+	for i in 0 ..< n_owned {
+		kind  := owned_kinds[i]
+		x     := start_x + f32(i) * (ICON_SIZE + ICON_GAP)
+		rect  := raylib.Rectangle{x, y_pos, ICON_SIZE, ICON_SIZE}
+		hover := raylib.CheckCollisionPointRec(mouse, rect)
+
+		// Fondo
+		bg := raylib.Color{30, 30, 40, 200}
+		if hover { bg = raylib.Color{60, 60, 80, 230} }
+		raylib.DrawRectangleRounded(rect, 0.2, 6, bg)
+		raylib.DrawRectangleRoundedLinesEx(rect, 0.2, 6, 1.5, raylib.Color{120, 120, 140, 200})
+
+		// Icono — usar la textura cargada del relicto
+		tex := entities.relic_icon(kind)
+		if tex.id != 0 {
+			src := raylib.Rectangle{0, 0, f32(tex.width), f32(tex.height)}
+			dst := raylib.Rectangle{x + 4, y_pos + 4, ICON_SIZE - 8, ICON_SIZE - 8}
+			raylib.DrawTexturePro(tex, src, dst, {0, 0}, 0, raylib.WHITE)
+		}
+
+		// Stack count badge
+		stacks_str := fmt.ctprintf("%d", sim.relic_stacks[kind])
+		draw_text_with_outline(
+			stacks_str, {x + ICON_SIZE - 14, y_pos + ICON_SIZE - 14}, 11, 0,
+			raylib.WHITE, raylib.Color{0, 0, 0, 220}, 1, constants.game_fonts.bold,
+		)
+
+		// Tooltip al hover + click para refund
+		if hover {
+			append(&ui_click_blocks, rect)
+			render_card_tooltip(app, entities.Card{kind = kind}, rect)
+			if raylib.IsMouseButtonPressed(.LEFT) {
+				sim.relic_stacks[kind] -= 1
+				entities.app_add_money(app, constants.SHOP_RELIC_REFUND_PRICE)
+				entities.add_toast(app,
+					fmt.tprintf("+$%d refund", constants.SHOP_RELIC_REFUND_PRICE),
+					.INFO)
+				play_sound(.CONFIRMATION, .UI)
+			}
 		}
 	}
 }
@@ -2468,26 +2888,59 @@ render_run_complete_ui :: proc(app: ^entities.App_State) {
 	raylib.DrawTextEx(constants.game_fonts.regular, acum_c,
 		{f32(screen_width) / 2 - acum_w / 2, acum_y}, font_size, 0, raylib.Color{180, 220, 255, 255})
 
-	// Buttons
-	btn_w        := i32(constants.UI_BUTTON_WIDTH) * 2
-	gap          := i32(10)
-	total_w_btns := btn_w * 2 + gap
-	btn_left_x   := screen_width / 2 - total_w_btns / 2
-	btns_y       := i32(acum_y) + i32(font_size) + spacing * 2
+	// Buttons — en derrota hay un tercer botón: Reintentar
+	btn_w  := i32(constants.UI_BUTTON_WIDTH) * 2
+	gap    := i32(10)
+	btns_y := i32(acum_y) + i32(font_size) + spacing * 2
 
-	if render_button(
-		constants.get_text("RUN_BUTTON_PROGRESSION"),
-		{f32(btn_left_x), f32(btns_y), f32(btn_w), f32(btn_height)},
-	) {
-		simulation_reset(app)
-		entities.app_set_state(app, .PROGRESSION)
-	}
-	if render_button(
-		constants.get_text("GAME_OVER_BUTTON_MENU"),
-		{f32(btn_left_x + btn_w + gap), f32(btns_y), f32(btn_w), f32(btn_height)},
-	) {
-		simulation_reset(app)
-		entities.app_set_state(app, .MENU)
+	if !app.sim.is_victory {
+		// 3 botones: Reintentar | Mejoras | Menú
+		total_w_btns := btn_w * 3 + gap * 2
+		btn_left_x   := screen_width / 2 - total_w_btns / 2
+
+		if render_button(
+			constants.get_text("RUN_BUTTON_RETRY"),
+			{f32(btn_left_x), f32(btns_y), f32(btn_w), f32(btn_height)},
+		) {
+			// Recargar el mismo mapa y reiniciar la simulación
+			map_name := app.editor.current_map_name
+			simulation_reset(app)
+			entities.map_load(&app.editor.game_map, map_name)
+			entities.app_set_state(app, .PLAYING)
+		}
+		if render_button(
+			constants.get_text("RUN_BUTTON_PROGRESSION"),
+			{f32(btn_left_x + btn_w + gap), f32(btns_y), f32(btn_w), f32(btn_height)},
+		) {
+			simulation_reset(app)
+			entities.app_set_state(app, .PROGRESSION)
+		}
+		if render_button(
+			constants.get_text("GAME_OVER_BUTTON_MENU"),
+			{f32(btn_left_x + btn_w * 2 + gap * 2), f32(btns_y), f32(btn_w), f32(btn_height)},
+		) {
+			simulation_reset(app)
+			entities.app_set_state(app, .MENU)
+		}
+	} else {
+		// 2 botones: Mejoras | Menú
+		total_w_btns := btn_w * 2 + gap
+		btn_left_x   := screen_width / 2 - total_w_btns / 2
+
+		if render_button(
+			constants.get_text("RUN_BUTTON_PROGRESSION"),
+			{f32(btn_left_x), f32(btns_y), f32(btn_w), f32(btn_height)},
+		) {
+			simulation_reset(app)
+			entities.app_set_state(app, .PROGRESSION)
+		}
+		if render_button(
+			constants.get_text("GAME_OVER_BUTTON_MENU"),
+			{f32(btn_left_x + btn_w + gap), f32(btns_y), f32(btn_w), f32(btn_height)},
+		) {
+			simulation_reset(app)
+			entities.app_set_state(app, .MENU)
+		}
 	}
 }
 
@@ -2531,55 +2984,38 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 		raylib.Color{100, 200, 255, 255},
 	)
 
-	// Tower unlock row
-	lockable_towers := [4]constants.Tower_Type{.MISSILE, .LASER, .TESLA, .MORTAR}
-	tower_card_w  := f32(120)
-	tower_card_h  := f32(160)
-	tower_card_gap := f32(12)
-	tower_total_w := f32(len(lockable_towers)) * tower_card_w + f32(len(lockable_towers) - 1) * tower_card_gap
-	tower_cards_x := f32(screen_width) / 2 - tower_total_w / 2
-	tower_cards_y := f32(spacing) * 2 + title_size + font_size + f32(spacing) * 2
-	tower_btn_h   := f32(26)
+	// Tower unlock row — cards drawn with render_card, unlock button below each
+	lockable_towers := [6]constants.Tower_Type{.ICE, .ENHANCE, .MISSILE, .LASER, .TESLA, .MORTAR}
+	tower_card_gap  := f32(16)
+	tower_btn_h     := f32(constants.UI_BUTTON_HEIGHT)
+	tower_total_w   := f32(len(lockable_towers)) * CARD_W + f32(len(lockable_towers) - 1) * tower_card_gap
+	tower_cards_x   := f32(screen_width) / 2 - tower_total_w / 2
+	tower_cards_y   := f32(spacing) * 2 + title_size + font_size + f32(spacing) * 2
 
 	for i in 0 ..< len(lockable_towers) {
 		t        := lockable_towers[i]
-		cx       := tower_cards_x + f32(i) * (tower_card_w + tower_card_gap)
+		cx       := tower_cards_x + f32(i) * (CARD_W + tower_card_gap)
 		cy       := tower_cards_y
 		unlocked := entities.meta_is_tower_unlocked(&app.meta, t)
 		cost     := entities.meta_tower_unlock_cost(t)
 		can_buy  := !unlocked && app.meta.cristales >= cost
 
-		bg_color     := raylib.Color{40, 55, 40, 220} if unlocked else raylib.Color{40, 40, 55, 220}
-		border_color := raylib.Color{80, 200, 80, 200} if unlocked else raylib.Color{80, 80, 130, 200}
-		raylib.DrawRectangleRounded({cx, cy, tower_card_w, tower_card_h}, constants.UI_BUTTON_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, bg_color)
-		raylib.DrawRectangleRoundedLines({cx, cy, tower_card_w, tower_card_h}, constants.UI_BUTTON_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, 1.0, border_color)
+		card := entities.Card{kind = .TOWER, tower_type = t}
+		bg   := raylib.Color{50, 70, 50, 220} if unlocked else raylib.Color{}
+		render_card(app, card, cx, cy, false, can_buy || unlocked, bg)
+		render_card_tooltip(app, card, raylib.Rectangle{cx, cy, CARD_W, CARD_H})
 
-		preview_sz := tower_card_w * 0.40
-		draw_tower_tile(cx + (tower_card_w - preview_sz) / 2, cy + 10, preview_sz, t, 0, false)
-
-		name    := constants.get_tower_name(t)
-		name_cs := strings.clone_to_cstring(name, context.temp_allocator)
-		name_w  := raylib.MeasureTextEx(constants.game_fonts.semibold, name_cs, small_size, 0).x
-		raylib.DrawTextEx(constants.game_fonts.semibold, name_cs,
-			{cx + (tower_card_w - name_w) / 2, cy + preview_sz + 14}, small_size, 0, raylib.WHITE)
-
-		cost_y := cy + preview_sz + 14 + small_size + 4
+		// Unlock button / unlocked badge below the card
+		btn_y := cy + CARD_H + 6
 		if unlocked {
-			badge_cs := strings.clone_to_cstring(constants.get_text("PROGRESSION_UNLOCKED"), context.temp_allocator)
-			badge_w  := raylib.MeasureTextEx(constants.game_fonts.regular, badge_cs, small_size, 0).x
-			raylib.DrawTextEx(constants.game_fonts.regular, badge_cs,
-				{cx + (tower_card_w - badge_w) / 2, cost_y}, small_size, 0, raylib.Color{80, 200, 80, 255})
+			ok_cs := strings.clone_to_cstring(constants.get_text("PROGRESSION_UNLOCKED"), context.temp_allocator)
+			ok_w  := raylib.MeasureTextEx(constants.game_fonts.semibold, ok_cs, small_size, 0).x
+			raylib.DrawTextEx(constants.game_fonts.semibold, ok_cs,
+				{cx + (CARD_W - ok_w) / 2, btn_y + (tower_btn_h - small_size) / 2},
+				small_size, 0, raylib.Color{80, 210, 80, 255})
 		} else {
-			cost_str := fmt.tprintf("%d C", cost)
-			cost_cs  := strings.clone_to_cstring(cost_str, context.temp_allocator)
-			cost_col := raylib.Color{255, 215, 0, 255} if can_buy else raylib.Color{180, 120, 60, 255}
-			cst_w    := raylib.MeasureTextEx(constants.game_fonts.semibold, cost_cs, small_size, 0).x
-			raylib.DrawTextEx(constants.game_fonts.semibold, cost_cs,
-				{cx + (tower_card_w - cst_w) / 2, cost_y}, small_size, 0, cost_col)
-
-			btn_y := cy + tower_card_h - tower_btn_h - 8
-			btn_label := constants.get_text("PROGRESSION_UNLOCK")
-			if render_button(btn_label, {cx + 6, btn_y, tower_card_w - 12, tower_btn_h}) && can_buy {
+			cost_str  := fmt.tprintf("%d C", cost)
+			if render_button(cost_str, {cx, btn_y, CARD_W, tower_btn_h}, 1, can_buy) && can_buy {
 				app.meta.cristales -= cost
 				app.meta.unlocked_towers[int(t)] = true
 				entities.meta_save(&app.meta)
@@ -2606,11 +3042,6 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 		delete(tier_relics[2])
 	}
 
-	tier_names := [3]string{
-		constants.get_text("PROGRESSION_TIER1"),
-		constants.get_text("PROGRESSION_TIER2"),
-		constants.get_text("PROGRESSION_TIER3"),
-	}
 	tier_costs := [3]i32{5, 10, 20}
 	tier_colors := [3]raylib.Color{
 		{160, 160, 160, 255},  // grey (common)
@@ -2618,40 +3049,29 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 		{255, 160,  20, 255},  // gold (rare)
 	}
 
-	panel_w    := i32(f32(screen_width) * 0.85)
-	if panel_w > 700 { panel_w = 700 }
-	panel_x    := f32(screen_width) / 2 - f32(panel_w) / 2
-	content_y  := tower_cards_y + tower_card_h + f32(spacing) * 2
+	col_gap   := f32(40)                                  // gap between columns
+	col_count := f32(3)
+	panel_w   := i32(f32(screen_width) * 0.90)
+	if panel_w > 780 { panel_w = 780 }
+	panel_x   := f32(screen_width) / 2 - f32(panel_w) / 2
+	content_y := tower_cards_y + CARD_H + tower_btn_h + f32(spacing) * 3
 
-	icon_size  := f32(36)
-	cell_w     := f32(panel_w) / 3
-	cell_pad   := f32(spacing)
+	icon_size := f32(36)
+	row_gap   := f32(16)                                  // extra vertical space between relic rows
+	cell_w    := (f32(panel_w) - col_gap * (col_count - 1)) / col_count
+	cell_pad  := f32(spacing)
 
 	for ti in 0 ..< 3 {
 		relics := tier_relics[ti][:]
-		col_x  := panel_x + f32(ti) * cell_w
-
-		// Tier header
-		tier_label := tier_names[ti]
-		tier_cstr  := strings.clone_to_cstring(tier_label, context.temp_allocator)
-		tier_lw    := raylib.MeasureTextEx(constants.game_fonts.semibold, tier_cstr, font_size, 0).x
-		tier_lx    := col_x + cell_w / 2 - tier_lw / 2
-		raylib.DrawTextEx(constants.game_fonts.semibold, tier_cstr, {tier_lx, content_y}, font_size, 0, tier_colors[ti])
-
-		cost_txt  := fmt.tprintf("%d %s", tier_costs[ti], constants.get_text("RUN_CRISTALES"))
-		cost_cstr := strings.clone_to_cstring(cost_txt, context.temp_allocator)
-		cost_lw   := raylib.MeasureTextEx(constants.game_fonts.regular, cost_cstr, small_size, 0).x
-		cost_lx   := col_x + cell_w / 2 - cost_lw / 2
-		raylib.DrawTextEx(constants.game_fonts.regular, cost_cstr, {cost_lx, content_y + font_size + 2}, small_size, 0, raylib.Color{180, 180, 180, 255})
-
-		row_y := content_y + font_size + small_size + f32(spacing) + 4
+		col_x  := panel_x + f32(ti) * (cell_w + col_gap)
+		row_y  := content_y
 
 		for kind in relics {
-			unlocked  := app.meta.unlocked_relics[kind]
-			name      := entities.card_name(entities.Card{kind = kind})
-			cost      := tier_costs[ti]
-			icon_x    := col_x + cell_pad
-			icon_tex  := entities.relic_icon(kind)
+			unlocked   := app.meta.unlocked_relics[kind]
+			name       := entities.card_name(entities.Card{kind = kind})
+			cost       := tier_costs[ti]
+			icon_x     := col_x + cell_pad
+			icon_tex   := entities.relic_icon(kind)
 
 			// Icon
 			if icon_tex.id > 0 {
@@ -2661,15 +3081,15 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 				bg := tier_colors[ti] if unlocked else raylib.Color{60, 60, 60, 255}
 				raylib.DrawRectangleRounded({icon_x, row_y, icon_size, icon_size}, 0.3, 8, bg)
 			}
+			render_card_tooltip(app, entities.Card{kind = kind}, raylib.Rectangle{icon_x, row_y, icon_size, icon_size})
 
 			// Name
 			name_cstr := strings.clone_to_cstring(name, context.temp_allocator)
 			raylib.DrawTextEx(
 				constants.game_fonts.regular,
 				name_cstr,
-				{icon_x + icon_size + 4, row_y + icon_size / 2 - small_size / 2},
-				small_size,
-				0,
+				{icon_x + icon_size + 6, row_y + icon_size / 2 - small_size / 2},
+				small_size, 0,
 				raylib.WHITE if unlocked else raylib.Color{120, 120, 120, 255},
 			)
 
@@ -2677,15 +3097,14 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 				can_afford := app.meta.cristales >= cost
 				btn_label  := fmt.tprintf("%d C", cost)
 				btn_w      := raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(btn_label, context.temp_allocator), small_size, 0).x + 12
-				btn_rect  := raylib.Rectangle{
+				btn_rect   := raylib.Rectangle{
 					col_x + cell_w - btn_w - cell_pad,
 					row_y + icon_size / 2 - f32(btn_height) / 2,
 					btn_w,
 					f32(btn_height),
 				}
 				if render_button(
-					btn_label,
-					btn_rect,
+					btn_label, btn_rect,
 					1, can_afford,
 					raylib.WHITE if can_afford else raylib.Color{100, 100, 100, 255},
 					constants.UI_BUTTON_ACTION_COLOR if can_afford else raylib.Color{50, 50, 50, 255},
@@ -2708,7 +3127,7 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 				raylib.DrawTextEx(constants.game_fonts.regular, badge_cstr, {badge_x, badge_y}, small_size, 0, raylib.Color{80, 220, 80, 255})
 			}
 
-			row_y += icon_size + f32(spacing)
+			row_y += icon_size + row_gap
 		}
 	}
 

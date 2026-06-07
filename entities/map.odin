@@ -1,29 +1,46 @@
 package entities
 
 import "core:fmt"
+import "core:math"
 import "core:os"
 import "core:strings"
 import "core:strconv"
 import "core:time"
+import raylib "vendor:raylib"
 import "../constants"
 
 // Map/Grid structure
 Map :: struct {
 	// Main grid (towers, paths, spawn, goal)
 	grid: [constants.GRID_SIZE][constants.GRID_SIZE]constants.Tile,
-	
+
 	// Obstacle grid (spikes, separate layer)
 	obstacle_grid: [constants.GRID_SIZE][constants.GRID_SIZE]constants.Tile,
-	
+
+	// Water layer — separate from main grid; rendered below paths
+	water_grid: [constants.GRID_SIZE][constants.GRID_SIZE]bool,
+
+	// Heightmap — valores en [0, 1] por celda, derivados de seed.
+	// Solo se usa para el render del terreno (desniveles sutiles). No afecta gameplay.
+	// Se regenera con map_regenerate_heightmap cuando cambia el seed.
+	heightmap: [constants.GRID_SIZE][constants.GRID_SIZE]f32,
+
+	// GPU heightmap — textura grayscale del heightmap, muestreada con bilinear
+	// filtering por el shader para producir el gradient continuo.
+	// dirty=true → necesita re-upload; valid=true → tex tiene datos GPU.
+	heightmap_tex:       raylib.Texture2D,
+	heightmap_tex_valid: bool,
+	heightmap_tex_dirty: bool,
+
 	// Biome
 	biome: constants.Biome,
-	
+
 	// Seed for random generation
 	seed: i32,
-	
+
 	// Tile data (for obstacle levels, etc.)
 	tile_data: map[string]constants.Tile_Data,
-	
+
 	// Grid dimensions (can be smaller than GRID_SIZE for smaller maps)
 	width: i32,
 	height: i32,
@@ -38,7 +55,7 @@ map_init :: proc(width: i32 = constants.GRID_SIZE, height: i32 = constants.GRID_
 		width = width,
 		height = height,
 	}
-	
+
 	// Initialize grids to EMPTY
 	for row in 0..<constants.GRID_SIZE {
 		for col in 0..<constants.GRID_SIZE {
@@ -46,8 +63,124 @@ map_init :: proc(width: i32 = constants.GRID_SIZE, height: i32 = constants.GRID_
 			m.obstacle_grid[row][col] = .EMPTY
 		}
 	}
-	
+
+	// Heightmap inicial — depende del seed (que arranca en 0).
+	map_regenerate_heightmap(&m)
+
 	return m
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Heightmap: noise procedural determinista por seed.
+// Solo afecta el render del terreno (desniveles sutiles), no el gameplay.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Hash entero → f32 en [0, 1]. Determinista. Usado por value_noise.
+_heightmap_hash2 :: proc(x, y: i32, seed: u64) -> f32 {
+	h := u64(u32(x)) * 374761393 + u64(u32(y)) * 668265263 + seed
+	h = (h ~ (h >> 13)) * 1274126177
+	h = h ~ (h >> 16)
+	return f32(h & 0x00FFFFFF) / f32(0x00FFFFFF)
+}
+
+// Value noise bilineal con suavizado smoothstep. Devuelve f32 en [0, 1].
+_heightmap_value_noise :: proc(x, y: f32, seed: u64) -> f32 {
+	xi := i32(math.floor(x))
+	yi := i32(math.floor(y))
+	xf := x - f32(xi)
+	yf := y - f32(yi)
+	// Smoothstep: 3t² − 2t³
+	sx := xf * xf * (3 - 2 * xf)
+	sy := yf * yf * (3 - 2 * yf)
+	n00 := _heightmap_hash2(xi,     yi,     seed)
+	n10 := _heightmap_hash2(xi + 1, yi,     seed)
+	n01 := _heightmap_hash2(xi,     yi + 1, seed)
+	n11 := _heightmap_hash2(xi + 1, yi + 1, seed)
+	nx0 := n00 * (1 - sx) + n10 * sx
+	nx1 := n01 * (1 - sx) + n11 * sx
+	return nx0 * (1 - sy) + nx1 * sy
+}
+
+// Multi-octava fractal noise. Devuelve f32 en [0, 1].
+_heightmap_fractal_noise :: proc(x, y: f32, seed: u64, octaves: int) -> f32 {
+	total      := f32(0)
+	amplitude  := f32(1)
+	frequency  := f32(1)
+	max_amp    := f32(0)
+	for _ in 0 ..< octaves {
+		total     += _heightmap_value_noise(x * frequency, y * frequency, seed) * amplitude
+		max_amp   += amplitude
+		amplitude *= 0.5
+		frequency *= 2.0
+	}
+	return total / max_amp
+}
+
+// Regenera el heightmap entero a partir del seed actual del mapa.
+// Llamar después de map_init, map_load, o cualquier mutación del seed.
+// Marca la textura GPU como dirty para que el render la re-suba en el próximo frame.
+map_regenerate_heightmap :: proc(m: ^Map) {
+	seed_u64 := u64(u32(m.seed)) | (u64(u32(m.seed) ~ 0xA5A5A5A5) << 32)
+	for row in 0 ..< constants.GRID_SIZE {
+		for col in 0 ..< constants.GRID_SIZE {
+			fx := f32(col) * constants.HEIGHTMAP_FREQUENCY
+			fy := f32(row) * constants.HEIGHTMAP_FREQUENCY
+			m.heightmap[row][col] = _heightmap_fractal_noise(fx, fy, seed_u64, constants.HEIGHTMAP_OCTAVES)
+		}
+	}
+	m.heightmap_tex_dirty = true
+}
+
+// Sube el heightmap CPU al GPU como una textura grayscale GRID_SIZE×GRID_SIZE.
+// El filtro bilinear hace que el shader vea valores interpolados entre celdas.
+// Requiere un contexto OpenGL activo — sólo llamar desde el hilo de render.
+// Resetea dirty=false; deja valid=true si tuvo éxito.
+map_upload_heightmap_to_gpu :: proc(m: ^Map) {
+	// Si ya había una textura cargada, descargar antes de re-subir.
+	if m.heightmap_tex_valid {
+		raylib.UnloadTexture(m.heightmap_tex)
+		m.heightmap_tex_valid = false
+	}
+
+	// Cuantizar f32 → u8 para una textura grayscale.
+	pixels: [constants.GRID_SIZE * constants.GRID_SIZE]u8
+	for row in 0 ..< constants.GRID_SIZE {
+		for col in 0 ..< constants.GRID_SIZE {
+			v := m.heightmap[row][col]
+			if v < 0 { v = 0 }
+			if v > 1 { v = 1 }
+			pixels[row * constants.GRID_SIZE + col] = u8(v * 255)
+		}
+	}
+
+	img := raylib.Image{
+		data    = raw_data(pixels[:]),
+		width   = constants.GRID_SIZE,
+		height  = constants.GRID_SIZE,
+		mipmaps = 1,
+		format  = .UNCOMPRESSED_GRAYSCALE,
+	}
+	tex := raylib.LoadTextureFromImage(img)
+	// id == 0 → fallo al subir (típicamente sin contexto GL). Marcar inválido.
+	if tex.id == 0 {
+		m.heightmap_tex_valid = false
+		m.heightmap_tex_dirty = true  // volver a intentar al próximo frame
+		return
+	}
+	raylib.SetTextureFilter(tex, .BILINEAR)
+	raylib.SetTextureWrap(tex, .CLAMP)
+
+	m.heightmap_tex       = tex
+	m.heightmap_tex_valid = true
+	m.heightmap_tex_dirty = false
+}
+
+// Libera la textura GPU del heightmap (si la había).
+map_unload_heightmap_gpu :: proc(m: ^Map) {
+	if m.heightmap_tex_valid {
+		raylib.UnloadTexture(m.heightmap_tex)
+		m.heightmap_tex_valid = false
+	}
 }
 
 // Destroy map and free resources
@@ -57,6 +190,8 @@ map_destroy :: proc(m: ^Map) {
 		delete(k)
 	}
 	delete(m.tile_data)
+	// Liberar la textura GPU del heightmap si fue subida.
+	map_unload_heightmap_gpu(m)
 }
 
 // Get tile at position
@@ -135,6 +270,7 @@ map_clear :: proc(m: ^Map) {
 		for col in 0..<constants.GRID_SIZE {
 			m.grid[row][col] = .EMPTY
 			m.obstacle_grid[row][col] = .EMPTY
+			m.water_grid[row][col] = false
 		}
 	}
 	// Liberar keys clonadas antes de tirar el map
@@ -378,7 +514,18 @@ map_save :: proc(m: ^Map, filename: string) -> bool {
 		}
 		strings.write_byte(&builder, '\n')
 	}
-	
+
+	// Write water grid (1 = water, 0 = empty)
+	for row in 0..<m.height {
+		for col in 0..<m.width {
+			fmt.sbprintf(&builder, "%d", 1 if m.water_grid[row][col] else 0)
+			if col < m.width - 1 {
+				strings.write_byte(&builder, ' ')
+			}
+		}
+		strings.write_byte(&builder, '\n')
+	}
+
 	// Write to file
 	full_path := fmt.tprintf("maps/%s", filename)
 	content := strings.to_string(builder)
@@ -453,6 +600,14 @@ map_list_saved_entries :: proc() -> [dynamic]Map_File_Entry {
 	return entries
 }
 
+// Renombra un archivo de mapa en el directorio maps/.
+// Devuelve true si el rename fue exitoso.
+map_rename :: proc(old_name, new_name: string) -> bool {
+	old_path := fmt.tprintf("maps/%s", old_name)
+	new_path := fmt.tprintf("maps/%s", new_name)
+	return os.rename(old_path, new_path) == os.ERROR_NONE
+}
+
 // Free all memory owned by a map_browser_entries slice.
 map_file_entries_destroy :: proc(entries: ^[dynamic]Map_File_Entry) {
 	for e in entries^ {
@@ -500,6 +655,7 @@ map_is_path_corner_or_junction :: proc(m: ^Map, row, col: i32) -> bool {
 Map_Snapshot :: struct {
 	grid:          [constants.GRID_SIZE][constants.GRID_SIZE]constants.Tile,
 	obstacle_grid: [constants.GRID_SIZE][constants.GRID_SIZE]constants.Tile,
+	water_grid:    [constants.GRID_SIZE][constants.GRID_SIZE]bool,
 	tile_data:     map[string]constants.Tile_Data,
 	biome:         constants.Biome,
 	width:         i32,
@@ -511,6 +667,7 @@ map_snapshot_save :: proc(m: ^Map) -> Map_Snapshot {
 	snap := Map_Snapshot{
 		grid          = m.grid,
 		obstacle_grid = m.obstacle_grid,
+		water_grid    = m.water_grid,
 		biome         = m.biome,
 		width         = m.width,
 		height        = m.height,
@@ -526,6 +683,7 @@ map_snapshot_save :: proc(m: ^Map) -> Map_Snapshot {
 map_snapshot_restore :: proc(m: ^Map, snap: ^Map_Snapshot) {
 	m.grid          = snap.grid
 	m.obstacle_grid = snap.obstacle_grid
+	m.water_grid    = snap.water_grid
 	m.biome         = snap.biome
 	m.width         = snap.width
 	m.height        = snap.height
@@ -595,7 +753,13 @@ map_load :: proc(m: ^Map, filename: string) -> bool {
 	m.biome = constants.Biome(biome_val)
 	m.seed = parse_i32(strings.trim_space(lines[5]))
 	grid_start_idx := 6
-	
+
+	// Limpiar los tres grids antes de cargar: evita datos residuales del mapa
+	// anterior cuando los mapas tienen distinto tamaño o agua en distintas celdas.
+	m.grid          = {}
+	m.obstacle_grid = {}
+	m.water_grid    = {}
+
 	// Parse main grid (only up to width x height)
 	for row in 0..<m.height {
 		line_idx := grid_start_idx + int(row)
@@ -622,10 +786,10 @@ map_load :: proc(m: ^Map, filename: string) -> bool {
 		if line_idx >= len(lines) {
 			return false
 		}
-		
+
 		parts := strings.split(strings.trim_space(lines[line_idx]), " ")
 		defer delete(parts)
-		
+
 		for col in 0..<m.width {
 			if i32(col) >= i32(len(parts)) {
 				break
@@ -634,6 +798,23 @@ map_load :: proc(m: ^Map, filename: string) -> bool {
 			m.obstacle_grid[row][col] = constants.Tile(tile_val)
 		}
 	}
-	
+
+	// Parse water grid (optional — older maps without it default to all false)
+	water_start := obstacle_start + int(m.height)
+	if water_start + int(m.height) <= len(lines) {
+		for row in 0..<m.height {
+			line_idx := water_start + int(row)
+			parts := strings.split(strings.trim_space(lines[line_idx]), " ")
+			defer delete(parts)
+			for col in 0..<m.width {
+				if i32(col) >= i32(len(parts)) { break }
+				m.water_grid[row][col] = parse_i32(parts[col]) != 0
+			}
+		}
+	}
+
+	// Regenerar heightmap del terreno desde el seed cargado.
+	map_regenerate_heightmap(m)
+
 	return true
 }

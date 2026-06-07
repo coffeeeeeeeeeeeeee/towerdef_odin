@@ -1,17 +1,18 @@
 {
 	"grid_size": 20,
 	"cell_size": 32,
-	"show_grid": true,
+	"show_grid": false,
 	"show_fps": false,
 	"language": 1,
-	"master_volume": 0.48750001,
-	"ui_volume": 0.46250001,
-	"sfx_volume": 0.11250000,
+	"master_volume": 0.10000000,
+	"ui_volume": 0.73750001,
+	"sfx_volume": 0.44999999,
 	"fullscreen": false,
 	"vsync": true,
 	"antialiasing": 3,
 	"window_maximized": true,
 	"show_damage_numbers": true,
 	"show_tower_range": false,
-	"auto_start_wave": true
+	"auto_start_wave": true,
+	"auto_skip_shop": true
 }

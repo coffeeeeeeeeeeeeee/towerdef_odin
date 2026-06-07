@@ -55,8 +55,14 @@ Simulation :: struct {
 
 	// Selección de carta (cada DECK_SELECTION_INTERVAL oleadas)
 	card_selection_active:  bool,
-	card_selection_choices: [3]Card,
-	card_selection_bought:  [3]bool, // slots ya comprados en esta visita al shop
+	card_selection_choices: [constants.MAX_SHOP_SLOTS]Card,
+	card_selection_bought:  [constants.MAX_SHOP_SLOTS]bool, // slots ya comprados en esta visita al shop
+	card_selection_locked:  [constants.MAX_SHOP_SLOTS]bool, // slots con lock — sobreviven al reroll
+	shop_slot_count:        i32,                            // slots activos en el shop actual (depende del bioma)
+	rerolls_this_shop:      i32,                            // contador para el costo progresivo de reroll
+	shops_since_unique:     i32,                            // pity counter para forzar UNIQUE
+	skip_streak_count:      i32,                            // skips consecutivos sin comprar (para bonus de oro)
+	shop_purchases_this_visit: i32,                         // compras en la visita actual (para skip bonus)
 
 	// Stacks permanentes de relictos — indexado por Card_Kind (ver RELIC_SPECS en card.odin).
 	// Se inicializa a cero automáticamente; sim.relic_stacks[.INTEREST_BOOST], etc.
@@ -80,6 +86,10 @@ Simulation :: struct {
 
 	// Victory flag (set when wave MAX_WAVE is cleared with health > 0)
 	is_victory: bool,
+
+	// Airdrop events
+	airdrops:           [dynamic]Airdrop,
+	airdrop_timer:      f32,  // cuenta regresiva hasta el próximo spawn
 
 	// Stats
 	enemies_killed: i32,
@@ -138,6 +148,8 @@ Editor :: struct {
 	map_browser_preview_valid:     bool,            // True cuando hay una vista previa válida
 	map_browser_preview_tex:       raylib.RenderTexture2D, // Textura del preview renderizado
 	map_browser_preview_tex_valid: bool,            // True cuando la textura es válida
+	map_browser_renaming:          bool,            // True mientras el modo rename está activo
+	map_browser_rename_input:      Input_State,     // Estado del campo de texto para renombrar
 
 	// Undo / Redo
 	undo_stack: [dynamic]Map_Snapshot, // Snapshots anteriores (el último es el más reciente)
@@ -168,6 +180,21 @@ Settings :: struct {
 	show_damage_numbers: bool,
 	show_tower_range: bool,
 	auto_start_wave: bool,
+	auto_skip_shop: bool,
+}
+
+// Generic Sí/No confirmation modal — `action` tells the caller what to do on confirm.
+Modal_Action :: enum {
+	NONE,
+	NEW_GAME,
+	RESTART_RUN,
+	EXIT_GAME,
+}
+
+Confirm_Modal :: struct {
+	active: bool,
+	text:   string,
+	action: Modal_Action,
 }
 
 // Spawn_Point and Path_Node are defined in map.odin and enemy.odin
@@ -222,6 +249,9 @@ App_State :: struct {
 	// Quit flag
 	should_quit: bool,
 
+	// Developer mode: god mode toggle (no damage taken)
+	dev_god_mode: bool,
+
 	// Meta-progression (persisted to savegame.bin)
 	meta: Meta_State,
 
@@ -231,6 +261,61 @@ App_State :: struct {
 	// Tooltip layer — written during UI render, drawn last so it's always on top.
 	// Only one tooltip can be visible per frame; first writer wins.
 	pending_tooltip: Pending_Tooltip,
+
+	// Ambient bird flock animation
+	bird_flock: Bird_Flock,
+
+	// Generic Sí/No confirmation modal (e.g. confirmar nueva campaña)
+	confirm_modal: Confirm_Modal,
+}
+
+
+// Airdrop event — un avión cruza el mapa y suelta una caja con loot
+Airdrop_Phase :: enum { PLANE_FLYING, BOX_FALLING, BOX_LANDED }
+
+Airdrop :: struct {
+	// Avión — posición y dirección en world space
+	plane_x:     f32,
+	plane_y:     f32,
+	plane_dir_x: f32,   // dirección normalizada X
+	plane_dir_y: f32,   // dirección normalizada Y
+
+	// Tile destino (world center precalculado)
+	target_row:  i32,
+	target_col:  i32,
+	target_wx:   f32,   // world x del centro del tile
+	target_wy:   f32,   // world y del centro del tile
+
+	// Estela jet (ring buffer de posiciones world)
+	trail:       [24]raylib.Vector2,
+	trail_len:   i32,
+	trail_head:  i32,
+	trail_timer: f32,   // acumula dt para samplear cada AIRDROP_TRAIL_INTERVAL
+
+	// Paracaídas / caja
+	phase:       Airdrop_Phase,
+	chute_t:     f32,   // 1.0 = recién soltado, 0.0 = caja aparece
+	dropped:     bool,
+
+	// Ping convergente (círculo que se encoge hasta el centro de la caja)
+	ping_timer:  f32,   // cuenta regresiva hasta el próximo ping
+	ping_t:      f32,   // 1.0 = inicio del anillo grande, 0.0 = colapsó en centro; -1 = inactivo
+}
+
+// Bird flock ambient animation
+Bird :: struct {
+	pos:    raylib.Vector2,  // Current screen position
+	offset: raylib.Vector2,  // Offset from flock center
+	phase:  f32,             // Wing flap phase offset
+}
+
+Bird_Flock :: struct {
+	active:      bool,
+	spawn_timer: f32,        // Countdown to next flock spawn
+	anim_time:   f32,        // Accumulated time for wing animation
+	birds:       [12]Bird,
+	bird_count:  i32,
+	velocity:    raylib.Vector2,
 }
 
 Tooltip_Kind :: enum { NONE, LABEL, CARD }
@@ -276,6 +361,7 @@ app_set_state :: proc(app: ^App_State, new_state: constants.Game_State) {
 
 // Take damage — triggers RUN_COMPLETE (defeat) when health reaches zero.
 app_take_damage :: proc(app: ^App_State, damage: i32) {
+	if app.dev_god_mode { return }
 	app.sim.health -= damage
 	if app.sim.health <= 0 {
 		app.sim.health = 0
@@ -292,6 +378,7 @@ app_finish_run :: proc(app: ^App_State, victory: bool) {
 	app.meta.cristales  += cristales
 	app.meta.total_runs += 1
 	meta_save(&app.meta)
+	clear(&app.toasts)
 	app_set_state(app, .RUN_COMPLETE)
 }
 

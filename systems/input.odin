@@ -98,6 +98,13 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 			return
 		}
 
+		// Check airdrop box first (highest priority click target)
+		if is_valid_grid_pos(app, grid_x, grid_y) {
+			if airdrop_collect(app, grid_y, grid_x) {
+				return
+			}
+		}
+
 		if is_valid_grid_pos(app, grid_x, grid_y) {
 			// Check if clicking on a tower
 			tile := app.editor.game_map.grid[grid_y][grid_x]
@@ -129,7 +136,8 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 						if app.sim.selected_build_tower == .OBSTACLE {
 							// Colocar obstáculo — gratuito, ya se pagó en el shop
 							is_forbidden := entities.map_is_path_corner_or_junction(&app.editor.game_map, grid_y, grid_x)
-							if app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY && !is_forbidden {
+							if app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY && !is_forbidden &&
+							   !app.editor.game_map.water_grid[grid_y][grid_x] {
 								app.editor.game_map.obstacle_grid[grid_y][grid_x] = .OBSTACLE
 								entities.card_play(&app.sim, app.sim.selected_card_idx)
 								app.sim.selected_build_tower = .EMPTY
@@ -141,7 +149,8 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 							// Se puede construir sobre árboles (ACCESSORY_TREE): el árbol se destruye.
 							tower_type := tile_to_tower_type(app.sim.selected_build_tower)
 							can_place  := (tile == .EMPTY || tile == .ACCESSORY_TREE) &&
-							              app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY
+							              app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY &&
+							              !app.editor.game_map.water_grid[grid_y][grid_x]
 							if can_place {
 								app.editor.game_map.grid[grid_y][grid_x] = app.sim.selected_build_tower
 								tower := entities.tower_init(tower_type, grid_y, grid_x)
@@ -192,6 +201,38 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 	if raylib.IsKeyPressed(.TWO) {
 		simulation_set_speed(app, 2.0)
 	}
+
+	// ── Developer hotkeys (compiled out when DEVELOPER == false) ─────────────
+	if constants.DEVELOPER {
+		// F1 — +$500
+		if raylib.IsKeyPressed(.F1) {
+			entities.app_add_money(app, 500)
+			entities.add_toast(app, "[DEV] +$500", .INFO, 1.5)
+		}
+		// F2 — skip wave (clear all enemies, trigger end-of-wave)
+		if raylib.IsKeyPressed(.F2) {
+			clear(&app.sim.enemies)
+			app.sim.enemies_to_spawn = 0
+			entities.add_toast(app, "[DEV] Wave skipped", .INFO, 1.5)
+		}
+		// F3 — +50 health
+		if raylib.IsKeyPressed(.F3) {
+			app.sim.health += 50
+			entities.add_toast(app, "[DEV] +50 health", .INFO, 1.5)
+		}
+		// F4 — toggle god mode
+		if raylib.IsKeyPressed(.F4) {
+			app.dev_god_mode = !app.dev_god_mode
+			msg := "[DEV] God mode ON" if app.dev_god_mode else "[DEV] God mode OFF"
+			entities.add_toast(app, msg, .INFO, 2.0)
+		}
+		// F5 — +100 cristales
+		if raylib.IsKeyPressed(.F5) {
+			app.meta.cristales += 100
+			entities.meta_save(&app.meta)
+			entities.add_toast(app, "[DEV] +100 cristales", .INFO, 1.5)
+		}
+	}
 }
 
 // Paused input
@@ -232,14 +273,19 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 	// Cuando el browser está abierto: manejar scroll/ESC y bloquear el resto del input
 	if app.editor.show_map_browser {
 		if raylib.IsKeyPressed(.ESCAPE) {
-			entities.map_destroy(&app.editor.map_browser_preview)
-			app.editor.map_browser_preview_valid = false
-			if app.editor.map_browser_preview_tex_valid {
-				raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
-				app.editor.map_browser_preview_tex_valid = false
+			if app.editor.map_browser_renaming {
+				// Escape cancela el rename sin cerrar el browser
+				app.editor.map_browser_renaming = false
+			} else {
+				entities.map_destroy(&app.editor.map_browser_preview)
+				app.editor.map_browser_preview_valid = false
+				if app.editor.map_browser_preview_tex_valid {
+					raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
+					app.editor.map_browser_preview_tex_valid = false
+				}
+				app.editor.show_map_browser = false
+				app.editor.map_browser_play_mode = false
 			}
-			app.editor.show_map_browser = false
-			app.editor.map_browser_play_mode = false
 		}
 		wheel := raylib.GetMouseWheelMove()
 		if wheel != 0 {
@@ -310,12 +356,23 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 				app.editor.game_map.grid[grid_y][grid_x] = tool
 			}
 		case .OBSTACLE:
-			// Place obstacle (in obstacle layer)
-			app.editor.game_map.obstacle_grid[grid_y][grid_x] = .OBSTACLE
+			// Place obstacle (in obstacle layer, not on water)
+			if !app.editor.game_map.water_grid[grid_y][grid_x] {
+				app.editor.game_map.obstacle_grid[grid_y][grid_x] = .OBSTACLE
+			}
 		case .ACCESSORY_TREE, .ACCESSORY_BLOCK:
 			// Place accessories
 			if app.editor.game_map.grid[grid_y][grid_x] == .EMPTY {
 				app.editor.game_map.grid[grid_y][grid_x] = tool
+			}
+		case .WATER:
+			// Water en cualquier celda excepto torres (path + water = puente automático)
+			tile := app.editor.game_map.grid[grid_y][grid_x]
+			is_tower := tile == .TOWER_ARCHER || tile == .TOWER_CANNON || tile == .TOWER_SNIPER ||
+			            tile == .TOWER_MISSILE || tile == .TOWER_LASER  || tile == .TOWER_ICE   ||
+			            tile == .TOWER_ENHANCE || tile == .TOWER_TESLA  || tile == .TOWER_MORTAR
+			if !is_tower {
+				app.editor.game_map.water_grid[grid_y][grid_x] = true
 			}
 		}
 	}
@@ -380,9 +437,12 @@ editor_erase_cell :: proc(app: ^entities.App_State, row, col: i32) {
 	
 	// Remove from main grid
 	app.editor.game_map.grid[row][col] = .EMPTY
-	
+
 	// Also remove from obstacle grid
 	app.editor.game_map.obstacle_grid[row][col] = .EMPTY
+
+	// Also remove water
+	app.editor.game_map.water_grid[row][col] = false
 	
 	// Remove tile data — also free the cloned key string
 	if existing_key, ok := entities.map_get_existing_key(&app.editor.game_map, row, col); ok {

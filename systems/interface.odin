@@ -97,8 +97,10 @@ render_tooltip_layer :: proc(app: ^entities.App_State) {
 		PAD       : f32 = 10
 		LINE_H    : f32 = FONT_SIZE + 4
 
-		lines : [4]string
-		n     := 0
+		// ── Collect tooltip content ─────────────────────────────────────────
+		name   := entities.card_name(card)
+		lines  : [4]string
+		n      := 0
 		push :: proc(lines: ^[4]string, n: ^int, text: string) {
 			if n^ >= 4 { return }
 			lines[n^] = text
@@ -124,7 +126,9 @@ render_tooltip_layer :: proc(app: ^entities.App_State) {
 			push(&lines, &n, constants.get_text("TOOLTIP_OBSTACLE_DESC"))
 		case:
 			rspec, rok := entities.relic_spec_for(card.kind)
-			if rok { push(&lines, &n, constants.get_text(rspec.desc_key)) }
+			if rok {
+				push(&lines, &n, constants.get_text(rspec.desc_key))
+			}
 		}
 
 		#partial switch card.kind {
@@ -143,24 +147,53 @@ render_tooltip_layer :: proc(app: ^entities.App_State) {
 			}
 		}
 
-		max_w : f32 = 0
+		// ── Layout: name + rarity badge + separator + content lines ─────────
+		NAME_SIZE  : f32 = FONT_SIZE + 1
+		BEDGE_H    : f32 = 20   // altura del badge de rareza (mismo que render_rarity)
+		SEP_H      : f32 = 8    // espacio entre badge y primera línea de contenido
+		rarity     := entities.card_rarity(card)
+		rarity_col := rarity_border_color(rarity)
+		name_cstr  := strings.clone_to_cstring(name, context.temp_allocator)
+		name_w     := raylib.MeasureTextEx(constants.game_fonts.bold, name_cstr, NAME_SIZE, 0).x
+
+		// Ancho mínimo para que el badge de rareza quepa cómodo
+		MIN_BADGE_W : f32 = 80
+		max_w : f32 = max(name_w, MIN_BADGE_W)
 		for i in 0 ..< n {
-			w := raylib.MeasureTextEx(constants.game_fonts.bold,
+			w := raylib.MeasureTextEx(constants.game_fonts.regular,
 				strings.clone_to_cstring(lines[i], context.temp_allocator), FONT_SIZE, 0).x
 			if w > max_w { max_w = w }
 		}
-		tip_w := max_w + PAD * 2
-		tip_h := f32(n) * LINE_H + PAD * 2 - 4
-		tip_x := tip.trigger.x + tip.trigger.width/2 - tip_w/2
-		tip_y := tip.trigger.y - tip_h - f32(constants.UI_TOOLTIP_OFFSET)
-		r     := render_tooltip({tip_x, tip_y, tip_w, tip_h})
+
+		tip_w  := max_w + PAD * 2
+		tip_h  := NAME_SIZE + 4 + BEDGE_H + SEP_H + f32(n) * LINE_H + PAD * 2
+		tip_x  := tip.trigger.x + tip.trigger.width/2 - tip_w/2
+		tip_y  := tip.trigger.y - tip_h - f32(constants.UI_TOOLTIP_OFFSET)
+		r      := render_tooltip({tip_x, tip_y, tip_w, tip_h})
+
+		// Nombre (bold, color de rareza)
+		raylib.DrawTextEx(
+			constants.game_fonts.bold, name_cstr,
+			{r.x + PAD, r.y + PAD},
+			NAME_SIZE, 0, rarity_col,
+		)
+
+		// Badge de rareza (centrado bajo el nombre)
+		badge_y := r.y + PAD + NAME_SIZE + 4
+		render_rarity(rarity, r.x, badge_y, r.width)
+
+		// Separador
+		sep_y := badge_y + BEDGE_H + SEP_H * 0.4
+		raylib.DrawLineEx({r.x + PAD, sep_y}, {r.x + r.width - PAD, sep_y}, 1, raylib.Color{180, 180, 180, 160})
+
+		// Líneas de contenido (desc + stats)
+		base_y := badge_y + BEDGE_H + SEP_H
 		for i in 0 ..< n {
-			col := constants.UI_PANEL_TEXT_COLOR if i == 0 else raylib.Color{60, 100, 160, 255}
 			raylib.DrawTextEx(
-				constants.game_fonts.bold,
+				constants.game_fonts.regular,
 				strings.clone_to_cstring(lines[i], context.temp_allocator),
-				{r.x + PAD, r.y + PAD + f32(i) * LINE_H},
-				FONT_SIZE, 0, col,
+				{r.x + PAD, base_y + f32(i) * LINE_H},
+				FONT_SIZE, 0, raylib.Color{60, 60, 60, 255},
 			)
 		}
 	}
@@ -790,6 +823,75 @@ render_panel :: proc(rect: raylib.Rectangle, title: string = "") -> raylib.Recta
 	}
 }
 
+// Resultado de un modal de confirmación Sí/No.
+Modal_Result :: enum { NONE, CONFIRMED, CANCELLED }
+
+// Modal genérico de confirmación Sí/No: fondo oscuro de pantalla completa +
+// render_panel con el texto + dos botones. Bloquea toda la UI inferior mientras
+// está activo (el caller debe registrar el rect de pantalla completa en
+// ui_modal_blocks desde render_ui, igual que el shop). Aquí limpiamos esa lista
+// antes de dibujar para que los propios botones Sí/No respondan a los clicks.
+render_confirm_modal :: proc(text: string) -> Modal_Result {
+	clear(&ui_modal_blocks)
+
+	screen_w := f32(raylib.GetScreenWidth())
+	screen_h := f32(raylib.GetScreenHeight())
+
+	// Fondo oscuro modal
+	raylib.DrawRectangle(0, 0, i32(screen_w), i32(screen_h), raylib.Color{0, 0, 0, 160})
+
+	lines := strings.split(text, "\n")
+	defer delete(lines)
+
+	text_size   : f32 = 16
+	line_height : f32 = text_size * 1.4
+	btn_w       : f32 = 110
+	btn_h       : f32 = f32(constants.UI_BUTTON_HEIGHT)
+	btn_gap     : f32 = 20
+
+	panel_w := f32(300)
+	panel_h := f32(len(lines)) * line_height + btn_h + 50
+
+	panel_rect := raylib.Rectangle{
+		screen_w / 2 - panel_w / 2,
+		screen_h / 2 - panel_h / 2,
+		panel_w,
+		panel_h,
+	}
+	content := render_panel(panel_rect)
+
+	// Texto centrado, línea por línea
+	for line, i in lines {
+		line_w := raylib.MeasureTextEx(constants.game_fonts.regular, strings.clone_to_cstring(line, context.temp_allocator), text_size, 0).x
+		line_x := content.x + content.width / 2 - line_w / 2
+		line_y := content.y + f32(i) * line_height
+		raylib.DrawTextEx(
+			constants.game_fonts.regular,
+			strings.clone_to_cstring(line, context.temp_allocator),
+			{line_x, line_y},
+			text_size,
+			0,
+			constants.UI_TEXT_COLOR,
+		)
+	}
+
+	// Botones Sí / No, centrados bajo el texto
+	buttons_y := content.y + f32(len(lines)) * line_height + 24
+	buttons_total_w := btn_w * 2 + btn_gap
+	buttons_x := content.x + content.width / 2 - buttons_total_w / 2
+
+	result := Modal_Result.NONE
+
+	if render_button("Sí", {buttons_x, buttons_y, btn_w, btn_h}, button_color = constants.UI_MODAL_CONFIRM_BUTTON_COLOR) {
+		result = .CONFIRMED
+	}
+	if render_button("No", {buttons_x + btn_w + btn_gap, buttons_y, btn_w, btn_h}, button_color = constants.UI_MODAL_CANCEL_BUTTON_COLOR) {
+		result = .CANCELLED
+	}
+
+	return result
+}
+
 // Render info panel: icon + large bold value filling the panel, tooltip on hover.
 // Delegates shadow + background + click-blocking to render_panel (called with no title).
 // Returns the content rectangle so callers can draw additional content.
@@ -861,8 +963,7 @@ render_relic_preview :: proc(
 	kind: entities.Card_Kind,
 	icon_cx: f32, preview_y: f32, preview_size: f32,
 ) {
-	icon   := entities.relic_icon(kind)
-	stacks := entities.relic_stacks(&app.sim, kind)
+	icon := entities.relic_icon(kind)
 
 	if icon.id != 0 {
 		sz     := preview_size
@@ -871,14 +972,6 @@ render_relic_preview :: proc(
 		src    := raylib.Rectangle{0, 0, f32(icon.width), f32(icon.height)}
 		dst    := raylib.Rectangle{icon_cx - iw / 2, preview_y, iw, sz}
 		raylib.DrawTexturePro(icon, src, dst, {0, 0}, 0, raylib.WHITE)
-	}
-
-	// Badge con número de stacks acumulados
-	if stacks > 0 {
-		badge   := fmt.ctprintf("x%d", stacks)
-		badge_w := raylib.MeasureTextEx(constants.game_fonts.semibold, badge, 13, 0).x
-		badge_y := preview_y + preview_size - 2
-		raylib.DrawTextEx(constants.game_fonts.semibold, badge, {icon_cx - badge_w / 2, badge_y}, 13, 0, raylib.Color{255, 220, 100, 255})
 	}
 }
 render_card :: proc(
@@ -938,7 +1031,7 @@ render_card :: proc(
 	name_size : f32 = 12
 	name_w := raylib.MeasureTextEx(constants.game_fonts.regular, strings.clone_to_cstring(name, context.temp_allocator), name_size, 0).x
 	name_color := constants.UI_PANEL_TEXT_COLOR
-	if !can_afford { name_color = raylib.Color{100, 100, 100, 255} }
+	if !can_afford { name_color = raylib.Color{185, 185, 185, 255} }
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
 		strings.clone_to_cstring(name, context.temp_allocator),
@@ -970,9 +1063,15 @@ render_card :: proc(
 	// Separador
 	raylib.DrawLineEx({x + 10, y + 96}, {x + CARD_W - 10, y + 96}, 1, raylib.Color{100, 100, 120, 120})
 
-	// Costo — solo en el shop y solo para cartas que tienen precio (no relictos)
-	if show_price && !entities.is_relic(card.kind) {
-		cost_str  := fmt.ctprintf("$%d", entities.card_cost(card))
+	// Costo — solo en el shop
+	if show_price {
+		price: i32
+		if entities.is_relic(card.kind) {
+			price = entities.card_shop_price(card)
+		} else {
+			price = entities.card_cost(card)
+		}
+		cost_str  := fmt.ctprintf("$%d", price)
 		cost_size : f32 = 15
 		cost_w    := raylib.MeasureTextEx(constants.game_fonts.semibold, cost_str, cost_size, 0).x
 		cost_color := can_afford ? raylib.Color{80, 220, 100, 255} : raylib.Color{200, 60, 60, 255}
@@ -994,6 +1093,7 @@ rarity_border_color :: proc(rarity: constants.Card_Rarity) -> raylib.Color {
 	case .COMMON:   return constants.RARITY_COLOR_COMMON
 	case .UNCOMMON: return constants.RARITY_COLOR_UNCOMMON
 	case .RARE:     return constants.RARITY_COLOR_RARE
+	case .EPIC:     return constants.RARITY_COLOR_EPIC
 	case .UNIQUE:   return constants.RARITY_COLOR_UNIQUE
 	}
 	return constants.RARITY_COLOR_COMMON
@@ -1005,6 +1105,7 @@ rarity_card_bg :: proc(rarity: constants.Card_Rarity) -> raylib.Color {
 	case .COMMON:   return constants.RARITY_CARD_BG_COMMON
 	case .UNCOMMON: return constants.RARITY_CARD_BG_UNCOMMON
 	case .RARE:     return constants.RARITY_CARD_BG_RARE
+	case .EPIC:     return constants.RARITY_CARD_BG_EPIC
 	case .UNIQUE:   return constants.RARITY_CARD_BG_UNIQUE
 	}
 	return constants.RARITY_CARD_BG_COMMON
@@ -1022,6 +1123,7 @@ render_rarity :: proc(rarity: constants.Card_Rarity, card_x, badge_y, card_w: f3
 	case .COMMON:   label = constants.get_text("RARITY_COMMON")
 	case .UNCOMMON: label = constants.get_text("RARITY_UNCOMMON")
 	case .RARE:     label = constants.get_text("RARITY_RARE")
+	case .EPIC:     label = constants.get_text("RARITY_EPIC")
 	case .UNIQUE:   label = constants.get_text("RARITY_UNIQUE")
 	}
 
@@ -1039,4 +1141,234 @@ render_rarity :: proc(rarity: constants.Card_Rarity, card_x, badge_y, card_w: f3
 		{badge_x + PAD, badge_y + (BADGE_H - FONT_SZ) / 2},
 		FONT_SZ, 0, raylib.WHITE,
 	)
+}
+
+// =============================================================================
+// Text input
+// =============================================================================
+
+// Convierte los primeros n runes de buf en cstring usando el temp_allocator.
+_input_runes_to_cstr :: proc(buf: []rune, n: int) -> cstring {
+	b := strings.builder_make(context.temp_allocator)
+	for i in 0..<n {
+		strings.write_rune(&b, buf[i])
+	}
+	return strings.clone_to_cstring(strings.to_string(b), context.temp_allocator)
+}
+
+// Inserta un string al final del input (usado para pre-cargar un valor).
+_input_insert_str :: proc(s: ^entities.Input_State, str: string) {
+	for r in str {
+		if s.len >= constants.MAX_INPUT_LEN { break }
+		s.buf[s.len] = r
+		s.len += 1
+	}
+	s.cursor     = s.len
+	s.sel_anchor = -1
+}
+
+// Renderiza un campo de texto interactivo.
+// Devuelve true cuando el usuario presiona Enter (confirma el valor).
+render_input :: proc(
+	s:   ^entities.Input_State,
+	rect: raylib.Rectangle,
+	dt:  f32,
+	placeholder: cstring = "",
+) -> bool {
+	// ── Focus on click ───────────────────────────────────────────────────────
+	if raylib.IsMouseButtonPressed(.LEFT) {
+		mx := f32(raylib.GetMouseX())
+		my := f32(raylib.GetMouseY())
+		s.focused = mx >= rect.x && mx < rect.x + rect.width &&
+		            my >= rect.y && my < rect.y + rect.height
+	}
+
+	// ── Blink timer ──────────────────────────────────────────────────────────
+	if s.focused {
+		s.blink += dt
+		if s.blink >= constants.INPUT_BLINK_HALF * 2 {
+			s.blink -= constants.INPUT_BLINK_HALF * 2
+		}
+	} else {
+		s.blink = 0
+	}
+
+	confirmed := false
+
+	// ── Keyboard handling (only when focused) ────────────────────────────────
+	if s.focused {
+		// Character input
+		for {
+			r := raylib.GetCharPressed()
+			if r == 0 { break }
+			// Delete selection first
+			if s.sel_anchor >= 0 {
+				lo, hi := entities.input_sel_range(s)
+				copy(s.buf[lo:], s.buf[hi:s.len])
+				s.len -= hi - lo
+				s.cursor = lo
+				s.sel_anchor = -1
+			}
+			if s.len < constants.MAX_INPUT_LEN {
+				copy(s.buf[s.cursor+1:], s.buf[s.cursor:s.len])
+				s.buf[s.cursor] = rune(r)
+				s.len    += 1
+				s.cursor += 1
+			}
+			s.blink = 0
+		}
+
+		// Backspace
+		if raylib.IsKeyPressedRepeat(.BACKSPACE) || raylib.IsKeyPressed(.BACKSPACE) {
+			if s.sel_anchor >= 0 {
+				lo, hi := entities.input_sel_range(s)
+				copy(s.buf[lo:], s.buf[hi:s.len])
+				s.len -= hi - lo
+				s.cursor = lo
+				s.sel_anchor = -1
+			} else if s.cursor > 0 {
+				copy(s.buf[s.cursor-1:], s.buf[s.cursor:s.len])
+				s.len    -= 1
+				s.cursor -= 1
+			}
+			s.blink = 0
+		}
+
+		// Delete
+		if raylib.IsKeyPressedRepeat(.DELETE) || raylib.IsKeyPressed(.DELETE) {
+			if s.sel_anchor >= 0 {
+				lo, hi := entities.input_sel_range(s)
+				copy(s.buf[lo:], s.buf[hi:s.len])
+				s.len -= hi - lo
+				s.cursor = lo
+				s.sel_anchor = -1
+			} else if s.cursor < s.len {
+				copy(s.buf[s.cursor:], s.buf[s.cursor+1:s.len])
+				s.len -= 1
+			}
+			s.blink = 0
+		}
+
+		// Arrow keys
+		shift := raylib.IsKeyDown(.LEFT_SHIFT) || raylib.IsKeyDown(.RIGHT_SHIFT)
+		if raylib.IsKeyPressedRepeat(.LEFT) || raylib.IsKeyPressed(.LEFT) {
+			if shift {
+				if s.sel_anchor < 0 { s.sel_anchor = s.cursor }
+			} else {
+				s.sel_anchor = -1
+			}
+			if s.cursor > 0 { s.cursor -= 1 }
+			s.blink = 0
+		}
+		if raylib.IsKeyPressedRepeat(.RIGHT) || raylib.IsKeyPressed(.RIGHT) {
+			if shift {
+				if s.sel_anchor < 0 { s.sel_anchor = s.cursor }
+			} else {
+				s.sel_anchor = -1
+			}
+			if s.cursor < s.len { s.cursor += 1 }
+			s.blink = 0
+		}
+
+		// Home / End
+		if raylib.IsKeyPressed(.HOME) {
+			if shift { if s.sel_anchor < 0 { s.sel_anchor = s.cursor } } else { s.sel_anchor = -1 }
+			s.cursor = 0; s.blink = 0
+		}
+		if raylib.IsKeyPressed(.END) {
+			if shift { if s.sel_anchor < 0 { s.sel_anchor = s.cursor } } else { s.sel_anchor = -1 }
+			s.cursor = s.len; s.blink = 0
+		}
+
+		// Ctrl+A — select all
+		if (raylib.IsKeyDown(.LEFT_CONTROL) || raylib.IsKeyDown(.RIGHT_CONTROL)) && raylib.IsKeyPressed(.A) {
+			s.sel_anchor = 0
+			s.cursor     = s.len
+		}
+
+		// Enter — confirm
+		if raylib.IsKeyPressed(.ENTER) || raylib.IsKeyPressed(.KP_ENTER) {
+			confirmed = true
+		}
+	}
+
+	// ── Measure text for scroll ───────────────────────────────────────────────
+	FS   := constants.INPUT_FONT_SIZE
+	PAD  := constants.INPUT_PAD_H
+	font := constants.game_fonts.regular
+
+	inner_w := rect.width - PAD * 2
+
+	// Cursor X in text space
+	cursor_text := _input_runes_to_cstr(s.buf[:], s.cursor)
+	cursor_x    := raylib.MeasureTextEx(font, cursor_text, FS, 0).x
+
+	// Scroll so cursor is always visible
+	if cursor_x - s.scroll_x > inner_w - 2 {
+		s.scroll_x = cursor_x - inner_w + 2
+	}
+	if cursor_x - s.scroll_x < 0 {
+		s.scroll_x = cursor_x
+	}
+
+	// ── Draw background ───────────────────────────────────────────────────────
+	raylib.DrawRectangleRec(rect, constants.INPUT_BG_COLOR)
+
+	// Border
+	border_thick := constants.INPUT_BORDER_THICK
+	border_color := constants.INPUT_BORDER_COLOR
+	if s.focused {
+		border_thick = constants.INPUT_BORDER_THICK_FOCUSED
+		border_color = constants.INPUT_BORDER_FOCUSED
+	}
+	raylib.DrawRectangleLinesEx(rect, border_thick, border_color)
+
+	// ── Draw selection highlight ──────────────────────────────────────────────
+	if s.focused && s.sel_anchor >= 0 {
+		lo, hi := entities.input_sel_range(s)
+		sel_x0 := raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[:], lo), FS, 0).x
+		sel_x1 := raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[:], hi), FS, 0).x
+		sel_rx := rect.x + PAD + sel_x0 - s.scroll_x
+		sel_rw := sel_x1 - sel_x0
+		sel_rect := raylib.Rectangle{sel_rx, rect.y + 2, sel_rw, rect.height - 4}
+		// Clip selection to inner box
+		if sel_rect.x < rect.x + PAD {
+			sel_rect.width -= (rect.x + PAD) - sel_rect.x
+			sel_rect.x      = rect.x + PAD
+		}
+		if sel_rect.x + sel_rect.width > rect.x + rect.width - PAD {
+			sel_rect.width = rect.x + rect.width - PAD - sel_rect.x
+		}
+		if sel_rect.width > 0 {
+			raylib.DrawRectangleRec(sel_rect, constants.INPUT_SELECT_COLOR)
+		}
+	}
+
+	// ── Draw text (scissored) ─────────────────────────────────────────────────
+	text_y := rect.y + (rect.height - FS) / 2
+
+	// Use Raylib scissor mode to clip text to inner box
+	scissor_x := i32(rect.x + PAD)
+	scissor_w := i32(inner_w)
+	raylib.BeginScissorMode(scissor_x, i32(rect.y), scissor_w, i32(rect.height))
+
+	if s.len == 0 && placeholder != "" {
+		raylib.DrawTextEx(font, placeholder, {rect.x + PAD - s.scroll_x, text_y}, FS, 0, constants.INPUT_PLACEHOLDER_COLOR)
+	} else {
+		full_text := _input_runes_to_cstr(s.buf[:], s.len)
+		raylib.DrawTextEx(font, full_text, {rect.x + PAD - s.scroll_x, text_y}, FS, 0, raylib.BLACK)
+	}
+
+	raylib.EndScissorMode()
+
+	// ── Draw cursor ───────────────────────────────────────────────────────────
+	if s.focused && s.blink < constants.INPUT_BLINK_HALF {
+		cx := rect.x + PAD + cursor_x - s.scroll_x
+		raylib.DrawRectangleRec(
+			{cx, rect.y + 3, constants.INPUT_CURSOR_WIDTH, rect.height - 6},
+			constants.INPUT_CURSOR_COLOR,
+		)
+	}
+
+	return confirmed
 }

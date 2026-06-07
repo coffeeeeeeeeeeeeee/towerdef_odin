@@ -1,5 +1,11 @@
 package constants
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Developer mode — set to false before shipping.
+// When false, the compiler eliminates all `if DEVELOPER { }` blocks entirely.
+// ─────────────────────────────────────────────────────────────────────────────
+DEVELOPER :: true
+
 import "vendor:raylib"
 
 // =============================================================================
@@ -22,6 +28,7 @@ Card_Rarity :: enum {
 	COMMON,
 	UNCOMMON,
 	RARE,
+	EPIC,
 	UNIQUE,
 }
 
@@ -43,6 +50,7 @@ Tile :: enum i32 {
 	TOWER_ENHANCE    = 13,
 	TOWER_TESLA      = 14,
 	TOWER_MORTAR     = 15,
+	WATER            = 16, // Herramienta de editor; la capa real se guarda en Map.water_grid
 }
 
 Tower_Type :: enum {
@@ -112,7 +120,7 @@ GRID_SIZE    :: 20
 CELL_SIZE    :: 32
 MAX_FPS      :: 60
 DEFAULT_MONEY  :: 80
-DEFAULT_HEALTH :: 40
+DEFAULT_HEALTH :: 10
 
 PATH_WIDTH_RATIO :: 0.4  // Path draw width as a fraction of cell size
 
@@ -231,6 +239,7 @@ FROZEN_AMP_BONUS         :: f32(0.30)   // Extra damage multiplier per FROZEN_AM
 STEAL_CARDS_PER_STACK    :: i32(1)      // Cards stolen per STEAL stack at end of each wave
 VETERAN_BOOST_CHANCE     :: f32(0.35)   // Chance per stack that a tower card in the shop appears pre-leveled (1 stack=35%, 2=70%, 3=100%)
 RELIC_FLASH_DURATION     :: f32(0.4)    // Seconds a relic icon flashes white when its effect triggers
+MAX_RELIC_STACKS         :: i32(20)     // Maximum stack count for any relic
 
 RECYCLER_SELL_BONUS  :: f32(0.10)  // Extra fraction of sell price per RECYCLER stack
 MEMENTO_GOLD_PER_10W :: i32(1)     // Gold per stack per 10 completed waves
@@ -242,6 +251,7 @@ CARD_SELL_PRICE      :: i32(25)    // Gold received when selling a non-relic car
 SELL_PRICE_COMMON    :: i32(20)    // Sell price for Common cards
 SELL_PRICE_UNCOMMON  :: i32(30)    // Sell price for Uncommon cards
 SELL_PRICE_RARE      :: i32(45)    // Sell price for Rare cards
+SELL_PRICE_EPIC      :: i32(55)    // Sell price for Epic cards
 SELL_PRICE_UNIQUE    :: i32(65)    // Sell price for Unique cards
 HAND_REDEAL_COST     :: i32(40)    // Gold cost to redeal the hand once the game has started (free before first wave)
 
@@ -331,10 +341,10 @@ OBSTACLE_DAMAGE_PER_LEVEL :: f32(5.0)  // Base damage; actual = OBSTACLE_DAMAGE_
 // Enemy rewards and goal damage
 // =============================================================================
 
-ENEMY_REWARD_DEFAULT :: i32(5)   // Gold for killing a normal enemy
-ENEMY_REWARD_BOSS    :: i32(50)  // Gold for killing a boss
-ENEMY_REWARD_GREEN   :: i32(3)   // Gold for killing a green (fast) enemy
-ENEMY_REWARD_BONUS   :: i32(25)  // Bonus gold added when killing a bonus enemy
+ENEMY_REWARD_DEFAULT :: i32(3)   // Gold for killing a normal enemy
+ENEMY_REWARD_BOSS    :: i32(35)  // Gold for killing a boss
+ENEMY_REWARD_GREEN   :: i32(2)   // Gold for killing a green (fast) enemy
+ENEMY_REWARD_BONUS   :: i32(15)  // Bonus gold added when killing a bonus enemy
 
 ENEMY_GOAL_DAMAGE_DEFAULT :: i32(1)  // Lives lost when a normal enemy reaches the goal
 ENEMY_GOAL_DAMAGE_BOSS    :: i32(5)  // Lives lost when a boss reaches the goal
@@ -369,28 +379,104 @@ DECK_CARD_DROP_CHANCE   :: f32(0.004) // Probability of a card drop on each enem
 DECK_SELECTION_INTERVAL :: i32(1)     // Every N waves the shop opens (1 = every wave)
 SHOP_RELIC_PRICE        :: i32(75)    // Fallback price (kept for compatibility)
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Shop — mecánicas extendidas (lock, reroll progresivo, pity, skip, biome)
+// ─────────────────────────────────────────────────────────────────────────────
+
+SHOP_BASE_SLOTS    :: 3  // Slots base del shop antes del modificador de bioma
+MAX_SHOP_SLOTS     :: 5  // Tope físico de slots (limita arrays en Simulation)
+
+// Costo de reroll dentro de una misma visita. Index = rerolls_this_shop.
+// Más allá del último índice, se usa el último valor (150).
+SHOP_REROLL_COSTS := [4]i32{0, 30, 75, 150}
+
+// Skip sin comprar nada → +N oro por skip consecutivo, capeado.
+// Reset al comprar cualquier cosa.
+SHOP_SKIP_BONUS_PER_SKIP :: i32(15)
+SHOP_SKIP_BONUS_CAP      :: i32(50)
+
+// Pity: después de N shops sin ver UNIQUE, el próximo shop fuerza una UNIQUE.
+SHOP_PITY_UNIQUE_THRESHOLD :: i32(8)
+
+// Refund de stacks de relictos ya aplicados durante el shop.
+SHOP_RELIC_REFUND_PRICE :: i32(40)
+
+// Modificador de shop por bioma.
+Shop_Biome_Mod :: struct {
+	price_mult:        f32,    // multiplicador global de precios
+	extra_slots:       i32,    // +N (o -N) slots respecto al base
+	free_reroll:       bool,   // ignora SHOP_REROLL_COSTS, siempre gratis
+	uncommon_discount: f32,    // descuento adicional a UNCOMMON (0.10 = -10%)
+	label_key:         string, // clave de traducción del header
+}
+
+BIOME_SHOP_MODS := [Biome]Shop_Biome_Mod {
+	.PLAIN    = {price_mult = 1.0,  extra_slots =  0, free_reroll = false, uncommon_discount = 0.0,  label_key = "SHOP_BIOME_PLAIN"},
+	.FOREST   = {price_mult = 1.0,  extra_slots =  0, free_reroll = false, uncommon_discount = 0.10, label_key = "SHOP_BIOME_FOREST"},
+	.DESERT   = {price_mult = 1.20, extra_slots =  1, free_reroll = false, uncommon_discount = 0.0,  label_key = "SHOP_BIOME_DESERT"},
+	.MOUNTAIN = {price_mult = 1.0,  extra_slots = -1, free_reroll = true,  uncommon_discount = 0.0,  label_key = "SHOP_BIOME_MOUNTAIN"},
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Heightmap del terreno — desniveles continuos vía shader (visual, sin gameplay)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Frecuencia del noise: 0.32 → "colinas" de ~3 celdas de ancho.
+// Más alto = relieve más fino. Más bajo = colinas más grandes.
+HEIGHTMAP_FREQUENCY :: f32(0.32)
+HEIGHTMAP_OCTAVES   :: 3   // capas de noise para riqueza fractal
+
+// Parámetros pasados al shader assets/heightmap.glsl.
+//
+// contrast_mult:    amplifica (h - 0.5). 1.0 lineal, 2-3 pronunciado.
+// alpha_max:        alfa máxima del tinte en heights extremos [0..1].
+// contour_steps:    número de isolíneas topográficas (cuanto más alto, más finas).
+// contour_strength: alfa de las isolíneas [0..1].
+// contour_width:    grosor de cada isolínea EN PIXELES de pantalla (1.0 = 1px).
+//                   El shader usa fwidth() para mantenerlo constante con zoom.
+Heightmap_Style :: struct {
+	contrast_mult:    f32,
+	alpha_max:        f32,
+	contour_steps:    f32,
+	contour_strength: f32,
+	contour_width:    f32,
+}
+
+// Por bioma. Calibrado para "más contraste" — MOUNTAIN claramente relievado,
+// PLAIN apenas visible pero presente. Líneas de contorno: 1 pixel de grosor.
+BIOME_HEIGHTMAP_STYLES := [Biome]Heightmap_Style {
+	.PLAIN    = {contrast_mult = 1.6, alpha_max = 0.14, contour_steps = 5.0, contour_strength = 0.090, contour_width = 1.0},
+	.FOREST   = {contrast_mult = 2.0, alpha_max = 0.28, contour_steps = 7.0, contour_strength = 0.160, contour_width = 1.0},
+	.DESERT   = {contrast_mult = 1.9, alpha_max = 0.24, contour_steps = 6.0, contour_strength = 0.140, contour_width = 1.0},
+	.MOUNTAIN = {contrast_mult = 2.8, alpha_max = 0.50, contour_steps = 9.0, contour_strength = 0.275, contour_width = 1.0},
+}
+
 // Rarity system — probabilidades de aparición por slot de tienda (suman 1.0)
 RARITY_PROB_COMMON   :: f32(0.60)
 RARITY_PROB_UNCOMMON :: f32(0.25)
-RARITY_PROB_RARE     :: f32(0.12)
+RARITY_PROB_RARE     :: f32(0.10)
+RARITY_PROB_EPIC     :: f32(0.05)
 RARITY_PROB_UNIQUE   :: f32(0.03)
 
 // Precio de compra en la tienda por rareza (aplica a relictos y torres)
 SHOP_PRICE_COMMON   :: i32(50)
 SHOP_PRICE_UNCOMMON :: i32(75)
 SHOP_PRICE_RARE     :: i32(110)
+SHOP_PRICE_EPIC     :: i32(140)
 SHOP_PRICE_UNIQUE   :: i32(160)
 
 // Colores de rareza — usados como borde, badge y fondo de carta
 RARITY_COLOR_COMMON   :: raylib.Color{160, 160, 160, 255}  // Gris
 RARITY_COLOR_UNCOMMON :: raylib.Color{ 50, 200, 100, 255}  // Verde
 RARITY_COLOR_RARE     :: raylib.Color{ 80, 130, 255, 255}  // Azul
+RARITY_COLOR_EPIC     :: raylib.Color{180,  60, 255, 255}  // Morado
 RARITY_COLOR_UNIQUE   :: raylib.Color{255, 160,  20, 255}  // Dorado
 
 // Fondos de carta por rareza — versiones pastel/suaves para que el texto negro sea legible
 RARITY_CARD_BG_COMMON   :: raylib.Color{222, 222, 226, 255}
 RARITY_CARD_BG_UNCOMMON :: raylib.Color{190, 238, 205, 255}
 RARITY_CARD_BG_RARE     :: raylib.Color{190, 210, 252, 255}
+RARITY_CARD_BG_EPIC     :: raylib.Color{228, 190, 252, 255}
 RARITY_CARD_BG_UNIQUE   :: raylib.Color{252, 228, 168, 255}
 
 OBSTACLE_BASE_COST              :: i32(25)  // Gold cost to place an obstacle card from hand
@@ -417,6 +503,31 @@ COLOR_TREE_LEAVES :: raylib.Color{ 34, 139,  34, 255}
 COLOR_BLOCK    :: raylib.Color{128, 128, 128, 255}
 COLOR_OBSTACLE :: raylib.Color{160,  82,  45, 255}
 // COLOR_LASER_BEAM eliminado — usar TOWER_LASER_COLOR (mismo valor {255,68,68,255})
+
+// Water
+COLOR_WATER       :: raylib.Color{ 70, 130, 200, 220}  // Azul semitransparente
+COLOR_WATER_EDGE  :: raylib.Color{ 50, 100, 170, 255}  // Borde/sombra del agua
+WATER_CORNER_RADIUS_RATIO :: f32(0.32)                  // Radio de esquinas como fracción del tile
+
+// Bridge (path over water)
+COLOR_BRIDGE_RAILING  :: raylib.Color{ 80,  75,  70, 255}  // Barandas de cemento oscuro
+BRIDGE_RAILING_THICK  :: f32(0.07)                          // Grosor de baranda como fracción del tile
+BRIDGE_RAILING_SEGS   :: i32(4)                             // Segmentos para las puntas redondeadas
+
+// =============================================================================
+// Bird flock
+// =============================================================================
+
+BIRD_SPEED              :: f32(140.0)   // Pixels per second
+BIRD_FLAP_FREQ          :: f32(3.2)    // Wing flap cycles per second
+BIRD_WING_AMP           :: f32(5.0)    // Wing-tip vertical oscillation amplitude in pixels
+BIRD_SIZE               :: f32(7.0)    // Half-wingspan in pixels (scales with zoom)
+BIRD_COUNT_MIN          :: i32(5)
+BIRD_COUNT_MAX          :: i32(12)
+BIRD_SPAWN_INTERVAL_MIN :: f32(45.0)   // Seconds between flocks (min)
+BIRD_SPAWN_INTERVAL_MAX :: f32(120.0)  // Seconds between flocks (max)
+BIRD_SCATTER_RADIUS     :: f32(60.0)   // Max distance birds spread from flock center
+COLOR_BIRD              :: raylib.Color{30, 30, 30, 200}
 
 // =============================================================================
 // Enemy colors
@@ -657,6 +768,9 @@ UI_PANEL_LABEL_COLOR :: raylib.DARKGRAY
 UI_PANEL_TEXT_COLOR  :: raylib.BLACK
 UI_PANEL_COLOR       :: raylib.RAYWHITE
 
+UI_MODAL_CONFIRM_BUTTON_COLOR :: raylib.Color{0, 200, 0, 255}
+UI_MODAL_CANCEL_BUTTON_COLOR  :: raylib.Color{200, 0, 0, 255}
+
 UI_RETICLE_COLOR :: raylib.Color{255, 255, 255, 255}
 
 UI_TOOLTIP_BG_COLOR     :: raylib.Color{ 28,  28,  32, 225}
@@ -726,6 +840,52 @@ ZOOM_SMOOTH_SPEED :: f32(8.0)  // Lerp factor per second for smooth zoom
 ease_zoom :: proc(t: f32) -> f32 {
 	return t * t * t  // Ease-in cubic
 }
+
+
+// =============================================================================
+// Text input widget
+// =============================================================================
+
+MAX_INPUT_LEN            :: 64
+INPUT_FONT_SIZE          :: f32(13)
+INPUT_PAD_H              :: f32(5)       // Horizontal padding inside the input box
+INPUT_BORDER_THICK       :: f32(1.0)
+INPUT_BORDER_THICK_FOCUSED :: f32(2.0)
+INPUT_BORDER_COLOR       :: raylib.Color{160, 160, 160, 255}
+INPUT_BORDER_FOCUSED     :: raylib.Color{ 80, 130, 255, 255}
+INPUT_BG_COLOR           :: raylib.Color{255, 255, 255, 255}
+INPUT_SELECT_COLOR       :: raylib.Color{ 80, 130, 255,  80}
+INPUT_PLACEHOLDER_COLOR  :: raylib.Color{160, 160, 160, 255}
+INPUT_BLINK_HALF         :: f32(0.5)     // Cursor visible when blink < this
+INPUT_CURSOR_WIDTH       :: f32(2.0)
+INPUT_CURSOR_COLOR       :: raylib.Color{ 30,  30,  30, 255}
+
+
+// =============================================================================
+// Airdrop
+// =============================================================================
+
+AIRDROP_SPAWN_INTERVAL_MIN :: f32(20.0)  // Segundos mínimos entre drops
+AIRDROP_SPAWN_INTERVAL_MAX :: f32(50.0)  // Segundos máximos entre drops
+AIRDROP_PLANE_SPEED        :: f32(180.0) // Velocidad del avión (world px/s)
+AIRDROP_PLANE_Y_OFFSET     :: f32(-60.0) // Y del avión relativo al borde superior del mapa
+AIRDROP_BOX_FALL_SPEED     :: f32(2.2)   // Duración de la caída del paracaídas (segundos)
+AIRDROP_CHUTE_RADIUS_MAX   :: f32(1.4)   // Radio inicial del círculo (multiplicador de cs)
+AIRDROP_TRAIL_INTERVAL     :: f32(0.04)  // Segundos entre muestras de la estela
+AIRDROP_TRAIL_MAX          :: i32(24)    // Máximo de puntos en la estela
+AIRDROP_PING_INTERVAL      :: f32(3.5)   // Segundos entre pings convergentes
+AIRDROP_PING_DURATION      :: f32(1.4)   // Duración del anillo encogiendo (segundos)
+AIRDROP_PING_RADIUS        :: f32(2.8)   // Radio máximo del ping como múltiplo de cs
+COLOR_AIRDROP_PING         :: raylib.Color{255, 220, 80, 180}  // Amarillo semitransparente
+AIRDROP_MONEY_MIN          :: i32(30)    // Dinero mínimo contenido en la caja
+AIRDROP_MONEY_MAX          :: i32(60)    // Dinero máximo contenido en la caja
+AIRDROP_CRYSTAL_CHANCE     :: f32(0.10)  // Probabilidad de incluir cristales
+AIRDROP_CRYSTAL_MIN        :: i32(5)     // Cristales mínimos en la caja
+AIRDROP_CRYSTAL_MAX        :: i32(10)    // Cristales máximos en la caja
+COLOR_AIRDROP_BOX          :: raylib.Color{210, 160,  40, 255}  // Marrón dorado
+COLOR_AIRDROP_BOX_DARK     :: raylib.Color{150, 100,  20, 255}  // Borde de la caja
+COLOR_AIRDROP_PLANE        :: raylib.Color{180, 180, 195, 255}  // Gris avión
+COLOR_AIRDROP_CHUTE        :: raylib.Color{240, 240, 240, 200}  // Blanco paracaídas
 
 // =============================================================================
 // Editor

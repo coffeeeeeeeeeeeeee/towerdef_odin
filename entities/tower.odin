@@ -39,6 +39,9 @@ Tower :: struct {
 	level: i32,
 	// Niveles otorgados por torres ENHANCE (recalculado cada frame)
 	enhance_bonus: i32,
+	// Niveles permanentes otorgados por la reliquia Cryptobro al matar jefes
+	// (acumulables, exceden el tope manual, solo limitados por TOWER_MAX_LEVEL)
+	cryptobro_bonus: i32,
 
 	// Missile system
 	missile_side: i32,
@@ -108,11 +111,11 @@ tower_get_base_cost :: proc(t: ^Tower) -> i32 {
 }
 
 // Costo del próximo upgrade: base_cost * base_level (lineal).
-// El nivel de enhance no cuenta para el precio.
+// El nivel de enhance y de Cryptobro no cuentan para el precio.
 // Ejemplos arquera (base 20): Nv2→$20, Nv10→$180, Nv20→$380
 tower_get_upgrade_cost :: proc(t: ^Tower) -> i32 {
 	base_cost  := tower_get_base_cost(t)
-	base_level := t.level - t.enhance_bonus
+	base_level := t.level - t.enhance_bonus - t.cryptobro_bonus
 	return base_cost * base_level
 }
 
@@ -121,7 +124,7 @@ tower_get_upgrade_cost :: proc(t: ^Tower) -> i32 {
 tower_get_total_upgrade_spent :: proc(t: ^Tower) -> i32 {
 	if t.level <= 1 { return 0 }
 	base_cost  := tower_get_base_cost(t)
-	base_level := t.level - t.enhance_bonus
+	base_level := t.level - t.enhance_bonus - t.cryptobro_bonus
 	return base_cost * base_level * (base_level - 1) / 2
 }
 
@@ -134,13 +137,13 @@ tower_get_sell_refund :: proc(t: ^Tower) -> i32 {
 
 // Upgrade manual: incrementa level y recomputa stats desde base.
 // Respeta dos límites:
-//   - base_level (level - enhance_bonus) < TOWER_MAX_MANUAL_LEVEL (20) para torres normales
+//   - base_level (level - enhance_bonus - cryptobro_bonus) < TOWER_MAX_MANUAL_LEVEL (20) para torres normales
 //   - base_level < ENHANCE_MAX_LEVEL (5) para el potenciador
 //   - level < TOWER_MAX_LEVEL (25) en cualquier caso
 tower_upgrade :: proc(t: ^Tower) {
 	if t.level >= constants.TOWER_MAX_LEVEL { return }
 	manual_cap := constants.ENHANCE_MAX_LEVEL if t.type == .ENHANCE else constants.TOWER_MAX_MANUAL_LEVEL
-	base_level := t.level - t.enhance_bonus
+	base_level := t.level - t.enhance_bonus - t.cryptobro_bonus
 	if base_level >= manual_cap { return }
 	t.level += 1
 	tower_recompute_stats(t)

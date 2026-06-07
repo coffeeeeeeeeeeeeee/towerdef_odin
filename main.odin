@@ -69,6 +69,22 @@ main :: proc() {
 	systems.audio_init()
 	defer systems.audio_cleanup()
 
+	// Load nebula background shader
+	systems.nebula_init()
+	defer systems.nebula_unload()
+
+	// Load water blob shader
+	systems.water_shader_init()
+	defer systems.water_shader_unload()
+
+	// Load cloud layer shader
+	systems.cloud_shader_init()
+	defer systems.cloud_shader_unload()
+
+	// Load heightmap overlay shader (desniveles del terreno)
+	systems.heightmap_shader_init()
+	defer systems.heightmap_shader_unload()
+
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
 	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)
@@ -104,6 +120,8 @@ main :: proc() {
 			// Snap instantly to avoid long glides when maximizing/fullscreening
 			app.camera_offset_x = app.target_camera_offset_x
 			app.camera_offset_y = app.target_camera_offset_y
+
+			systems.water_shader_resize()
 		}
 
 		// Handle window maximization state changes

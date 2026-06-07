@@ -21,15 +21,17 @@ Meta_State :: struct {
 // Towers that are always available without spending cristales.
 meta_is_tower_unlocked :: proc(meta: ^Meta_State, t: constants.Tower_Type) -> bool {
 	#partial switch t {
-	case .ARCHER, .CANNON, .SNIPER, .ICE, .ENHANCE:
+	case .ARCHER, .CANNON, .SNIPER:
 		return true
 	}
 	return meta.unlocked_towers[int(t)]
 }
 
-// Cristal cost to unlock a premium tower (0 for base towers).
+// Cristal cost to unlock a tower (0 for always-free towers).
 meta_tower_unlock_cost :: proc(t: constants.Tower_Type) -> i32 {
 	#partial switch t {
+	case .ICE:     return 5
+	case .ENHANCE: return 5
 	case .MISSILE: return 10
 	case .LASER:   return 15
 	case .TESLA:   return 20
