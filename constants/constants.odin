@@ -21,6 +21,7 @@ Game_State :: enum {
 	SETTINGS,
 	RUN_COMPLETE,
 	PROGRESSION,
+	CAMPAIGN_MAP,   // visualizador de la campaña (constelación de nodos)
 }
 
 // Rareza de carta — afecta probabilidad de aparición en tienda y precio
@@ -416,6 +417,26 @@ BIOME_SHOP_MODS := [Biome]Shop_Biome_Mod {
 	.DESERT   = {price_mult = 1.20, extra_slots =  1, free_reroll = false, uncommon_discount = 0.0,  label_key = "SHOP_BIOME_DESERT"},
 	.MOUNTAIN = {price_mult = 1.0,  extra_slots = -1, free_reroll = true,  uncommon_discount = 0.0,  label_key = "SHOP_BIOME_MOUNTAIN"},
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Campaña — secuencia lineal con nodos opcionales, definida por el dev
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Tope físico de nodos por campaña. Limita arrays en Campaign_File y Meta_State.
+CAMPAIGN_MAX_NODES :: 64
+
+// Longitudes máximas de strings dentro de Campaign_Node (fixed-size para
+// serialización binaria directa con mem.ptr_to_bytes).
+CAMPAIGN_MAP_NAME_LEN :: 48  // nombre del archivo .map (sin extensión)
+CAMPAIGN_DISPLAY_LEN  :: 64  // nombre mostrado al jugador
+
+// Defaults para nodos nuevos creados desde el editor.
+CAMPAIGN_DEFAULT_DIFFICULTY :: f32(1.0)  // 1.0 = HP/speed normales
+CAMPAIGN_DEFAULT_WAVES      :: i32(0)    // 0 = usa RUN_MAX_WAVES
+
+// Recompensa de cristales por completar un nodo opcional (encima del cálculo
+// estándar de waves/kills/lives). 0 = sin bonus.
+CAMPAIGN_OPTIONAL_REWARD :: i32(10)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Heightmap del terreno — desniveles continuos vía shader (visual, sin gameplay)

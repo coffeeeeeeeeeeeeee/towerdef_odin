@@ -82,6 +82,26 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 	}
 }
 
+// Devuelve el multiplicador de dificultad para el run actual.
+// Si app.current_campaign_node >= 0, lee el difficulty_mult del nodo. Sino 1.0.
+campaign_difficulty :: proc(app: ^entities.App_State) -> f32 {
+	if app.current_campaign_node < 0 { return 1.0 }
+	if app.current_campaign_node >= app.campaign.node_count { return 1.0 }
+	mult := app.campaign.nodes[app.current_campaign_node].difficulty_mult
+	if mult <= 0 { return 1.0 }
+	return mult
+}
+
+// Devuelve el número máximo de waves para este run: override del nodo de
+// campaña si > 0, sino constants.RUN_MAX_WAVES.
+campaign_max_waves :: proc(app: ^entities.App_State) -> i32 {
+	if app.current_campaign_node < 0 { return constants.RUN_MAX_WAVES }
+	if app.current_campaign_node >= app.campaign.node_count { return constants.RUN_MAX_WAVES }
+	override := app.campaign.nodes[app.current_campaign_node].waves_override
+	if override > 0 { return override }
+	return constants.RUN_MAX_WAVES
+}
+
 // Wave management
 update_wave :: proc(app: ^entities.App_State, dt: f32) {
 	sim := &app.sim
@@ -90,7 +110,7 @@ update_wave :: proc(app: ^entities.App_State, dt: f32) {
 	// and enemies_to_spawn > 0 to avoid triggering before the first wave is launched.
 	if sim.started && sim.enemies_to_spawn > 0 &&
 	   sim.enemies_spawned >= sim.enemies_to_spawn && len(sim.enemies) == 0 {
-		if sim.wave_number >= constants.RUN_MAX_WAVES {
+		if sim.wave_number >= campaign_max_waves(app) {
 			entities.app_finish_run(app, true)
 		} else {
 			// STEAL: roba cartas al terminar la oleada, independientemente del auto_start.
@@ -562,12 +582,14 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			}
 
 			weaken := max(0.1, 1.0 - constants.WEAKEN_HP_REDUCTION * f32(sim.relic_stacks[.WEAKEN]))
+			diff_mult := campaign_difficulty(app)
 			hp :=
 				constants.ENEMY_BASE_HP *
 				math.pow(constants.ENEMY_GROWTH_RATE, f32(sim.wave_number - 1)) *
 				multiplier *
 				constants.ENEMY_GLOBAL_HP_MULTIPLIER *
-				weaken
+				weaken *
+				diff_mult
 
 			// Speed — bonus enemies use their own speed constant
 			speed: f32
@@ -582,6 +604,7 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			speed *= constants.ENEMY_GLOBAL_SPEED_MULTIPLIER
 			// Escalado progresivo: +~1.2% de velocidad por oleada (igual que HP usa ENEMY_GROWTH_RATE)
 			speed *= math.pow(constants.ENEMY_SPEED_GROWTH_RATE, f32(sim.wave_number - 1))
+			speed *= diff_mult
 
 			// Build per-enemy flags: inherit wave subtypes; boss flag only for the last enemy
 			enemy_flags := sim.wave_flags - {.BOSS}

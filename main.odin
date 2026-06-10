@@ -239,12 +239,13 @@ app_init :: proc(initial_settings: entities.Settings) {
 		previous_state = .MENU,
 		toasts         = make([dynamic]entities.Toast),
 		editor = entities.Editor {
-			game_map        = entities.map_init(),
-			current_tool    = .EMPTY,
-			show_grid       = true,
-			show_paths      = false,
-			current_biome   = .PLAIN,
-			load_map_active = false,
+			game_map                      = entities.map_init(),
+			current_tool                  = .EMPTY,
+			show_grid                     = true,
+			show_paths                    = false,
+			current_biome                 = .PLAIN,
+			load_map_active               = false,
+			campaign_editor_selected_node = -1,
 		},
 		settings              = initial_settings,
 		zoom                  = 1.0,
@@ -255,6 +256,7 @@ app_init :: proc(initial_settings: entities.Settings) {
 		target_camera_offset_y = camera_offset_y,
 		selected_tower_r      = -1,
 		selected_tower_c      = -1,
+		current_campaign_node = -1,
 	}
 
 	// simulation_reset inicializa sim desde cero (dynamic arrays, seed, mazo, etc.)

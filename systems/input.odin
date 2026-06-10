@@ -12,7 +12,7 @@ input_handle :: proc(app: ^entities.App_State) {
 		input_handle_camera(app)
 	}
 	
-	switch app.state {
+	#partial switch app.state {
 	case .MENU:
 		input_handle_menu(app)
 	case .PLAYING:

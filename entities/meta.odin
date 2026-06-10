@@ -4,18 +4,32 @@ import "core:os"
 import "core:mem"
 import "../constants"
 
-META_SAVE_VERSION :: u32(1)
+// Version 1: original (cristales, unlocks).
+// Version 2: agrega progreso de campaña (campaign_completed/best/stars).
+//   Migración: archivos v1 se descartan y arrancan zero — los unlocks de
+//   relics/towers y los cristales se pierden. Aceptable durante desarrollo;
+//   para un release habría que hacer parsing v1 explícito y upgrade.
+META_SAVE_VERSION :: u32(2)
 META_SAVE_PATH    :: "savegame.bin"
 
 // Persistent state across runs — saved to savegame.bin in the executable directory.
 Meta_State :: struct {
 	version:         u32,
-	cristales:       i32,          // total accumulated currency
-	total_runs:      i32,          // total runs completed
-	best_score:      i32,          // best run score ever
-	unlocked_relics: [Card_Kind]bool,    // which relics are available in the shop
-	unlocked_towers: [9]bool,            // indexed by Tower_Type value; base towers always unlocked
-	_pad:            [55]u8,             // reserved for future expansion (was [64])
+	cristales:       i32,                    // total accumulated currency
+	total_runs:      i32,                    // total runs completed
+	best_score:      i32,                    // best run score ever
+	unlocked_relics: [Card_Kind]bool,        // which relics are available in the shop
+	unlocked_towers: [9]bool,                // indexed by Tower_Type value; base towers always unlocked
+
+	// ── Campaña (v2) ────────────────────────────────────────────────────────
+	// Indexados por nodo de Campaign_File. Si la campaña se rehace y los índices
+	// cambian, el progreso queda corrupto — es responsabilidad del dev resetear
+	// savegame.bin al cambiar la estructura de la campaña.
+	campaign_completed: [constants.CAMPAIGN_MAX_NODES]bool,
+	campaign_best:      [constants.CAMPAIGN_MAX_NODES]i32,  // mejor wave alcanzada por nodo
+	campaign_stars:     [constants.CAMPAIGN_MAX_NODES]u8,   // 0-3 estrellas por nodo
+
+	_pad: [16]u8,  // reserva para futuro (reducido de 55 al meter campaign_*)
 }
 
 // Towers that are always available without spending cristales.
@@ -78,6 +92,44 @@ meta_calc_cristales :: proc(kills, lives_remaining, waves_completed: i32) -> i32
 		c = 1
 	}
 	return c
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Campaña — cálculo de estrellas y registro de resultado de nodo
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Calcula las estrellas obtenidas en un nodo de campaña.
+//   0 = no completado
+//   1 = completado (apenas)
+//   2 = completado con vidas
+//   3 = completado con la mayoría de las vidas intactas
+meta_calc_campaign_stars :: proc(waves_completed, lives_remaining, waves_required: i32) -> u8 {
+	if waves_completed < waves_required { return 0 }
+	if lives_remaining <= 0 { return 1 }
+	half : i32 = constants.DEFAULT_HEALTH / 2
+	if lives_remaining < half { return 2 }
+	return 3
+}
+
+// Registra el resultado de un run de campaña en el progreso del jugador.
+// Solo MEJORA los campos — no degrada un mejor resultado previo.
+meta_record_campaign_result :: proc(
+	meta: ^Meta_State,
+	node_idx: i32,
+	waves_completed, lives_remaining, waves_required: i32,
+	victory: bool,
+) {
+	if node_idx < 0 || node_idx >= i32(constants.CAMPAIGN_MAX_NODES) { return }
+	if victory {
+		meta.campaign_completed[node_idx] = true
+	}
+	if waves_completed > meta.campaign_best[node_idx] {
+		meta.campaign_best[node_idx] = waves_completed
+	}
+	stars := meta_calc_campaign_stars(waves_completed, lives_remaining, waves_required)
+	if stars > meta.campaign_stars[node_idx] {
+		meta.campaign_stars[node_idx] = stars
+	}
 }
 
 // Save meta state to savegame.bin.

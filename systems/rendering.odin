@@ -104,6 +104,7 @@ Heightmap_Shader :: struct {
 	loc_contour_steps:    i32,
 	loc_contour_strength: i32,
 	loc_contour_width:    i32,
+	loc_map_pixel_size:   i32,
 }
 
 heightmap_shader: Heightmap_Shader
@@ -117,6 +118,7 @@ heightmap_shader_init :: proc() {
 		loc_contour_steps    = raylib.GetShaderLocation(s, "u_contour_steps"),
 		loc_contour_strength = raylib.GetShaderLocation(s, "u_contour_strength"),
 		loc_contour_width    = raylib.GetShaderLocation(s, "u_contour_width"),
+		loc_map_pixel_size   = raylib.GetShaderLocation(s, "u_map_pixel_size"),
 	}
 }
 
@@ -359,6 +361,12 @@ render_heightmap_overlay :: proc(app: ^entities.App_State, m: ^entities.Map, cs:
 	}
 	if heightmap_shader.loc_contour_width >= 0 {
 		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_contour_width, &contour_width, .FLOAT)
+	}
+	// Tamaño del mapa en "píxeles de referencia" (constante, sin zoom) — ancla el
+	// patrón de dithering al terreno en vez de a la pantalla.
+	map_pixel_size := [2]f32{f32(m.width) * f32(constants.CELL_SIZE), f32(m.height) * f32(constants.CELL_SIZE)}
+	if heightmap_shader.loc_map_pixel_size >= 0 {
+		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_map_pixel_size, &map_pixel_size, .VEC2)
 	}
 
 	// src: solo la porción del heightmap que corresponde al mapa real (m.width × m.height).

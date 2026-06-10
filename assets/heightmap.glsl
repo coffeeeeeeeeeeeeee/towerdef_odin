@@ -21,6 +21,15 @@ uniform float u_alpha_max;         // [0..1] max overlay alpha for extreme heigh
 uniform float u_contour_steps;     // number of isolines (e.g. 8 = lines every 0.125 height)
 uniform float u_contour_strength;  // [0..1] alpha multiplier for isolines
 uniform float u_contour_width;     // line thickness IN SCREEN PIXELS (1.0 = 1px)
+uniform vec2  u_map_pixel_size;    // map size in reference pixels (m.width/height * CELL_SIZE) — anchors dithering to the map, independent of camera/zoom
+
+// Hash pseudo-aleatorio 2D → [0, 1). Anclado al espacio del mapa para que el
+// ruido no se desplace al mover/zoomear la cámara.
+float hash21(vec2 p) {
+    p = fract(p * vec2(234.34, 435.345));
+    p += dot(p, p + 34.23);
+    return fract(p.x * p.y);
+}
 
 void main() {
     float h = texture(texture0, fragTexCoord).r;
@@ -32,6 +41,14 @@ void main() {
     // Using `step` keeps the two regimes cleanly separated; alpha drives strength.
     vec3 tint_color = vec3(step(0.0, delta));
     float tint_alpha = abs(delta) * u_alpha_max;
+
+    // Ruido de muy baja intensidad anclado al mapa: rompe la uniformidad del
+    // gradiente suave sin imponerse como un patrón visible. floor(mapPixel) da
+    // una coordenada entera estable por "píxel de referencia" del mapa, por lo
+    // que el ruido no se desplaza al mover/zoomear la cámara.
+    vec2 mapPixel = fragTexCoord * u_map_pixel_size;
+    float noise   = (hash21(floor(mapPixel)) - 0.5) * 0.04;
+    tint_alpha    = clamp(tint_alpha + noise, 0.0, 1.0);
 
     // Topographic isolines, exactamente u_contour_width pixeles de grosor en pantalla.
     // Truco estándar: fract(h * steps) genera un sawtooth; doblamos para obtener

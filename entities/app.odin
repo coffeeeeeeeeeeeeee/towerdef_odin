@@ -151,6 +151,14 @@ Editor :: struct {
 	map_browser_renaming:          bool,            // True mientras el modo rename está activo
 	map_browser_rename_input:      Input_State,     // Estado del campo de texto para renombrar
 
+	// Campaign editor (sólo visible cuando constants.DEVELOPER) — reutiliza el
+	// browser modal para editar campaign.bin sin pantallas nuevas.
+	campaign_editor_active:        bool,         // El browser muestra UI de campaña en vez de preview
+	campaign_data:                 Campaign_File, // Campaña en edición (cargada/creada en memoria)
+	campaign_editor_selected_node: i32,          // Nodo seleccionado en la lista (-1 = ninguno)
+	campaign_editor_scroll:        i32,          // Scroll de la lista de nodos
+	campaign_editor_dirty:         bool,         // Tiene cambios sin guardar
+
 	// Undo / Redo
 	undo_stack: [dynamic]Map_Snapshot, // Snapshots anteriores (el último es el más reciente)
 	redo_stack: [dynamic]Map_Snapshot, // Snapshots para rehacer
@@ -257,6 +265,13 @@ App_State :: struct {
 
 	// Cristales earned in the last run — set when transitioning to .RUN_COMPLETE
 	run_cristales: i32,
+
+	// Campaña — cargada desde campaign.bin al entrar a CAMPAIGN_MAP.
+	// La fuente de verdad sigue siendo el archivo; el editor (editor.campaign_data)
+	// edita una copia distinta y persiste vía campaign_editor_save.
+	campaign:               Campaign_File,
+	campaign_loaded:        bool,
+	current_campaign_node:  i32,   // -1 = el run actual no es de campaña; >=0 = índice del nodo
 
 	// Tooltip layer — written during UI render, drawn last so it's always on top.
 	// Only one tooltip can be visible per frame; first writer wins.
@@ -377,8 +392,30 @@ app_finish_run :: proc(app: ^App_State, victory: bool) {
 	app.run_cristales   = cristales
 	app.meta.cristales  += cristales
 	app.meta.total_runs += 1
-	meta_save(&app.meta)
 	clear(&app.toasts)
+
+	// Path de campaña: registrar progreso, sumar bonus opcional, volver al visualizador.
+	if app.current_campaign_node >= 0 &&
+	   app.current_campaign_node < i32(constants.CAMPAIGN_MAX_NODES) &&
+	   app.current_campaign_node < app.campaign.node_count {
+		node := &app.campaign.nodes[app.current_campaign_node]
+		waves_required := node.waves_override
+		if waves_required <= 0 { waves_required = constants.RUN_MAX_WAVES }
+		meta_record_campaign_result(
+			&app.meta, app.current_campaign_node,
+			app.sim.wave_number, lives, waves_required, victory,
+		)
+		if victory && (.OPTIONAL in node.flags) && node.reward_cristales > 0 {
+			app.meta.cristales += node.reward_cristales
+		}
+		meta_save(&app.meta)
+		app.current_campaign_node = -1
+		app_set_state(app, .GAME_OVER)
+		return
+	}
+
+	// Path no-campaña: comportamiento original.
+	meta_save(&app.meta)
 	app_set_state(app, .RUN_COMPLETE)
 }
 
