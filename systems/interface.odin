@@ -594,18 +594,41 @@ render_slider :: proc(rect: raylib.Rectangle, value: f32) -> f32 {
 	return new_value
 }
 
+// Opciones para render_button. Defaults zero-value sirven para el caso común;
+// cuando se necesita customizar usar struct literal como tercer argumento:
+//   render_button("OK", rect)                          // default
+//   render_button("OK", rect, {disabled = true})       // disabled
+//   render_button("OK", rect, {text_lines = 2})        // multi-line
+//   render_button("OK", rect, {button_color = green})  // con color
+//
+// Notas de diseño:
+//   - `disabled` (no `enabled`): así zero-value = habilitado (default).
+//   - `text_lines = 0` se trata como 1 (default).
+//   - Cualquier color con alpha 0 = "usar default".
+Button_Opts :: struct {
+	disabled:      bool,
+	text_lines:    i32,
+	text_color:    raylib.Color,
+	button_color:  raylib.Color,
+	hover_color:   raylib.Color,
+	pressed_color: raylib.Color,
+}
+
 render_button :: proc(
 	text: string,
 	rect: raylib.Rectangle,
-	text_lines: i32 = 1,
-	enabled: bool = true,
-	text_color: raylib.Color = constants.COLOR_NONE,
-	button_color: raylib.Color = constants.COLOR_NONE,
-	button_hover_color: raylib.Color = constants.COLOR_NONE,
-	button_pressed_color: raylib.Color = constants.COLOR_NONE,
+	opts := Button_Opts{},
 ) -> bool {
+	// Resolve defaults
+	text_lines := opts.text_lines
+	if text_lines <= 0 { text_lines = 1 }
+	enabled := !opts.disabled
+	button_color         := opts.button_color
+	button_hover_color   := opts.hover_color
+	button_pressed_color := opts.pressed_color
+
 	// Resolve text color: explicit > white-when-colored > default UI text
-	resolved_text_color := text_color
+	resolved_text_color := opts.text_color
 	if resolved_text_color.a == 0 {
 		if button_color.a != 0 {
 			resolved_text_color = raylib.WHITE
@@ -882,10 +905,10 @@ render_confirm_modal :: proc(text: string) -> Modal_Result {
 
 	result := Modal_Result.NONE
 
-	if render_button("Sí", {buttons_x, buttons_y, btn_w, btn_h}, button_color = constants.UI_MODAL_CONFIRM_BUTTON_COLOR) {
+	if render_button("Sí", {buttons_x, buttons_y, btn_w, btn_h}, {button_color = constants.UI_MODAL_CONFIRM_BUTTON_COLOR}) {
 		result = .CONFIRMED
 	}
-	if render_button("No", {buttons_x + btn_w + btn_gap, buttons_y, btn_w, btn_h}, button_color = constants.UI_MODAL_CANCEL_BUTTON_COLOR) {
+	if render_button("No", {buttons_x + btn_w + btn_gap, buttons_y, btn_w, btn_h}, {button_color = constants.UI_MODAL_CANCEL_BUTTON_COLOR}) {
 		result = .CANCELLED
 	}
 

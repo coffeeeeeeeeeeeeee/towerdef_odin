@@ -12,7 +12,7 @@ render_ui :: proc(app: ^entities.App_State) {
 	// El shop es modal: bloquea toda la pantalla para que los botones de PLAYING
 	// no respondan mientras el overlay está activo. Usa ui_modal_blocks (separado
 	// de ui_click_blocks) para no interferir con los paneles normales.
-	if app.state == .PLAYING && app.sim.card_selection_active {
+	if app.state == .PLAYING && app.sim.shop.active {
 		sw := f32(raylib.GetScreenWidth())
 		sh := f32(raylib.GetScreenHeight())
 		append(&ui_modal_blocks, raylib.Rectangle{0, 0, sw, sh})
@@ -51,7 +51,7 @@ render_ui :: proc(app: ^entities.App_State) {
 	}
 
 	// Shop — capa superior: siempre encima del resto de la UI de juego
-	if app.state == .PLAYING && app.sim.card_selection_active {
+	if app.state == .PLAYING && app.sim.shop.active {
 		render_card_selection_overlay(app)
 	}
 
@@ -64,10 +64,10 @@ render_ui :: proc(app: ^entities.App_State) {
 			switch action {
 			case .NEW_GAME:
 				app.meta = entities.Meta_State{}
-				entities.meta_save(&app.meta)
+				app.meta_dirty = true
 				// Forzar reload de campaign.bin desde disco y entrar al visualizador
 				app.campaign_loaded = false
-				entities.app_set_state(app, .CAMPAIGN_MAP)
+				entities.app_set_state(app, .CAMPAIGN_MAP)  // hace flush
 			case .RESTART_RUN:
 				map_name := app.editor.current_map_name
 				simulation_set_pause(app, false)
@@ -76,6 +76,11 @@ render_ui :: proc(app: ^entities.App_State) {
 				entities.app_set_state(app, .PLAYING)
 			case .EXIT_GAME:
 				app.should_quit = true
+			case .RESET_META:
+				app.meta = entities.Meta_State{}
+				app.meta_dirty = true
+				app.campaign_loaded = false  // forzar reload de campaign.bin
+				entities.add_toast(app, "[DEV] Meta reseteada", .INFO, 2.0)
 			case .NONE:
 			}
 		case .CANCELLED:
@@ -115,14 +120,14 @@ render_ui :: proc(app: ^entities.App_State) {
 render_background :: proc() {}
 
 _open_map_browser :: proc(app: ^entities.App_State) {
-	entities.map_file_entries_destroy(&app.editor.map_browser_entries)
-	app.editor.map_browser_entries       = entities.map_list_saved_entries()
-	app.editor.map_browser_scroll        = 0
-	app.editor.map_browser_selected      = -1
-	app.editor.map_browser_preview       = entities.map_init()
-	app.editor.map_browser_preview_valid = false
+	entities.map_file_entries_destroy(&app.editor.browser.entries)
+	app.editor.browser.entries       = entities.map_list_saved_entries()
+	app.editor.browser.scroll        = 0
+	app.editor.browser.selected      = -1
+	app.editor.browser.preview       = entities.map_init()
+	app.editor.browser.preview_valid = false
 	app.editor.show_map_browser          = true
-	app.editor.map_browser_play_mode     = true
+	app.editor.browser.play_mode     = true
 	// Abrir el browser para un run "normal" cancela cualquier link de campaña
 	// pendiente — el próximo run no se registrará como nodo de campaña.
 	app.current_campaign_node            = -1
@@ -202,8 +207,8 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	}
 	current_y += menu_button_height + gap
 
-	// Editor (solo en modo Developer)
-	if constants.DEVELOPER {
+	// Editor (solo en modo Developer — bloque eliminado en compile-time si DEVELOPER=false)
+	when constants.DEVELOPER {
 		txt := constants.get_text("MENU_BUTTON_EDITOR")
 		w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(txt, context.temp_allocator), button_font_size, 0).x)
 		if render_button(txt, {f32(screen_width / 2 - w / 2), f32(current_y), f32(w), f32(menu_button_height)}) {
@@ -494,12 +499,13 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	if render_button(
 		start_text,
 		{f32(start_x), f32(button_y), f32(start_width), f32(constants.UI_BUTTON_HEIGHT)},
-		1,
-		can_start_wave,
-		constants.UI_TEXT_COLOR,
-		constants.UI_BUTTON_ACTION_COLOR,
-		constants.UI_BUTTON_ACTION_HOVER,
-		constants.UI_BUTTON_ACTION_PRESS,
+		{
+			disabled      = !can_start_wave,
+			text_color    = constants.UI_TEXT_COLOR,
+			button_color  = constants.UI_BUTTON_ACTION_COLOR,
+			hover_color   = constants.UI_BUTTON_ACTION_HOVER,
+			pressed_color = constants.UI_BUTTON_ACTION_PRESS,
+		},
 	) {
 		if can_start_wave {
 			simulation_set_pause(app, false)
@@ -511,12 +517,11 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	if render_button(
 		skip_shop_text,
 		{f32(skip_shop_x), f32(button_y), f32(skip_shop_width), f32(constants.UI_BUTTON_HEIGHT)},
-		1,
-		true,
-		no_color,
-		app.settings.auto_skip_shop ? active_green : no_color,
-		app.settings.auto_skip_shop ? active_green_hover : no_color,
-		app.settings.auto_skip_shop ? active_green_press : no_color,
+		{
+			button_color  = app.settings.auto_skip_shop ? active_green       : no_color,
+			hover_color   = app.settings.auto_skip_shop ? active_green_hover : no_color,
+			pressed_color = app.settings.auto_skip_shop ? active_green_press : no_color,
+		},
 	) {
 		app.settings.auto_skip_shop = !app.settings.auto_skip_shop
 	}
@@ -526,8 +531,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		if render_button(
 			next_wave_text,
 			{f32(next_wave_x), f32(button_y), f32(next_wave_width), f32(constants.UI_BUTTON_HEIGHT)},
-			1,
-			is_between_waves,
+			{disabled = !is_between_waves},
 		) {
 			if is_between_waves {
 				simulation_set_pause(app, false)
@@ -546,9 +550,12 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	if render_button(
 		pause_text,
 		{f32(pause_x), f32(button_y), f32(pause_width), f32(constants.UI_BUTTON_HEIGHT)},
-		1, true,
-		constants.UI_TEXT_COLOR,
-		pause_col, pause_hover_col, pause_press_col,
+		{
+			text_color    = constants.UI_TEXT_COLOR,
+			button_color  = pause_col,
+			hover_color   = pause_hover_col,
+			pressed_color = pause_press_col,
+		},
 	) {
 		simulation_toggle_pause(app)
 	}
@@ -563,9 +570,12 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	if render_button(
 		speed1_text,
 		{f32(speed1_x), f32(button_y), f32(speed1_width), f32(constants.UI_BUTTON_HEIGHT)},
-		1, true,
-		constants.UI_TEXT_COLOR,
-		speed1_col, speed1_hover_col, speed1_press_col,
+		{
+			text_color    = constants.UI_TEXT_COLOR,
+			button_color  = speed1_col,
+			hover_color   = speed1_hover_col,
+			pressed_color = speed1_press_col,
+		},
 	) {
 		simulation_set_speed(app, 1.0)
 	}
@@ -579,9 +589,12 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	if render_button(
 		speed2_text,
 		{f32(speed2_x), f32(button_y), f32(speed2_width), f32(constants.UI_BUTTON_HEIGHT)},
-		1, true,
-		constants.UI_TEXT_COLOR,
-		speed2_col, speed2_hover_col, speed2_press_col,
+		{
+			text_color    = constants.UI_TEXT_COLOR,
+			button_color  = speed2_col,
+			hover_color   = speed2_hover_col,
+			pressed_color = speed2_press_col,
+		},
 	) {
 		simulation_set_speed(app, 2.0)
 	}
@@ -595,9 +608,12 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	if render_button(
 		speed3_text,
 		{f32(speed3_x), f32(button_y), f32(speed3_width), f32(constants.UI_BUTTON_HEIGHT)},
-		1, true,
-		constants.UI_TEXT_COLOR,
-		speed3_col, speed3_hover_col, speed3_press_col,
+		{
+			text_color    = constants.UI_TEXT_COLOR,
+			button_color  = speed3_col,
+			hover_color   = speed3_hover_col,
+			pressed_color = speed3_press_col,
+		},
 	) {
 		simulation_set_speed(app, 3.0)
 	}
@@ -795,7 +811,13 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 		editor_push_undo(app)
 		if entities.map_load(&app.editor.game_map, "last_saved.map") {
 			app.editor.current_biome = app.editor.game_map.biome
-			app.editor.current_map_name = "last_saved.map"
+			// IMPORTANT: clone string literal — current_map_name se libera con
+			// delete() en otras rutas (rename, browser load) y los literales
+			// viven en .rodata, que no se puede liberar (UB / crash).
+			if len(app.editor.current_map_name) > 0 {
+				delete(app.editor.current_map_name)
+			}
+			app.editor.current_map_name = strings.clone("last_saved.map")
 			entities.add_toast(app, "Map loaded!", .SUCCESS, 2.0)
 			play_sound(.CONFIRMATION, .UI)
 		} else {
@@ -820,20 +842,20 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 		{f32(current_x), f32(y_pos), f32(w_browse), f32(constants.UI_BUTTON_HEIGHT)},
 	) {
 		if app.editor.show_map_browser {
-			entities.map_destroy(&app.editor.map_browser_preview)
-			app.editor.map_browser_preview_valid = false
-			if app.editor.map_browser_preview_tex_valid {
-				raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
-				app.editor.map_browser_preview_tex_valid = false
+			entities.map_destroy(&app.editor.browser.preview)
+			app.editor.browser.preview_valid = false
+			if app.editor.browser.preview_tex_valid {
+				raylib.UnloadRenderTexture(app.editor.browser.preview_tex)
+				app.editor.browser.preview_tex_valid = false
 			}
 			app.editor.show_map_browser = false
 		} else {
-			entities.map_file_entries_destroy(&app.editor.map_browser_entries)
-			app.editor.map_browser_entries = entities.map_list_saved_entries()
-			app.editor.map_browser_scroll   = 0
-			app.editor.map_browser_selected = -1
-			app.editor.map_browser_preview  = entities.map_init()
-			app.editor.map_browser_preview_valid = false
+			entities.map_file_entries_destroy(&app.editor.browser.entries)
+			app.editor.browser.entries = entities.map_list_saved_entries()
+			app.editor.browser.scroll   = 0
+			app.editor.browser.selected = -1
+			app.editor.browser.preview  = entities.map_init()
+			app.editor.browser.preview_valid = false
 			app.editor.show_map_browser = true
 			play_sound(.OPEN, .UI)
 		}
@@ -847,10 +869,15 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 		constants.get_text("EDITOR_BUTTON_SAVE_MAP"),
 		{f32(current_x), f32(y_pos), f32(w_save), f32(constants.UI_BUTTON_HEIGHT)},
 	) {
-		// Guarda con timestamp y también como last_saved.map para carga rápida
+		// Guarda con timestamp y también como last_saved.map para carga rápida.
+		// filename viene de fmt.tprintf (temp_allocator) → muere al final del
+		// frame; debe ser clonado al heap antes de almacenarse en current_map_name.
 		filename := fmt.tprintf("map_%d.map", i32(raylib.GetTime()))
 		if entities.map_save(&app.editor.game_map, filename) {
-			app.editor.current_map_name = filename
+			if len(app.editor.current_map_name) > 0 {
+				delete(app.editor.current_map_name)
+			}
+			app.editor.current_map_name = strings.clone(filename)
 			entities.add_toast(app, fmt.tprintf("Map saved: %s", filename), .SUCCESS, 2.5)
 			play_sound(.CONFIRMATION, .UI)
 		} else {
@@ -907,7 +934,7 @@ render_map_browser :: proc(app: ^entities.App_State) {
 		constants.UI_MAP_BROWSER_SEPARATOR_COLOR,
 	)
 
-	if len(app.editor.map_browser_entries) == 0 {
+	if len(app.editor.browser.entries) == 0 {
 		no_maps_cs := strings.clone_to_cstring("No hay mapas guardados", context.temp_allocator)
 		nw := raylib.MeasureTextEx(constants.game_fonts.regular, no_maps_cs, item_font, 0).x
 		raylib.DrawTextEx(
@@ -918,10 +945,10 @@ render_map_browser :: proc(app: ^entities.App_State) {
 	}
 
 	for i in 0 ..< visible_items {
-		idx    := i + app.editor.map_browser_scroll
-		if idx >= i32(len(app.editor.map_browser_entries)) { break }
+		idx    := i + app.editor.browser.scroll
+		if idx >= i32(len(app.editor.browser.entries)) { break }
 
-		entry  := app.editor.map_browser_entries[idx]
+		entry  := app.editor.browser.entries[idx]
 		item_y := content_y + i * item_h
 
 		item_rect := raylib.Rectangle{
@@ -931,7 +958,7 @@ render_map_browser :: proc(app: ^entities.App_State) {
 			f32(item_h - vert_gap),
 		}
 
-		is_selected := idx == app.editor.map_browser_selected
+		is_selected := idx == app.editor.browser.selected
 		hovered     := raylib.CheckCollisionPointRec(mouse, item_rect)
 
 		if is_selected {
@@ -963,18 +990,18 @@ render_map_browser :: proc(app: ^entities.App_State) {
 
 		// Click selecciona y carga la vista previa
 		if hovered && raylib.IsMouseButtonPressed(.LEFT) {
-			app.editor.map_browser_selected = idx
-			entities.map_load(&app.editor.map_browser_preview, entry.name)
-			app.editor.map_browser_preview_valid = true
+			app.editor.browser.selected = idx
+			entities.map_load(&app.editor.browser.preview, entry.name)
+			app.editor.browser.preview_valid = true
 			render_map_preview_to_texture(app)
 		}
 	}
 
 	// Scroll indicator
-	total := i32(len(app.editor.map_browser_entries))
+	total := i32(len(app.editor.browser.entries))
 	if total > visible_items {
-		last_visible := min(app.editor.map_browser_scroll + visible_items, total)
-		scroll_text  := fmt.tprintf("%d–%d / %d", app.editor.map_browser_scroll + 1, last_visible, total)
+		last_visible := min(app.editor.browser.scroll + visible_items, total)
+		scroll_text  := fmt.tprintf("%d–%d / %d", app.editor.browser.scroll + 1, last_visible, total)
 		scroll_font  := f32(constants.UI_MAP_BROWSER_SCROLL_FONT_SIZE)
 		scroll_cs    := strings.clone_to_cstring(scroll_text, context.temp_allocator)
 		sw           := raylib.MeasureTextEx(constants.game_fonts.regular, scroll_cs, scroll_font, 0).x
@@ -994,9 +1021,9 @@ render_map_browser :: proc(app: ^entities.App_State) {
 	mini_area_h  := content_h - info_h - 4
 	info_font    := f32(constants.UI_MAP_BROWSER_INFO_FONT_SIZE)
 
-	if app.editor.campaign_editor_active {
+	if app.editor.campaign_editor.active {
 		render_campaign_editor_right_panel(app, content_y, content_h, preview_x, preview_w)
-	} else if !app.editor.map_browser_preview_valid {
+	} else if !app.editor.browser.preview_valid {
 		hint    := strings.clone_to_cstring("← Selecciona un mapa", context.temp_allocator)
 		hw      := raylib.MeasureTextEx(constants.game_fonts.regular, hint, item_font, 0).x
 		raylib.DrawTextEx(
@@ -1005,13 +1032,13 @@ render_map_browser :: proc(app: ^entities.App_State) {
 			item_font, 0, constants.UI_MAP_BROWSER_MUTED_COLOR,
 		)
 	} else {
-		pmap := &app.editor.map_browser_preview
+		pmap := &app.editor.browser.preview
 
 		map_w := pmap.width  if pmap.width  > 0 else 1
 		map_h := pmap.height if pmap.height > 0 else 1
 
-		if app.editor.map_browser_preview_tex_valid {
-			tex   := app.editor.map_browser_preview_tex
+		if app.editor.browser.preview_tex_valid {
+			tex   := app.editor.browser.preview_tex
 			tex_w := f32(tex.texture.width)
 			tex_h := f32(tex.texture.height)
 
@@ -1035,9 +1062,9 @@ render_map_browser :: proc(app: ^entities.App_State) {
 		}
 
 		// Info: filename + dimensions + date below the mini-map
-		if app.editor.map_browser_selected >= 0 &&
-		   int(app.editor.map_browser_selected) < len(app.editor.map_browser_entries) {
-			sel := app.editor.map_browser_entries[app.editor.map_browser_selected]
+		if app.editor.browser.selected >= 0 &&
+		   int(app.editor.browser.selected) < len(app.editor.browser.entries) {
+			sel := app.editor.browser.entries[app.editor.browser.selected]
 			info_y := f32(content_y + mini_area_h + 4)
 
 			name_cs := strings.clone_to_cstring(sel.name, context.temp_allocator)
@@ -1064,34 +1091,34 @@ render_map_browser :: proc(app: ^entities.App_State) {
 	close_x := panel_x + side_pad * 2
 	open_x  := panel_x + panel_w - btn_w - side_pad * 2
 
-	if app.editor.campaign_editor_active {
+	if app.editor.campaign_editor.active {
 		// ── Modo campaña: [Salir]  [Agregar]  [Guardar] ──────────────────────
 		render_campaign_editor_footer(app, panel_x, panel_w, btn_y, btn_w, btn_h, side_pad)
-	} else if app.editor.map_browser_renaming {
+	} else if app.editor.browser.renaming {
 		// ── Modo rename: [Cancelar] [  input  ] [Confirmar] ──────────────────
 		input_x := f32(close_x + btn_w + 8)
 		input_w := f32(open_x - btn_w - 8) - input_x
 		confirmed := render_input(
-			&app.editor.map_browser_rename_input,
+			&app.editor.browser.rename_input,
 			{input_x, f32(btn_y), input_w, f32(btn_h)},
 			app.delta_time,
 		)
 
 		if render_button("Cancelar", {f32(close_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
-			app.editor.map_browser_renaming = false
+			app.editor.browser.renaming = false
 		}
 
 		btn_confirm := render_button("Confirmar", {f32(open_x - btn_w), f32(btn_y), f32(btn_w), f32(btn_h)})
 		if confirmed || btn_confirm {
-			sel      := app.editor.map_browser_selected
-			new_name := entities.input_str(&app.editor.map_browser_rename_input)
+			sel      := app.editor.browser.selected
+			new_name := entities.input_str(&app.editor.browser.rename_input)
 			if new_name == "" {
 				entities.add_toast(app, "El nombre no puede estar vacío", .ERROR, 2.5)
 				play_sound(.ERROR, .UI)
-			} else if sel >= 0 && int(sel) < len(app.editor.map_browser_entries) {
-				old_name := app.editor.map_browser_entries[sel].name
+			} else if sel >= 0 && int(sel) < len(app.editor.browser.entries) {
+				old_name := app.editor.browser.entries[sel].name
 				if new_name == old_name {
-					app.editor.map_browser_renaming = false
+					app.editor.browser.renaming = false
 				} else if entities.map_rename(old_name, new_name) {
 					// Actualizar current_map_name si se renombró el mapa activo
 					if app.editor.current_map_name == old_name {
@@ -1099,16 +1126,16 @@ render_map_browser :: proc(app: ^entities.App_State) {
 						app.editor.current_map_name = strings.clone(new_name)
 					}
 					// Refrescar la lista y seleccionar el nuevo nombre
-					entities.map_file_entries_destroy(&app.editor.map_browser_entries)
-					app.editor.map_browser_entries = entities.map_list_saved_entries()
-					app.editor.map_browser_selected = -1
-					for entry, i in app.editor.map_browser_entries {
+					entities.map_file_entries_destroy(&app.editor.browser.entries)
+					app.editor.browser.entries = entities.map_list_saved_entries()
+					app.editor.browser.selected = -1
+					for entry, i in app.editor.browser.entries {
 						if entry.name == new_name {
-							app.editor.map_browser_selected = i32(i)
+							app.editor.browser.selected = i32(i)
 							break
 						}
 					}
-					app.editor.map_browser_renaming = false
+					app.editor.browser.renaming = false
 					entities.add_toast(app, fmt.tprintf("Renombrado a: %s", new_name), .SUCCESS, 2.0)
 					play_sound(.CONFIRMATION, .UI)
 				} else {
@@ -1120,14 +1147,14 @@ render_map_browser :: proc(app: ^entities.App_State) {
 	} else {
 		// ── Modo normal: [Cerrar]  [Renombrar]  [Abrir] ──────────────────────
 		if render_button("Cerrar", {f32(close_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
-			entities.map_destroy(&app.editor.map_browser_preview)
-			app.editor.map_browser_preview_valid = false
-			if app.editor.map_browser_preview_tex_valid {
-				raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
-				app.editor.map_browser_preview_tex_valid = false
+			entities.map_destroy(&app.editor.browser.preview)
+			app.editor.browser.preview_valid = false
+			if app.editor.browser.preview_tex_valid {
+				raylib.UnloadRenderTexture(app.editor.browser.preview_tex)
+				app.editor.browser.preview_tex_valid = false
 			}
 			app.editor.show_map_browser = false
-			app.editor.map_browser_play_mode = false
+			app.editor.browser.play_mode = false
 			play_sound(.CLOSE, .UI)
 		}
 
@@ -1135,48 +1162,51 @@ render_map_browser :: proc(app: ^entities.App_State) {
 		// Sólo compilado en builds de developer (oculto al jugador final).
 		when constants.DEVELOPER {
 			campaign_x := panel_x + panel_w / 2 - btn_w / 2
-			if render_button("Campaña", {f32(campaign_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
+			if render_button(constants.get_text("CAMPAIGN_EDITOR_TOGGLE"), {f32(campaign_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
 				campaign_editor_enter(app)
 				play_sound(.CLICK, .UI)
 			}
 		}
 
 		// Renombrar — solo en modo editor (no play mode), con un mapa seleccionado
-		sel_valid := app.editor.map_browser_selected >= 0 &&
-		             int(app.editor.map_browser_selected) < len(app.editor.map_browser_entries)
-		if sel_valid && !app.editor.map_browser_play_mode {
+		sel_valid := app.editor.browser.selected >= 0 &&
+		             int(app.editor.browser.selected) < len(app.editor.browser.entries)
+		if sel_valid && !app.editor.browser.play_mode {
 			rename_x := close_x + btn_w + 8
 			if render_button("Renombrar", {f32(rename_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
-				sel      := app.editor.map_browser_selected
-				old_name := app.editor.map_browser_entries[sel].name
-				entities.input_clear(&app.editor.map_browser_rename_input)
-				_input_insert_str(&app.editor.map_browser_rename_input, old_name)
-				app.editor.map_browser_rename_input.sel_anchor = 0
-				app.editor.map_browser_rename_input.cursor     = app.editor.map_browser_rename_input.len
-				app.editor.map_browser_rename_input.focused    = true
-				app.editor.map_browser_renaming = true
+				sel      := app.editor.browser.selected
+				old_name := app.editor.browser.entries[sel].name
+				entities.input_clear(&app.editor.browser.rename_input)
+				_input_insert_str(&app.editor.browser.rename_input, old_name)
+				app.editor.browser.rename_input.sel_anchor = 0
+				app.editor.browser.rename_input.cursor     = app.editor.browser.rename_input.len
+				app.editor.browser.rename_input.focused    = true
+				app.editor.browser.renaming = true
 				play_sound(.CLICK, .UI)
 			}
 		}
 
-		if app.editor.map_browser_preview_valid {
+		if app.editor.browser.preview_valid {
 			if render_button("Abrir", {f32(open_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
-				sel := app.editor.map_browser_selected
-				if sel >= 0 && int(sel) < len(app.editor.map_browser_entries) {
-					fname := app.editor.map_browser_entries[sel].name
+				sel := app.editor.browser.selected
+				if sel >= 0 && int(sel) < len(app.editor.browser.entries) {
+					fname := app.editor.browser.entries[sel].name
 					editor_push_undo(app)
 					if entities.map_load(&app.editor.game_map, fname) {
 						app.editor.current_biome    = app.editor.game_map.biome
+						if len(app.editor.current_map_name) > 0 {
+							delete(app.editor.current_map_name)
+						}
 						app.editor.current_map_name = strings.clone(fname)
-						entities.map_destroy(&app.editor.map_browser_preview)
-						app.editor.map_browser_preview_valid = false
-						if app.editor.map_browser_preview_tex_valid {
-							raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
-							app.editor.map_browser_preview_tex_valid = false
+						entities.map_destroy(&app.editor.browser.preview)
+						app.editor.browser.preview_valid = false
+						if app.editor.browser.preview_tex_valid {
+							raylib.UnloadRenderTexture(app.editor.browser.preview_tex)
+							app.editor.browser.preview_tex_valid = false
 						}
 						app.editor.show_map_browser = false
-						if app.editor.map_browser_play_mode {
-							app.editor.map_browser_play_mode = false
+						if app.editor.browser.play_mode {
+							app.editor.browser.play_mode = false
 							if simulation_init_from_editor(app) {
 								simulation_fit_camera(app, f32(raylib.GetScreenWidth()), f32(raylib.GetScreenHeight()))
 								entities.app_set_state(app, .PLAYING)
@@ -1205,726 +1235,9 @@ render_map_browser :: proc(app: ^entities.App_State) {
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Campaign editor — reutiliza el map browser. Activado vía toggle "Campaña"
-// en el footer (sólo cuando constants.DEVELOPER). Cuando está activo, el
-// panel derecho del browser se reemplaza por la lista de nodos editables y
-// el footer cambia a Agregar / Guardar / Salir.
-// ─────────────────────────────────────────────────────────────────────────────
+// El editor de campaña y el visualizador (Game_State.CAMPAIGN_MAP) viven en
+// systems/campaign.odin. Acá quedan solamente los menús, HUD y dispatching.
 
-// Recalcula requires_node de cada nodo: el predecesor del nodo i es el último
-// nodo no-OPTIONAL anterior. Mantiene el main path conectado cuando se
-// insertan o togglean opcionales sin gatear la cadena principal.
-campaign_editor_recompute_requires :: proc(c: ^entities.Campaign_File) {
-	for i in 0 ..< int(c.node_count) {
-		c.nodes[i].requires_node = -1
-		for j := i - 1; j >= 0; j -= 1 {
-			if .OPTIONAL not_in c.nodes[j].flags {
-				c.nodes[i].requires_node = i32(j)
-				break
-			}
-		}
-	}
-}
-
-// Entra al modo edición de campaña. Carga campaign.bin si existe, si no
-// empieza con una campaña vacía.
-campaign_editor_enter :: proc(app: ^entities.App_State) {
-	loaded, ok := entities.campaign_load()
-	if ok {
-		app.editor.campaign_data = loaded
-	} else {
-		app.editor.campaign_data = entities.Campaign_File{}
-	}
-	app.editor.campaign_editor_active        = true
-	app.editor.campaign_editor_selected_node = -1
-	app.editor.campaign_editor_scroll        = 0
-	app.editor.campaign_editor_dirty         = false
-}
-
-// Sale del modo edición de campaña. No persiste cambios — el dev debe haber
-// pulsado Guardar antes. Si tiene cambios sin guardar muestra warning.
-campaign_editor_exit :: proc(app: ^entities.App_State) {
-	if app.editor.campaign_editor_dirty {
-		entities.add_toast(app, "Saliste sin guardar — cambios perdidos", .WARNING, 3.0)
-	}
-	app.editor.campaign_editor_active        = false
-	app.editor.campaign_editor_selected_node = -1
-}
-
-// Agrega el mapa seleccionado en el browser como nuevo nodo al final de la
-// campaña. Marca dirty.
-campaign_editor_add_selected_map :: proc(app: ^entities.App_State) {
-	sel := app.editor.map_browser_selected
-	if sel < 0 || int(sel) >= len(app.editor.map_browser_entries) {
-		entities.add_toast(app, "Selecciona un mapa primero", .WARNING, 2.0)
-		play_sound(.ERROR, .UI)
-		return
-	}
-	if app.editor.campaign_data.node_count >= i32(constants.CAMPAIGN_MAX_NODES) {
-		entities.add_toast(app, "Campaña llena (máximo de nodos)", .ERROR, 2.5)
-		play_sound(.ERROR, .UI)
-		return
-	}
-	entry := app.editor.map_browser_entries[sel]
-	node  := entities.campaign_node_init(entry.name, entry.name, 0, 0)
-	idx   := entities.campaign_append_node(&app.editor.campaign_data, node)
-	if idx < 0 { return }
-	campaign_editor_recompute_requires(&app.editor.campaign_data)
-	app.editor.campaign_editor_selected_node = idx
-	app.editor.campaign_editor_dirty         = true
-	play_sound(.CONFIRMATION, .UI)
-}
-
-// Elimina el nodo seleccionado de la campaña.
-campaign_editor_remove_selected_node :: proc(app: ^entities.App_State) {
-	idx := app.editor.campaign_editor_selected_node
-	if idx < 0 || idx >= app.editor.campaign_data.node_count { return }
-	if entities.campaign_remove_node(&app.editor.campaign_data, idx) {
-		campaign_editor_recompute_requires(&app.editor.campaign_data)
-		app.editor.campaign_editor_selected_node = -1
-		app.editor.campaign_editor_dirty         = true
-		play_sound(.CLICK, .UI)
-	}
-}
-
-// Mueve el nodo seleccionado una posición arriba o abajo en la secuencia.
-campaign_editor_move_selected :: proc(app: ^entities.App_State, delta: i32) {
-	idx := app.editor.campaign_editor_selected_node
-	if idx < 0 || idx >= app.editor.campaign_data.node_count { return }
-	new_idx := idx + delta
-	if new_idx < 0 || new_idx >= app.editor.campaign_data.node_count { return }
-	// Swap
-	c := &app.editor.campaign_data
-	c.nodes[idx], c.nodes[new_idx] = c.nodes[new_idx], c.nodes[idx]
-	app.editor.campaign_editor_selected_node = new_idx
-	campaign_editor_recompute_requires(c)
-	app.editor.campaign_editor_dirty = true
-	play_sound(.CLICK, .UI)
-}
-
-// Toggle de un flag del nodo seleccionado.
-campaign_editor_toggle_flag :: proc(app: ^entities.App_State, flag: entities.Campaign_Node_Flag) {
-	idx := app.editor.campaign_editor_selected_node
-	if idx < 0 || idx >= app.editor.campaign_data.node_count { return }
-	node := &app.editor.campaign_data.nodes[idx]
-	if flag in node.flags {
-		node.flags -= {flag}
-	} else {
-		node.flags |= {flag}
-	}
-	campaign_editor_recompute_requires(&app.editor.campaign_data)
-	app.editor.campaign_editor_dirty = true
-	play_sound(.CLICK, .UI)
-}
-
-// Persiste la campaña a campaign.bin.
-campaign_editor_save :: proc(app: ^entities.App_State) {
-	if entities.campaign_save(&app.editor.campaign_data) {
-		app.editor.campaign_editor_dirty = false
-		entities.add_toast(app, "campaign.bin guardado", .SUCCESS, 2.0)
-		play_sound(.CONFIRMATION, .UI)
-	} else {
-		entities.add_toast(app, "Error al guardar campaign.bin", .ERROR, 3.0)
-		play_sound(.ERROR, .UI)
-	}
-}
-
-// Renderiza el panel derecho del browser cuando campaign_editor_active=true.
-// Muestra: header con conteo + dirty marker, lista de nodos con flags badges,
-// panel de propiedades del nodo seleccionado (toggles + move up/down + remove).
-render_campaign_editor_right_panel :: proc(
-	app: ^entities.App_State,
-	content_y, content_h, preview_x, preview_w: i32,
-) {
-	c     := &app.editor.campaign_data
-	mouse := raylib.GetMousePosition()
-
-	font_md : f32 = 14
-	font_sm : f32 = 11
-	pad     : i32 = 8
-
-	// ── Header: nombre de la campaña + conteo + dirty marker ────────────────
-	header_y := content_y + pad
-	dirty_marker := "" if !app.editor.campaign_editor_dirty else "  •"
-	header := fmt.tprintf("Campaña — %d / %d nodos%s",
-		c.node_count, constants.CAMPAIGN_MAX_NODES, dirty_marker)
-	header_cs := strings.clone_to_cstring(header, context.temp_allocator)
-	raylib.DrawTextEx(
-		constants.game_fonts.bold, header_cs,
-		{f32(preview_x), f32(header_y)},
-		font_md, 0, constants.UI_TEXT_COLOR,
-	)
-
-	// ── Lista de nodos ────────────────────────────────────────────────────────
-	list_y := header_y + i32(font_md) + i32(pad)
-	// Reservar espacio para el property panel abajo
-	props_h: i32 = 110
-	list_h := content_h - (list_y - content_y) - props_h - i32(pad)
-	item_h: i32 = 22
-
-	if c.node_count == 0 {
-		hint_cs := strings.clone_to_cstring("Sin nodos. Selecciona un mapa y pulsa \"Agregar\".",
-			context.temp_allocator)
-		raylib.DrawTextEx(
-			constants.game_fonts.regular, hint_cs,
-			{f32(preview_x), f32(list_y + pad)},
-			font_sm, 0, constants.UI_MAP_BROWSER_MUTED_COLOR,
-		)
-	}
-
-	visible := list_h / item_h
-	for i in 0 ..< visible {
-		node_idx := i + app.editor.campaign_editor_scroll
-		if node_idx >= c.node_count { break }
-		node := &c.nodes[node_idx]
-
-		item_y := list_y + i * item_h
-		rect := raylib.Rectangle{
-			f32(preview_x), f32(item_y),
-			f32(preview_w), f32(item_h - 2),
-		}
-		hovered := raylib.CheckCollisionPointRec(mouse, rect)
-		selected := node_idx == app.editor.campaign_editor_selected_node
-
-		// Fondo según estado
-		if selected {
-			raylib.DrawRectangleRounded(rect, 0.2, 6, constants.UI_MAP_BROWSER_SELECTED_BG_COLOR)
-		} else if hovered {
-			raylib.DrawRectangleRounded(rect, 0.2, 6, constants.UI_BUTTON_HOVER_COLOR)
-		}
-
-		// "1.  map_name  [BOSS][OPT][FIN]"
-		fname := entities.campaign_node_map_filename(node)
-		prefix := fmt.tprintf("%d. %s", node_idx + 1, fname)
-		raylib.DrawTextEx(
-			constants.game_fonts.regular,
-			strings.clone_to_cstring(prefix, context.temp_allocator),
-			{rect.x + 6, rect.y + (rect.height - font_sm) / 2},
-			font_sm, 0, constants.UI_TEXT_COLOR,
-		)
-
-		// Badges de flags a la derecha
-		badge_x := rect.x + rect.width - 6
-		draw_badge :: proc(text: cstring, x_right: f32, y_center: f32, active: bool, font: raylib.Font) -> f32 {
-			fs : f32 = 10
-			tw := raylib.MeasureTextEx(font, text, fs, 0).x
-			pad_h : f32 = 4
-			bw := tw + pad_h * 2
-			rect_b := raylib.Rectangle{x_right - bw, y_center - 7, bw, 14}
-			col_bg := raylib.Color{120, 120, 120, 200} if active else raylib.Color{60, 60, 60, 120}
-			col_fg := raylib.Color{255, 255, 255, 255} if active else raylib.Color{180, 180, 180, 255}
-			raylib.DrawRectangleRounded(rect_b, 0.3, 4, col_bg)
-			raylib.DrawTextEx(font, text, {rect_b.x + pad_h, rect_b.y + 2}, fs, 0, col_fg)
-			return x_right - bw - 4
-		}
-		y_mid := rect.y + rect.height / 2
-		if .FINALE in node.flags {
-			badge_x = draw_badge(fmt.ctprintf("FIN"), badge_x, y_mid, true, constants.game_fonts.bold)
-		}
-		if .OPTIONAL in node.flags {
-			badge_x = draw_badge(fmt.ctprintf("OPT"), badge_x, y_mid, true, constants.game_fonts.bold)
-		}
-		if .BOSS in node.flags {
-			badge_x = draw_badge(fmt.ctprintf("BOSS"), badge_x, y_mid, true, constants.game_fonts.bold)
-		}
-
-		// Click sobre el nodo lo selecciona
-		if hovered && raylib.IsMouseButtonPressed(.LEFT) {
-			app.editor.campaign_editor_selected_node = node_idx
-		}
-	}
-
-	// ── Property panel del nodo seleccionado ─────────────────────────────────
-	props_y := content_y + content_h - props_h
-	raylib.DrawLine(
-		preview_x, props_y,
-		preview_x + preview_w, props_y,
-		constants.UI_MAP_BROWSER_SEPARATOR_COLOR,
-	)
-
-	sel := app.editor.campaign_editor_selected_node
-	if sel < 0 || sel >= c.node_count {
-		hint_cs := strings.clone_to_cstring("Selecciona un nodo para editar sus propiedades",
-			context.temp_allocator)
-		raylib.DrawTextEx(
-			constants.game_fonts.regular, hint_cs,
-			{f32(preview_x), f32(props_y + pad)},
-			font_sm, 0, constants.UI_MAP_BROWSER_MUTED_COLOR,
-		)
-		return
-	}
-
-	node := &c.nodes[sel]
-
-	// Línea 1: "Nodo N — <map>"
-	title := fmt.tprintf("Nodo %d — %s", sel + 1, entities.campaign_node_map_filename(node))
-	raylib.DrawTextEx(
-		constants.game_fonts.bold,
-		strings.clone_to_cstring(title, context.temp_allocator),
-		{f32(preview_x), f32(props_y + pad)},
-		font_sm, 0, constants.UI_TEXT_COLOR,
-	)
-
-	// Línea 2: requires_node info
-	req_str: string
-	if node.requires_node < 0 {
-		req_str = "Predecesor: ninguno (nodo inicial)"
-	} else {
-		req_str = fmt.tprintf("Predecesor: nodo %d (auto)", node.requires_node + 1)
-	}
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		strings.clone_to_cstring(req_str, context.temp_allocator),
-		{f32(preview_x), f32(props_y + pad + i32(font_sm) + 4)},
-		font_sm, 0, constants.UI_MAP_BROWSER_MUTED_COLOR,
-	)
-
-	// Botones de acción — fila horizontal
-	btn_y2 := props_y + props_h - 30
-	btn_h2 : f32 = 24
-	btn_w2 : f32 = 56
-	gap    : f32 = 4
-	x      := f32(preview_x)
-
-	// Toggles de flags
-	flag_active_color   := constants.UI_BUTTON_ACTION_COLOR
-	flag_inactive_color := constants.COLOR_NONE
-	if render_button("BOSS", {x, f32(btn_y2), btn_w2, btn_h2}, 1, true,
-		constants.UI_TEXT_COLOR,
-		flag_active_color if .BOSS in node.flags else flag_inactive_color,
-		constants.UI_BUTTON_ACTION_HOVER, constants.UI_BUTTON_ACTION_PRESS,
-	) {
-		campaign_editor_toggle_flag(app, .BOSS)
-	}
-	x += btn_w2 + gap
-
-	if render_button("OPT", {x, f32(btn_y2), btn_w2, btn_h2}, 1, true,
-		constants.UI_TEXT_COLOR,
-		flag_active_color if .OPTIONAL in node.flags else flag_inactive_color,
-		constants.UI_BUTTON_ACTION_HOVER, constants.UI_BUTTON_ACTION_PRESS,
-	) {
-		campaign_editor_toggle_flag(app, .OPTIONAL)
-	}
-	x += btn_w2 + gap
-
-	if render_button("FIN", {x, f32(btn_y2), btn_w2, btn_h2}, 1, true,
-		constants.UI_TEXT_COLOR,
-		flag_active_color if .FINALE in node.flags else flag_inactive_color,
-		constants.UI_BUTTON_ACTION_HOVER, constants.UI_BUTTON_ACTION_PRESS,
-	) {
-		campaign_editor_toggle_flag(app, .FINALE)
-	}
-	x += btn_w2 + gap + 8
-
-	// Move up/down
-	if render_button("↑", {x, f32(btn_y2), 28, btn_h2}) {
-		campaign_editor_move_selected(app, -1)
-	}
-	x += 28 + gap
-
-	if render_button("↓", {x, f32(btn_y2), 28, btn_h2}) {
-		campaign_editor_move_selected(app, +1)
-	}
-	x += 28 + gap + 8
-
-	// Remove
-	if render_button("Quitar", {x, f32(btn_y2), 60, btn_h2}, 1, true,
-		constants.UI_TEXT_COLOR,
-		constants.UI_BUTTON_SELL_COLOR,
-		constants.UI_BUTTON_SELL_HOVER,
-		constants.UI_BUTTON_SELL_PRESS,
-	) {
-		campaign_editor_remove_selected_node(app)
-	}
-}
-
-// Renderiza el footer del browser en modo campaña: Salir / Agregar / Guardar.
-render_campaign_editor_footer :: proc(
-	app: ^entities.App_State,
-	panel_x, panel_w, btn_y: i32,
-	btn_w, btn_h: i32,
-	side_pad: i32,
-) {
-	exit_x := panel_x + side_pad * 2
-	save_x := panel_x + panel_w - btn_w - side_pad * 2
-	add_x  := panel_x + panel_w / 2 - btn_w / 2
-
-	if render_button("Salir Campaña", {f32(exit_x), f32(btn_y), f32(btn_w), f32(btn_h)}) {
-		campaign_editor_exit(app)
-		play_sound(.CLICK, .UI)
-	}
-
-	if render_button("Agregar", {f32(add_x), f32(btn_y), f32(btn_w), f32(btn_h)}, 1, true,
-		constants.UI_TEXT_COLOR,
-		constants.UI_BUTTON_ACTION_COLOR,
-		constants.UI_BUTTON_ACTION_HOVER,
-		constants.UI_BUTTON_ACTION_PRESS,
-	) {
-		campaign_editor_add_selected_map(app)
-	}
-
-	save_color := constants.UI_BUTTON_ACTION_COLOR if app.editor.campaign_editor_dirty else constants.COLOR_NONE
-	if render_button("Guardar", {f32(save_x), f32(btn_y), f32(btn_w), f32(btn_h)}, 1, true,
-		constants.UI_TEXT_COLOR,
-		save_color,
-		constants.UI_BUTTON_ACTION_HOVER,
-		constants.UI_BUTTON_ACTION_PRESS,
-	) {
-		campaign_editor_save(app)
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Campaign map (visualizador) — Game_State.CAMPAIGN_MAP
-//
-// Layout automático: nodos del main path (sin OPTIONAL) en línea horizontal,
-// los OPTIONAL cuelgan arriba/abajo de su requires_node con leve offset en X.
-// El render usa el shader de nebula como fondo (drawn by render_game).
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Calcula posiciones en [0..1]² para cada nodo.
-// El array se devuelve por valor — son ~64 × 8 bytes = 512 bytes, no es mucho.
-compute_campaign_layout :: proc(c: ^entities.Campaign_File) -> [constants.CAMPAIGN_MAX_NODES][2]f32 {
-	layout: [constants.CAMPAIGN_MAX_NODES][2]f32
-
-	// Contar nodos del main path (no OPTIONAL)
-	main_count := 0
-	for i in 0 ..< int(c.node_count) {
-		if .OPTIONAL not_in c.nodes[i].flags { main_count += 1 }
-	}
-	if main_count == 0 { return layout }
-
-	// Distribuir nodos del main path sobre la línea horizontal central
-	main_idx := 0
-	for i in 0 ..< int(c.node_count) {
-		if .OPTIONAL in c.nodes[i].flags { continue }
-		x: f32
-		if main_count == 1 {
-			x = 0.5
-		} else {
-			x = f32(main_idx) / f32(main_count - 1)
-		}
-		layout[i] = {x, 0.5}
-		main_idx += 1
-	}
-
-	// Posicionar OPTIONAL cerca de su parent (requires_node)
-	for i in 0 ..< int(c.node_count) {
-		if .OPTIONAL not_in c.nodes[i].flags { continue }
-		parent_idx := c.nodes[i].requires_node
-
-		parent_x: f32 = 0.5
-		parent_y: f32 = 0.5
-		if parent_idx >= 0 && int(parent_idx) < int(c.node_count) {
-			parent_x = layout[parent_idx].x
-			parent_y = layout[parent_idx].y
-		}
-
-		// Contar hermanos opcionales anteriores (mismos parent) para decidir lado
-		sibling_idx := 0
-		for j in 0 ..< i {
-			if .OPTIONAL in c.nodes[j].flags && c.nodes[j].requires_node == parent_idx {
-				sibling_idx += 1
-			}
-		}
-
-		// Alternar arriba/abajo; cada par adicional se aleja más en X
-		y_offset: f32 = 0.22
-		if sibling_idx % 2 == 1 { y_offset = -0.22 }
-		x_offset := f32(0.06) + f32(sibling_idx / 2) * 0.06
-
-		layout[i] = {parent_x + x_offset, parent_y + y_offset}
-	}
-
-	return layout
-}
-
-// Inicia el run del nodo de campaña dado: carga el mapa, aplica overrides y
-// transiciona a PLAYING. Setea app.current_campaign_node para que app_finish_run
-// pueda registrar el resultado al terminar.
-launch_campaign_node :: proc(app: ^entities.App_State, node_idx: i32) {
-	c := &app.campaign
-	if node_idx < 0 || node_idx >= c.node_count { return }
-
-	node  := &c.nodes[node_idx]
-	fname := entities.campaign_node_map_filename(node)
-
-	if !entities.map_load(&app.editor.game_map, fname) {
-		entities.add_toast(app, fmt.tprintf("Mapa no encontrado: %s", fname), .ERROR, 3.0)
-		play_sound(.ERROR, .UI)
-		return
-	}
-
-	app.editor.current_biome = app.editor.game_map.biome
-	if len(app.editor.current_map_name) > 0 {
-		delete(app.editor.current_map_name)
-	}
-	app.editor.current_map_name = strings.clone(fname)
-
-	// Limpieza preventiva — simulation_init_from_editor llama a reset
-	app.current_campaign_node = -1
-
-	if simulation_init_from_editor(app) {
-		// Settear DESPUÉS del reset para que sobreviva al init
-		app.current_campaign_node = node_idx
-		simulation_fit_camera(app, f32(raylib.GetScreenWidth()), f32(raylib.GetScreenHeight()))
-		entities.app_set_state(app, .PLAYING)
-		play_sound(.CONFIRMATION, .UI)
-	} else {
-		entities.add_toast(app, constants.get_text("EDITOR_ERROR_NO_PATH"), .ERROR, 3.0)
-		play_sound(.ERROR, .UI)
-	}
-}
-
-// Convierte una posición [0..1]² a coordenadas de pantalla dentro del área dada.
-campaign_pos_to_screen :: proc(pos: [2]f32, x_lef, y_top, x_rig, y_bot: f32) -> [2]f32 {
-	return [2]f32{
-		x_lef + pos.x * (x_rig - x_lef),
-		y_top + pos.y * (y_bot - y_top),
-	}
-}
-
-// Render del visualizador de campaña — Game_State.CAMPAIGN_MAP.
-render_campaign_map :: proc(app: ^entities.App_State) {
-	// Carga lazy de campaign.bin la primera vez que se entra
-	if !app.campaign_loaded {
-		loaded, ok := entities.campaign_load()
-		if ok {
-			app.campaign = loaded
-		} else {
-			app.campaign = entities.Campaign_File{}
-		}
-		app.campaign_loaded = true
-	}
-
-	sw := f32(raylib.GetScreenWidth())
-	sh := f32(raylib.GetScreenHeight())
-	c  := &app.campaign
-
-	// Título
-	name := entities.campaign_name(c)
-	if len(name) == 0 { name = "Campaña" }
-	title_size : f32 = sh * 0.06
-	title_cs   := strings.clone_to_cstring(name, context.temp_allocator)
-	title_w    := raylib.MeasureTextEx(constants.game_fonts.bold, title_cs, title_size, 0).x
-	raylib.DrawTextEx(
-		constants.game_fonts.bold, title_cs,
-		{sw / 2 - title_w / 2, sh * 0.06},
-		title_size, 0, raylib.WHITE,
-	)
-
-	// Conteo de progreso
-	if c.node_count > 0 {
-		completed := entities.campaign_completed_count(c, app.meta.campaign_completed[:])
-		progress := fmt.tprintf("%d / %d completados", completed, c.node_count)
-		progress_cs := strings.clone_to_cstring(progress, context.temp_allocator)
-		progress_w  := raylib.MeasureTextEx(constants.game_fonts.regular, progress_cs, 16, 0).x
-		raylib.DrawTextEx(
-			constants.game_fonts.regular, progress_cs,
-			{sw / 2 - progress_w / 2, sh * 0.06 + title_size + 8},
-			16, 0, raylib.Color{200, 200, 220, 220},
-		)
-	}
-
-	if c.node_count == 0 {
-		// Empty state
-		empty_cs := strings.clone_to_cstring("No hay campaña definida", context.temp_allocator)
-		ew       := raylib.MeasureTextEx(constants.game_fonts.regular, empty_cs, 22, 0).x
-		raylib.DrawTextEx(
-			constants.game_fonts.regular, empty_cs,
-			{sw / 2 - ew / 2, sh * 0.5}, 22, 0, raylib.WHITE,
-		)
-	} else {
-		// Layout area
-		vis_x_lef := sw * 0.10
-		vis_x_rig := sw * 0.90
-		vis_y_top := sh * 0.22
-		vis_y_bot := sh * 0.82
-
-		layout := compute_campaign_layout(c)
-		mouse  := raylib.GetMousePosition()
-		t      := f32(raylib.GetTime())
-
-		// Nodo "activo" — primer nodo NO opcional, desbloqueado y no completado.
-		// Recibe un anillo blanco para destacar visualmente "lo que sigue".
-		active_idx := -1
-		for i in 0 ..< int(c.node_count) {
-			if .OPTIONAL in c.nodes[i].flags { continue }
-			completed := i < len(app.meta.campaign_completed) && app.meta.campaign_completed[i]
-			if completed { continue }
-			if entities.campaign_is_node_unlocked(c, app.meta.campaign_completed[:], i) {
-				active_idx = i
-				break
-			}
-		}
-
-		// 1ª pasada: conexiones (atrás)
-		for i in 0 ..< int(c.node_count) {
-			node := &c.nodes[i]
-			if node.requires_node < 0 { continue }
-			parent_idx := int(node.requires_node)
-			if parent_idx < 0 || parent_idx >= int(c.node_count) { continue }
-
-			from := campaign_pos_to_screen(layout[parent_idx], vis_x_lef, vis_y_top, vis_x_rig, vis_y_bot)
-			to   := campaign_pos_to_screen(layout[i],          vis_x_lef, vis_y_top, vis_x_rig, vis_y_bot)
-
-			unlocked := entities.campaign_is_node_unlocked(c, app.meta.campaign_completed[:], i)
-			line_col := raylib.Color{180, 150, 70, 220} if unlocked else raylib.Color{90, 90, 110, 120}
-			raylib.DrawLineEx({from[0], from[1]}, {to[0], to[1]}, 2, line_col)
-		}
-
-		// 2ª pasada: nodos (encima de las conexiones)
-		hovered_idx := -1
-		for i in 0 ..< int(c.node_count) {
-			node := &c.nodes[i]
-			pos  := campaign_pos_to_screen(layout[i], vis_x_lef, vis_y_top, vis_x_rig, vis_y_bot)
-
-			// Tamaño según flags
-			radius: f32 = 14
-			if .OPTIONAL in node.flags { radius = 10 }
-			if .BOSS     in node.flags { radius = 18 }
-			if .FINALE   in node.flags { radius = 22 }
-
-			unlocked  := entities.campaign_is_node_unlocked(c, app.meta.campaign_completed[:], i)
-			completed := i < len(app.meta.campaign_completed) && app.meta.campaign_completed[i]
-
-			// Colores base
-			fill_col   : raylib.Color
-			border_col : raylib.Color
-			switch {
-			case completed:
-				fill_col   = raylib.Color{60, 200, 100, 240}
-				border_col = raylib.Color{120, 250, 160, 255}
-			case unlocked:
-				fill_col   = raylib.Color{240, 220, 130, 240}
-				border_col = raylib.Color{255, 240, 160, 255}
-			case:
-				fill_col   = raylib.Color{80, 80, 100, 180}
-				border_col = raylib.Color{120, 120, 140, 200}
-			}
-			// Outline especial para boss/finale (sobreescribe)
-			if .FINALE in node.flags {
-				border_col = raylib.Color{255, 180, 30, 255}
-			} else if .BOSS in node.flags {
-				border_col = raylib.Color{220, 80, 80, 255}
-			}
-
-			// Pulso para available
-			if unlocked && !completed {
-				pulse := 0.5 + 0.5 * math.sin(t * 3.0)
-				glow_r := radius * (1.0 + 0.4 * pulse)
-				raylib.DrawCircleV({pos[0], pos[1]}, glow_r,
-					raylib.Color{255, 240, 120, u8(70.0 * pulse)})
-			}
-
-			// Hover check
-			dx := mouse.x - pos[0]
-			dy := mouse.y - pos[1]
-			hovered := dx*dx + dy*dy <= radius * radius
-
-			// Dibujar círculo + borde
-			raylib.DrawCircleV({pos[0], pos[1]}, radius, fill_col)
-			raylib.DrawCircleLines(i32(pos[0]), i32(pos[1]), radius, border_col)
-
-			// Anillo blanco para el nodo activo (encima del borde normal).
-			// Doble línea para grosor de ~2px sin depender de DrawCircleLinesEx.
-			if i == active_idx {
-				raylib.DrawCircleLines(i32(pos[0]), i32(pos[1]), radius + 6, raylib.WHITE)
-				raylib.DrawCircleLines(i32(pos[0]), i32(pos[1]), radius + 7, raylib.WHITE)
-			}
-
-			// Estrellas para completados (texto centrado)
-			if completed {
-				stars : u8 = 0
-				if i < len(app.meta.campaign_stars) {
-					stars = app.meta.campaign_stars[i]
-				}
-				stars_str := fmt.ctprintf("%d*", stars)
-				fs : f32 = 12
-				tw := raylib.MeasureTextEx(constants.game_fonts.bold, stars_str, fs, 0).x
-				raylib.DrawTextEx(
-					constants.game_fonts.bold, stars_str,
-					{pos[0] - tw / 2, pos[1] - fs / 2},
-					fs, 0, raylib.WHITE,
-				)
-			}
-
-			if hovered {
-				hovered_idx = i
-			}
-
-			// Click sobre nodo disponible → lanzar run
-			if hovered && unlocked && raylib.IsMouseButtonPressed(.LEFT) {
-				launch_campaign_node(app, i32(i))
-			}
-		}
-
-		// 3ª pasada: tooltip (encima de todo). Sólo el último hovered.
-		if hovered_idx >= 0 {
-			i := hovered_idx
-			node := &c.nodes[i]
-			pos  := campaign_pos_to_screen(layout[i], vis_x_lef, vis_y_top, vis_x_rig, vis_y_bot)
-
-			unlocked  := entities.campaign_is_node_unlocked(c, app.meta.campaign_completed[:], i)
-			completed := i < len(app.meta.campaign_completed) && app.meta.campaign_completed[i]
-
-			disp := entities.campaign_node_display_name(node)
-			if len(disp) == 0 { disp = entities.campaign_node_map_filename(node) }
-
-			status: string
-			switch {
-			case completed:
-				stars : u8 = 0
-				if i < len(app.meta.campaign_stars) { stars = app.meta.campaign_stars[i] }
-				best : i32 = 0
-				if i < len(app.meta.campaign_best) { best = app.meta.campaign_best[i] }
-				status = fmt.tprintf("%d* — mejor ola %d", stars, best)
-			case unlocked:
-				status = "Disponible"
-			case:
-				status = "Bloqueado"
-			}
-
-			line1_cs := strings.clone_to_cstring(disp,   context.temp_allocator)
-			line2_cs := strings.clone_to_cstring(status, context.temp_allocator)
-			fs : f32 = 13
-			tw1 := raylib.MeasureTextEx(constants.game_fonts.bold,    line1_cs, fs, 0).x
-			tw2 := raylib.MeasureTextEx(constants.game_fonts.regular, line2_cs, fs, 0).x
-			max_w := tw1 if tw1 > tw2 else tw2
-			pad : f32 = 8
-			tip_h : f32 = (fs + 2) * 2 + pad * 2
-			radius : f32 = 22  // approx max node radius
-			tip_y := pos[1] - radius - tip_h - 8
-			if tip_y < 100 { tip_y = pos[1] + radius + 8 }
-			tip_x := pos[0] - (max_w + pad * 2) / 2
-			raylib.DrawRectangleRounded(
-				{tip_x, tip_y, max_w + pad * 2, tip_h}, 0.3, 8,
-				raylib.Color{20, 20, 30, 235},
-			)
-			raylib.DrawTextEx(
-				constants.game_fonts.bold, line1_cs,
-				{tip_x + pad, tip_y + pad},
-				fs, 0, raylib.WHITE,
-			)
-			raylib.DrawTextEx(
-				constants.game_fonts.regular, line2_cs,
-				{tip_x + pad, tip_y + pad + fs + 2},
-				fs, 0, raylib.Color{200, 200, 220, 240},
-			)
-		}
-	}
-
-	// Botón de volver
-	back_w : f32 = 140
-	back_h : f32 = 32
-	back_x := sw / 2 - back_w / 2
-	back_y := sh - back_h - 24
-	if render_button("Volver al menú", {back_x, back_y, back_w, back_h}) {
-		entities.app_set_state(app, .MENU)
-		play_sound(.CLICK, .UI)
-	}
-}
 
 // Render pause menu overlay
 render_pause_menu :: proc(app: ^entities.App_State) {
@@ -2244,6 +1557,50 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 }
 
 // Render settings menu
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers para filas del menú de Settings — reducen el boilerplate de etiqueta
+// + control (slider / toggle). El caller maneja los side effects al cambiar.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Dibuja la etiqueta de una fila de settings en (cx, item_y + 4).
+settings_draw_label :: proc(label: string, cx, item_y: i32, font_size: f32) {
+	raylib.DrawTextEx(
+		constants.game_fonts.regular,
+		strings.clone_to_cstring(label, context.temp_allocator),
+		{f32(cx), f32(item_y + 4)},
+		font_size, 0, constants.UI_PANEL_TEXT_COLOR,
+	)
+}
+
+// Fila label + slider de porcentaje (0..1 mostrado como "Label  N%").
+// Devuelve (new_value, changed) — caller hace side effects si changed.
+settings_row_pct_slider :: proc(
+	label_key: string, value: f32,
+	cx, ctrl_x, item_y, btn_width, btn_height: i32, font_size: f32,
+) -> (new_value: f32, changed: bool) {
+	settings_draw_label(
+		fmt.tprintf("%s  %d%%", constants.get_text(label_key), i32(value * 100)),
+		cx, item_y, font_size,
+	)
+	new_value = render_slider(
+		{f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)},
+		value,
+	)
+	changed = new_value != value
+	return
+}
+
+// Fila label + botón toggle ON/OFF. Devuelve true si se clickeó — caller debe
+// togglear el bool y aplicar side effects.
+settings_row_toggle :: proc(
+	label_key: string, value: bool,
+	cx, ctrl_x, item_y, btn_width, btn_height: i32, font_size: f32,
+) -> bool {
+	settings_draw_label(constants.get_text(label_key), cx, item_y, font_size)
+	on_off := constants.get_text("UI_ON") if value else constants.get_text("UI_OFF")
+	return render_button(on_off, {f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)})
+}
+
 render_settings_menu :: proc(app: ^entities.App_State) {
 	screen_width := raylib.GetScreenWidth()
 	screen_height := raylib.GetScreenHeight()
@@ -2278,80 +1635,29 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	ctrl_x := cx + cw - btn_width
 
 	// --- Master Volume ---
-	vol_label := fmt.tprintf(
-		"%s  %d%%",
-		constants.get_text("SETTINGS_VOLUME"),
-		i32(app.settings.master_volume * 100),
-	)
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		strings.clone_to_cstring(vol_label, context.temp_allocator),
-		{f32(cx), f32(item_y + 4)},
-		font_size,
-		0,
-		constants.UI_PANEL_TEXT_COLOR,
-	)
-	new_master := render_slider(
-		{f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)},
-		app.settings.master_volume,
-	)
-	if new_master != app.settings.master_volume {
+	if new_master, ch := settings_row_pct_slider("SETTINGS_VOLUME", app.settings.master_volume,
+		cx, ctrl_x, item_y, btn_width, btn_height, font_size); ch {
 		app.settings.master_volume = new_master
 		raylib.SetMasterVolume(new_master)
 		set_volume(.UI,  new_master * app.settings.ui_volume)
 		set_volume(.SFX, new_master * app.settings.sfx_volume)
 	}
-
 	item_y += item_height + spacing
 
 	// --- UI Volume ---
-	ui_vol_label := fmt.tprintf(
-		"%s  %d%%",
-		constants.get_text("SETTINGS_UI_VOLUME"),
-		i32(app.settings.ui_volume * 100),
-	)
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		strings.clone_to_cstring(ui_vol_label, context.temp_allocator),
-		{f32(cx), f32(item_y + 4)},
-		font_size,
-		0,
-		constants.UI_PANEL_TEXT_COLOR,
-	)
-	new_ui_vol := render_slider(
-		{f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)},
-		app.settings.ui_volume,
-	)
-	if new_ui_vol != app.settings.ui_volume {
+	if new_ui_vol, ch := settings_row_pct_slider("SETTINGS_UI_VOLUME", app.settings.ui_volume,
+		cx, ctrl_x, item_y, btn_width, btn_height, font_size); ch {
 		app.settings.ui_volume = new_ui_vol
 		set_volume(.UI, app.settings.master_volume * new_ui_vol)
 	}
-
 	item_y += item_height + spacing
 
 	// --- SFX Volume ---
-	sfx_vol_label := fmt.tprintf(
-		"%s  %d%%",
-		constants.get_text("SETTINGS_SFX_VOLUME"),
-		i32(app.settings.sfx_volume * 100),
-	)
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		strings.clone_to_cstring(sfx_vol_label, context.temp_allocator),
-		{f32(cx), f32(item_y + 4)},
-		font_size,
-		0,
-		constants.UI_PANEL_TEXT_COLOR,
-	)
-	new_sfx_vol := render_slider(
-		{f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)},
-		app.settings.sfx_volume,
-	)
-	if new_sfx_vol != app.settings.sfx_volume {
+	if new_sfx_vol, ch := settings_row_pct_slider("SETTINGS_SFX_VOLUME", app.settings.sfx_volume,
+		cx, ctrl_x, item_y, btn_width, btn_height, font_size); ch {
 		app.settings.sfx_volume = new_sfx_vol
 		set_volume(.SFX, app.settings.master_volume * new_sfx_vol)
 	}
-
 	item_y += item_height + spacing
 
 	// --- Language ---
@@ -2447,19 +1753,9 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	item_y += item_height + spacing
 
 	// --- Fullscreen ---
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_FULLSCREEN"), context.temp_allocator),
-		{f32(cx), f32(item_y + 4)},
-		font_size,
-		0,
-		constants.UI_PANEL_TEXT_COLOR,
-	)
-	fs_text :=
-		constants.get_text("UI_ON") if app.settings.fullscreen else constants.get_text("UI_OFF")
-	if render_button(fs_text, {f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)}) {
+	if settings_row_toggle("SETTINGS_FULLSCREEN", app.settings.fullscreen,
+		cx, ctrl_x, item_y, btn_width, btn_height, font_size) {
 		app.settings.fullscreen = !app.settings.fullscreen
-		
 		// Toggle window state
 		if app.settings.fullscreen {
 			if !raylib.IsWindowFullscreen() {
@@ -2478,21 +1774,11 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 			}
 		}
 	}
-
 	item_y += item_height + spacing
 
 	// --- V-Sync ---
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_VSYNC"), context.temp_allocator),
-		{f32(cx), f32(item_y + 4)},
-		font_size,
-		0,
-		constants.UI_PANEL_TEXT_COLOR,
-	)
-	vsync_text :=
-		constants.get_text("UI_ON") if app.settings.vsync else constants.get_text("UI_OFF")
-	if render_button(vsync_text, {f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)}) {
+	if settings_row_toggle("SETTINGS_VSYNC", app.settings.vsync,
+		cx, ctrl_x, item_y, btn_width, btn_height, font_size) {
 		app.settings.vsync = !app.settings.vsync
 		if app.settings.vsync {
 			raylib.SetWindowState({.VSYNC_HINT})
@@ -2500,89 +1786,39 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 			raylib.ClearWindowState({.VSYNC_HINT})
 		}
 	}
-
 	item_y += item_height + spacing
 
 	// --- Show Grid ---
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_GRID"), context.temp_allocator),
-		{f32(cx), f32(item_y + 4)},
-		font_size,
-		0,
-		constants.UI_PANEL_TEXT_COLOR,
-	)
-	grid_text :=
-		constants.get_text("UI_ON") if app.settings.show_grid else constants.get_text("UI_OFF")
-	if render_button(grid_text, {f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)}) {
+	if settings_row_toggle("SETTINGS_SHOW_GRID", app.settings.show_grid,
+		cx, ctrl_x, item_y, btn_width, btn_height, font_size) {
 		app.settings.show_grid = !app.settings.show_grid
 	}
-
 	item_y += item_height + spacing
 
 	// --- Damage Numbers ---
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_DAMAGE_NUMBERS"), context.temp_allocator),
-		{f32(cx), f32(item_y + 4)},
-		font_size,
-		0,
-		constants.UI_PANEL_TEXT_COLOR,
-	)
-	dmg_text :=
-		constants.get_text("UI_ON") if app.settings.show_damage_numbers else constants.get_text("UI_OFF")
-	if render_button(dmg_text, {f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)}) {
+	if settings_row_toggle("SETTINGS_SHOW_DAMAGE_NUMBERS", app.settings.show_damage_numbers,
+		cx, ctrl_x, item_y, btn_width, btn_height, font_size) {
 		app.settings.show_damage_numbers = !app.settings.show_damage_numbers
 	}
-
 	item_y += item_height + spacing
 
 	// --- Tower Range ---
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_TOWER_RANGE"), context.temp_allocator),
-		{f32(cx), f32(item_y + 4)},
-		font_size,
-		0,
-		constants.UI_PANEL_TEXT_COLOR,
-	)
-	range_text :=
-		constants.get_text("UI_ON") if app.settings.show_tower_range else constants.get_text("UI_OFF")
-	if render_button(range_text, {f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)}) {
+	if settings_row_toggle("SETTINGS_SHOW_TOWER_RANGE", app.settings.show_tower_range,
+		cx, ctrl_x, item_y, btn_width, btn_height, font_size) {
 		app.settings.show_tower_range = !app.settings.show_tower_range
 	}
-
 	item_y += item_height + spacing
 
 	// --- Show FPS ---
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_SHOW_FPS"), context.temp_allocator),
-		{f32(cx), f32(item_y + 4)},
-		font_size,
-		0,
-		constants.UI_PANEL_TEXT_COLOR,
-	)
-	fps_text :=
-		constants.get_text("UI_ON") if app.settings.show_fps else constants.get_text("UI_OFF")
-	if render_button(fps_text, {f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)}) {
+	if settings_row_toggle("SETTINGS_SHOW_FPS", app.settings.show_fps,
+		cx, ctrl_x, item_y, btn_width, btn_height, font_size) {
 		app.settings.show_fps = !app.settings.show_fps
 	}
-
 	item_y += item_height + spacing
 
 	// --- Auto Wave ---
-	raylib.DrawTextEx(
-		constants.game_fonts.regular,
-		strings.clone_to_cstring(constants.get_text("SETTINGS_AUTO_WAVE"), context.temp_allocator),
-		{f32(cx), f32(item_y + 4)},
-		font_size,
-		0,
-		constants.UI_PANEL_TEXT_COLOR,
-	)
-	auto_text :=
-		constants.get_text("UI_ON") if app.settings.auto_start_wave else constants.get_text("UI_OFF")
-	if render_button(auto_text, {f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)}) {
+	if settings_row_toggle("SETTINGS_AUTO_WAVE", app.settings.auto_start_wave,
+		cx, ctrl_x, item_y, btn_width, btn_height, font_size) {
 		app.settings.auto_start_wave = !app.settings.auto_start_wave
 	}
 
@@ -2770,7 +2006,7 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	if render_button(
 		   upgrade_text,
 		   {f32(content_x), f32(current_y), f32(button_width), f32(button_height)},
-		   enabled = !at_max,
+		   {disabled = at_max},
 	   ) &&
 	   can_afford_upgrade {
 		entities.tower_upgrade(tower)
@@ -2813,12 +2049,12 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	if render_button(
 		delete_text,
 		{f32(content_x), f32(current_y), f32(button_width), f32(button_height)},
-		1,
-		true,
-		constants.UI_TEXT_COLOR,
-		constants.UI_BUTTON_SELL_COLOR,
-		constants.UI_BUTTON_SELL_HOVER,
-		constants.UI_BUTTON_SELL_PRESS,
+		{
+			text_color    = constants.UI_TEXT_COLOR,
+			button_color  = constants.UI_BUTTON_SELL_COLOR,
+			hover_color   = constants.UI_BUTTON_SELL_HOVER,
+			pressed_color = constants.UI_BUTTON_SELL_PRESS,
+		},
 	) {
 		simulation_remove_tower_at(app, tower.r, tower.c)
 		play_sound(.CONFIRMATION, .UI)
@@ -2912,12 +2148,12 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 	if render_button(
 		sell_text,
 		{f32(content_x), f32(current_y), f32(button_width), f32(button_height)},
-		1,
-		true,
-		constants.UI_TEXT_COLOR,
-		constants.UI_BUTTON_SELL_COLOR,
-		constants.UI_BUTTON_SELL_HOVER,
-		constants.UI_BUTTON_SELL_PRESS,
+		{
+			text_color    = constants.UI_TEXT_COLOR,
+			button_color  = constants.UI_BUTTON_SELL_COLOR,
+			hover_color   = constants.UI_BUTTON_SELL_HOVER,
+			pressed_color = constants.UI_BUTTON_SELL_PRESS,
+		},
 	) {
 		app.editor.game_map.obstacle_grid[row][col] = .EMPTY
 		// Clear level data so a new obstacle placed here starts at level 1
@@ -3010,10 +2246,10 @@ shop_player_has_tower_type :: proc(sim: ^entities.Simulation, t: constants.Tower
 	for tower in sim.towers {
 		if tower.type == t { return true }
 	}
-	for card in sim.hand {
+	for card in sim.cards.hand {
 		if card.kind == .TOWER && card.tower_type == t { return true }
 	}
-	for card in sim.deck {
+	for card in sim.cards.deck {
 		if card.kind == .TOWER && card.tower_type == t { return true }
 	}
 	return false
@@ -3039,10 +2275,10 @@ shop_player_has_n_same_tower_type_placed :: proc(sim: ^entities.Simulation, t: c
 }
 
 shop_player_has_any_tower_card :: proc(sim: ^entities.Simulation) -> bool {
-	for card in sim.hand {
+	for card in sim.cards.hand {
 		if card.kind == .TOWER { return true }
 	}
-	for card in sim.deck {
+	for card in sim.cards.deck {
 		if card.kind == .TOWER { return true }
 	}
 	return false
@@ -3120,7 +2356,7 @@ shop_price_for_card :: proc(app: ^entities.App_State, card: entities.Card) -> i3
 shop_next_reroll_cost :: proc(app: ^entities.App_State) -> i32 {
 	biome_mod := constants.BIOME_SHOP_MODS[app.editor.game_map.biome]
 	if biome_mod.free_reroll { return 0 }
-	idx := int(app.sim.rerolls_this_shop)
+	idx := int(app.sim.shop.rerolls_this_visit)
 	if idx >= len(constants.SHOP_REROLL_COSTS) {
 		idx = len(constants.SHOP_REROLL_COSTS) - 1
 	}
@@ -3145,7 +2381,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 	raylib.DrawRectangle(0, 0, i32(screen_w), i32(screen_h), raylib.Color{0, 0, 0, 160})
 
 	// Cantidad de slots activos según el bioma (clamped a [1, MAX_SHOP_SLOTS]).
-	n_cards := int(sim.shop_slot_count)
+	n_cards := int(sim.shop.slot_count)
 	if n_cards <= 0 { n_cards = int(constants.SHOP_BASE_SLOTS) }
 	if n_cards > int(constants.MAX_SHOP_SLOTS) { n_cards = int(constants.MAX_SHOP_SLOTS) }
 
@@ -3177,30 +2413,33 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		{screen_w / 2 - title_w / 2, panel_y - 44},
 		title_sz, 0, raylib.WHITE)
 
-	mouse  := raylib.GetMousePosition()
-	HOVER_LIFT :: f32(8)
+	mouse          := raylib.GetMousePosition()
+	HOVER_LIFT     :: f32(8)
+	LOCK_ICON_SIZE :: f32(18)
 
 	for i in 0 ..< n_cards {
-		card     := sim.card_selection_choices[i]
+		card     := sim.shop.choices[i]
 		cx       := panel_x + CARD_GAP + f32(i) * (CARD_W + CARD_GAP)
 		cy       := panel_y
-		bought   := sim.card_selection_bought[i]
-		locked   := sim.card_selection_locked[i]
+		bought   := sim.shop.bought[i]
+		locked   := sim.shop.locked[i]
 		is_relic := entities.is_relic(card.kind)
 		price    := shop_price_for_card(app, card)
-		can_buy  := !bought && price <= sim.money
-		synergy  := !bought && shop_card_has_synergy(sim, card)
+		can_buy  := price <= sim.money
+		synergy  := shop_card_has_synergy(sim, card)
+
+		// Carta comprada: no renderizar — el slot queda vacío
+		if bought { continue }
 
 		card_rect := raylib.Rectangle{cx, cy, CARD_W, CARD_H}
-		hovered   := !bought && raylib.CheckCollisionPointRec(mouse, card_rect)
+		hovered   := raylib.CheckCollisionPointRec(mouse, card_rect)
 		lift      := hovered ? HOVER_LIFT : f32(0)
 		draw_cy   := cy - lift
 
 		// Fondo según estado
 		bg := raylib.Color{}
-		switch {
-		case bought:     bg = raylib.Color{50, 50, 50, 200}
-		case is_relic:   bg = rarity_card_bg(entities.card_rarity(card))
+		if is_relic {
+			bg = rarity_card_bg(entities.card_rarity(card))
 		}
 
 		// show_price = false: dibujamos el precio nosotros con el modificador del bioma
@@ -3220,18 +2459,28 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		lifted_rect := raylib.Rectangle{cx, draw_cy, CARD_W, CARD_H}
 		render_card_tooltip(app, card, lifted_rect)
 
-		// Indicador de lock — borde dorado constante + label "[L]" esquina superior izq
+		// Indicador de lock — borde dorado constante + ícono de candado esquina sup izq.
+		// lock_locked cuando el slot está bloqueado; lock_unlocked al hacer hover sobre
+		// un slot desbloqueado (pista visual de que click derecho lo bloquea).
+		LOCK_BG_PAD  :: f32(3)
+		lock_bg_rect := raylib.Rectangle{cx + 4, draw_cy + 4, LOCK_ICON_SIZE + LOCK_BG_PAD*2, LOCK_ICON_SIZE + LOCK_BG_PAD*2}
 		if locked {
 			raylib.DrawRectangleRoundedLinesEx(
 				{cx, draw_cy, CARD_W, CARD_H},
 				constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 2.5,
 				raylib.Color{220, 180, 60, 240},
 			)
-			draw_text_with_outline(
-				fmt.ctprintf("[L]"), {cx + 6, draw_cy + 6}, 12, 0,
-				raylib.Color{240, 200, 60, 255}, raylib.Color{0, 0, 0, 200}, 1,
-				constants.game_fonts.bold,
-			)
+			raylib.DrawRectangleRounded(lock_bg_rect, 0.4, 6, raylib.Color{90, 60, 10, 230})
+			tex := constants.game_icons.lock_locked
+			if tex.id > 0 {
+				raylib.DrawTextureEx(tex, {lock_bg_rect.x + LOCK_BG_PAD, lock_bg_rect.y + LOCK_BG_PAD}, 0, LOCK_ICON_SIZE / f32(tex.width), raylib.WHITE)
+			}
+		} else if hovered {
+			raylib.DrawRectangleRounded(lock_bg_rect, 0.4, 6, raylib.Color{40, 40, 40, 180})
+			tex := constants.game_icons.lock_unlocked
+			if tex.id > 0 {
+				raylib.DrawTextureEx(tex, {lock_bg_rect.x + LOCK_BG_PAD, lock_bg_rect.y + LOCK_BG_PAD}, 0, LOCK_ICON_SIZE / f32(tex.width), raylib.Color{255, 255, 255, 180})
+			}
 		}
 
 		// Indicador de sinergia — símbolo "~" en esquina superior derecha
@@ -3253,24 +2502,14 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 			append(&ui_click_blocks, card_rect)
 		}
 
-		// Click izquierdo: comprar
+		// Click izquierdo: comprar — la lógica vive en shop_perform_buy (simulation.odin)
 		if hovered && can_buy && raylib.IsMouseButtonPressed(.LEFT) {
-			sim.money -= price
-			sim.card_selection_bought[i] = true
-			sim.shop_purchases_this_visit += 1
-			sim.skip_streak_count = 0  // comprar rompe el streak
-			if is_relic {
-				apply_relic_card(app, card.kind)
-			} else {
-				entities.card_add_to_hand(&app.sim, card)
-			}
-			play_sound(.CONFIRMATION, .UI)
+			shop_perform_buy(app, i)
 		}
 
-		// Click derecho: toggle lock (también si bought — permite "marcar" cartas)
+		// Click derecho: toggle lock — la lógica vive en shop_perform_toggle_lock
 		if hovered && raylib.IsMouseButtonPressed(.RIGHT) {
-			sim.card_selection_locked[i] = !sim.card_selection_locked[i]
-			play_sound(.CLICK, .UI)
+			shop_perform_toggle_lock(app, i)
 		}
 	}
 
@@ -3288,15 +2527,15 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 
 	// Skip: si el jugador no compró nada, gana bonus de oro escalado por skip_streak
 	skip_label: string
-	if sim.shop_purchases_this_visit == 0 {
-		next_bonus := (sim.skip_streak_count + 1) * constants.SHOP_SKIP_BONUS_PER_SKIP
+	if sim.shop.purchases_this_visit == 0 {
+		next_bonus := (sim.shop.skip_streak_count + 1) * constants.SHOP_SKIP_BONUS_PER_SKIP
 		if next_bonus > constants.SHOP_SKIP_BONUS_CAP { next_bonus = constants.SHOP_SKIP_BONUS_CAP }
 		skip_label = fmt.tprintf("%s (+$%d)", constants.get_text("SHOP_SKIP"), next_bonus)
 	} else {
 		skip_label = constants.get_text("SHOP_SKIP")
 	}
 
-	if render_button(skip_label, {skip_x, btn_y, BTN_W, BTN_H}, 1, true) {
+	if render_button(skip_label, {skip_x, btn_y, BTN_W, BTN_H}) {
 		shop_perform_skip(app)
 	}
 
@@ -3313,18 +2552,15 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 	if render_button(
 		reroll_label,
 		{reroll_x, btn_y, BTN_W, BTN_H},
-		1, can_reroll,
-		constants.UI_TEXT_COLOR,
-		can_reroll ? constants.UI_BUTTON_ACTION_COLOR : constants.COLOR_NONE,
-		can_reroll ? constants.UI_BUTTON_ACTION_HOVER : constants.COLOR_NONE,
-		can_reroll ? constants.UI_BUTTON_ACTION_PRESS : constants.COLOR_NONE,
+		{
+			disabled      = !can_reroll,
+			text_color    = constants.UI_TEXT_COLOR,
+			button_color  = can_reroll ? constants.UI_BUTTON_ACTION_COLOR : constants.COLOR_NONE,
+			hover_color   = can_reroll ? constants.UI_BUTTON_ACTION_HOVER : constants.COLOR_NONE,
+			pressed_color = can_reroll ? constants.UI_BUTTON_ACTION_PRESS : constants.COLOR_NONE,
+		},
 	) {
-		if can_reroll {
-			sim.money -= reroll_cost
-			sim.rerolls_this_shop += 1
-			generate_card_selection(app)
-			play_sound(.CLICK, .UI)
-		}
+		shop_perform_reroll(app)
 	}
 
 	// ── Panel de refund de stacks de relictos ─────────────────────────────────
@@ -3395,17 +2631,12 @@ render_relic_refund_row :: proc(app: ^entities.App_State, screen_w, y_pos: f32) 
 			raylib.WHITE, raylib.Color{0, 0, 0, 220}, 1, constants.game_fonts.bold,
 		)
 
-		// Tooltip al hover + click para refund
+		// Tooltip al hover + click para refund — la mutación vive en shop_perform_refund
 		if hover {
 			append(&ui_click_blocks, rect)
 			render_card_tooltip(app, entities.Card{kind = kind}, rect)
 			if raylib.IsMouseButtonPressed(.LEFT) {
-				sim.relic_stacks[kind] -= 1
-				entities.app_add_money(app, constants.SHOP_RELIC_REFUND_PRICE)
-				entities.add_toast(app,
-					fmt.tprintf("+$%d refund", constants.SHOP_RELIC_REFUND_PRICE),
-					.INFO)
-				play_sound(.CONFIRMATION, .UI)
+				shop_perform_refund(app, kind)
 			}
 		}
 	}
@@ -3415,7 +2646,7 @@ render_relic_refund_row :: proc(app: ^entities.App_State, screen_w, y_pos: f32) 
 // Las cartas están plegadas (solapadas). Pasar el mouse sobre una carta
 // separa el mazo en dos mitades para revelarla completamente.
 render_card_hand :: proc(app: ^entities.App_State) {
-	n := len(app.sim.hand)
+	n := len(app.sim.cards.hand)
 	if n == 0 { return }
 
 	screen_w := f32(raylib.GetScreenWidth())
@@ -3456,9 +2687,9 @@ render_card_hand :: proc(app: ^entities.App_State) {
 	// ── Pasada 1: todas las cartas excepto la hovereada ──────────────────────
 	for i in 0 ..< n {
 		if i == hovered_idx { continue }
-		card    := app.sim.hand[i]
+		card    := app.sim.cards.hand[i]
 		cx      := card_draw_x(i, hovered_idx, start_x, step, overlap)
-		render_card(app, card, cx, card_y, app.sim.selected_card_idx == i, true)
+		render_card(app, card, cx, card_y, app.sim.cards.selected_card_idx == i, true)
 		append(&ui_click_blocks, raylib.Rectangle{cx, card_y, CARD_W, CARD_H})
 	}
 
@@ -3466,26 +2697,44 @@ render_card_hand :: proc(app: ^entities.App_State) {
 	if hovered_idx >= 0 {
 		HOVER_LIFT :: f32(20)
 		i      := hovered_idx
-		card   := app.sim.hand[i]
+		card   := app.sim.cards.hand[i]
 		cx     := card_draw_x(i, hovered_idx, start_x, step, overlap)
 		cy     := card_y - HOVER_LIFT
-		render_card(app, card, cx, cy, app.sim.selected_card_idx == i, true)
+		render_card(app, card, cx, cy, app.sim.cards.selected_card_idx == i, true)
 		card_rect := raylib.Rectangle{cx, cy, CARD_W, CARD_H}
 		append(&ui_click_blocks, card_rect)
 		render_card_tooltip(app, card, card_rect)
 
 		// Clic para seleccionar / activar relicto
 		if raylib.IsMouseButtonPressed(.LEFT) {
-			if entities.is_relic(card.kind) && !relic_activated {
+			if card.kind == .LUMBERJACK {
+				// LUMBERJACK: entrar en modo selección de árbol si hay árboles disponibles.
+				has_tree := false
+				m := &app.editor.game_map
+				outer: for row in 0 ..< m.height {
+					for col in 0 ..< m.width {
+						if m.grid[row][col] == .ACCESSORY_TREE {
+							has_tree = true
+							break outer
+						}
+					}
+				}
+				if has_tree {
+					app.lumberjack_active = true
+					app.sim.cards.selected_card_idx = i
+					app.sim.selected_build_tower = .EMPTY
+					play_sound(.SELECT, .UI)
+				}
+			} else if entities.is_relic(card.kind) && !relic_activated {
 				relic_activated = true
 				apply_relic_card(app, card.kind)
 				entities.card_play(&app.sim, i)
 				app.sim.selected_build_tower = .EMPTY
-				app.sim.selected_card_idx    = -1
+				app.sim.cards.selected_card_idx    = -1
 			} else if !entities.is_relic(card.kind) {
 				tile := entities.card_to_tile(card)
 				app.sim.selected_build_tower = tile
-				app.sim.selected_card_idx    = i
+				app.sim.cards.selected_card_idx    = i
 				play_sound(.SELECT, .UI)
 			}
 		}
@@ -3494,12 +2743,12 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		sell_price := entities.card_sell_price(card)
 		sell_label := fmt.tprintf("%s $%d", constants.get_text("CARD_SELL_BUTTON"), sell_price)
 		sell_rect  := raylib.Rectangle{cx, cy + CARD_H + 4, CARD_W, 24}
-		if render_button(sell_label, sell_rect, 1, true) {
+		if render_button(sell_label, sell_rect) {
 			entities.card_play(&app.sim, i)
 			app.sim.money += sell_price
-			if app.sim.selected_card_idx == i {
+			if app.sim.cards.selected_card_idx == i {
 				app.sim.selected_build_tower = .EMPTY
-				app.sim.selected_card_idx    = -1
+				app.sim.cards.selected_card_idx    = -1
 			}
 			play_sound(.CONFIRMATION, .UI)
 		}
@@ -3650,8 +2899,8 @@ render_run_complete_ui :: proc(app: ^entities.App_State) {
 		) {
 			// Recargar el mismo mapa y reiniciar la simulación
 			map_name := app.editor.current_map_name
-			simulation_reset(app)
 			entities.map_load(&app.editor.game_map, map_name)
+			simulation_init_from_editor(app)
 			entities.app_set_state(app, .PLAYING)
 		}
 		if render_button(
@@ -3761,10 +3010,10 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 				small_size, 0, raylib.Color{80, 210, 80, 255})
 		} else {
 			cost_str  := fmt.tprintf("%d C", cost)
-			if render_button(cost_str, {cx, btn_y, CARD_W, tower_btn_h}, 1, can_buy) && can_buy {
+			if render_button(cost_str, {cx, btn_y, CARD_W, tower_btn_h}, {disabled = !can_buy}) && can_buy {
 				app.meta.cristales -= cost
 				app.meta.unlocked_towers[int(t)] = true
-				entities.meta_save(&app.meta)
+				app.meta_dirty = true
 				play_sound(.CONFIRMATION, .UI)
 			}
 		}
@@ -3851,20 +3100,23 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 				}
 				if render_button(
 					btn_label, btn_rect,
-					1, can_afford,
-					raylib.WHITE if can_afford else raylib.Color{100, 100, 100, 255},
-					constants.UI_BUTTON_ACTION_COLOR if can_afford else raylib.Color{50, 50, 50, 255},
-					constants.UI_BUTTON_ACTION_HOVER if can_afford else raylib.Color{50, 50, 50, 255},
-					constants.UI_BUTTON_ACTION_PRESS if can_afford else raylib.Color{50, 50, 50, 255},
+					{
+						disabled      = !can_afford,
+						text_color    = raylib.WHITE if can_afford else raylib.Color{100, 100, 100, 255},
+						button_color  = constants.UI_BUTTON_ACTION_COLOR if can_afford else raylib.Color{50, 50, 50, 255},
+						hover_color   = constants.UI_BUTTON_ACTION_HOVER if can_afford else raylib.Color{50, 50, 50, 255},
+						pressed_color = constants.UI_BUTTON_ACTION_PRESS if can_afford else raylib.Color{50, 50, 50, 255},
+					},
 				) {
 					if can_afford {
 						app.meta.cristales -= cost
 						app.meta.unlocked_relics[kind] = true
-						entities.meta_save(&app.meta)
+						app.meta_dirty = true
 						play_sound(.CONFIRMATION, .UI)
 					}
 				}
 			} else {
+				// Already unlocked — show "Unlocked" badge
 				badge_txt  := constants.get_text("PROGRESSION_UNLOCKED")
 				badge_cstr := strings.clone_to_cstring(badge_txt, context.temp_allocator)
 				badge_w    := raylib.MeasureTextEx(constants.game_fonts.regular, badge_cstr, small_size, 0).x
@@ -3873,20 +3125,19 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 				raylib.DrawTextEx(constants.game_fonts.regular, badge_cstr, {badge_x, badge_y}, small_size, 0, raylib.Color{80, 220, 80, 255})
 			}
 
+			render_card_tooltip(app, entities.Card{kind = kind}, raylib.Rectangle{icon_x, row_y, icon_size, icon_size})
 			row_y += icon_size + row_gap
 		}
 	}
 
-	// Back button
-	back_y   := f32(screen_height) - f32(btn_height) - f32(spacing) * 2
-	back_txt := constants.get_text("PROGRESSION_BACK")
-	back_cstr := strings.clone_to_cstring(back_txt, context.temp_allocator)
-	back_w   := raylib.MeasureTextEx(constants.game_fonts.semibold, back_cstr, font_size, 0).x + 20
-	back_x   := f32(screen_width) / 2 - back_w / 2
+	// Back button al pie de la pantalla
+	back_w := i32(constants.UI_BUTTON_WIDTH) * 2
+	back_x := f32(screen_width) / 2 - f32(back_w) / 2
+	back_y := f32(screen_height) - f32(btn_height) - f32(spacing) * 2
 	if render_button(
-		back_txt,
-		{back_x, back_y, back_w, f32(btn_height)},
+		constants.get_text("PROGRESSION_BACK"),
+		{back_x, back_y, f32(back_w), f32(btn_height)},
 	) {
-		entities.app_set_state(app, .MENU)
+		entities.app_set_state(app, app.previous_state)
 	}
 }

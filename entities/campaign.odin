@@ -3,6 +3,7 @@ package entities
 import "core:mem"
 import "core:os"
 import "core:strings"
+import "core:time"
 import "../constants"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,6 +67,18 @@ campaign_save :: proc(c: ^Campaign_File) -> bool {
 	c.version = CAMPAIGN_SAVE_VERSION
 	data := mem.ptr_to_bytes(c)
 	return os.write_entire_file(CAMPAIGN_SAVE_PATH, data)
+}
+
+// Devuelve el mtime del archivo de campaña como i64 (nanosegundos desde el
+// epoch) o 0 si el archivo no existe. Usado por el hot-reload en DEVELOPER.
+campaign_file_mtime :: proc() -> i64 {
+	fd, err := os.open(CAMPAIGN_SAVE_PATH)
+	if err != os.ERROR_NONE { return 0 }
+	defer os.close(fd)
+	fi, fstat_err := os.fstat(fd)
+	if fstat_err != os.ERROR_NONE { return 0 }
+	defer delete(fi.fullpath)
+	return time.time_to_unix_nano(fi.modification_time)
 }
 
 // Carga la campaña desde CAMPAIGN_SAVE_PATH. Devuelve la struct cargada y

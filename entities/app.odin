@@ -7,6 +7,34 @@ import "vendor:raylib"
 // It's now defined in constants package as Game_State
 
 // Simulation state
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-state de Simulation — agrupados por concern para no inflar el god struct.
+// Los nombres dentro de cada substruct evitan repetir el prefijo (ej. sim.shop.active
+// en lugar de sim.shop.card_selection_active).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Estado del shop intra-oleada (selección, locks, rerolls, skip racha).
+Shop_State :: struct {
+	active:               bool,                              // El overlay del shop está abierto
+	choices:              [constants.MAX_SHOP_SLOTS]Card,    // Cartas en venta este shop
+	bought:               [constants.MAX_SHOP_SLOTS]bool,    // Slots ya comprados en esta visita
+	locked:               [constants.MAX_SHOP_SLOTS]bool,    // Slots con lock — sobreviven al reroll
+	slot_count:           i32,                               // Slots activos (depende del bioma)
+	rerolls_this_visit:   i32,                               // Para el costo progresivo de reroll
+	shops_since_unique:   i32,                               // Pity counter para forzar UNIQUE
+	skip_streak_count:    i32,                               // Skips consecutivos sin comprar
+	purchases_this_visit: i32,                               // Compras en la visita actual (para skip bonus)
+}
+
+// Estado del deck builder — mazo, mano, descarte, hand size.
+Card_State :: struct {
+	deck:              [dynamic]Card,
+	hand:              [dynamic]Card,
+	discard:           [dynamic]Card,
+	hand_size:         i32,  // cartas robadas por refresco (empieza en DECK_HAND_SIZE)
+	selected_card_idx: int,  // índice en hand, -1 = ninguna carta seleccionada
+}
+
 Simulation :: struct {
 	// Entities
 	towers: [dynamic]Tower,
@@ -19,50 +47,36 @@ Simulation :: struct {
 
 	// Spawns
 	spawns: [dynamic]Spawn_Point,
-	
+
 	// Game state
 	money: i32,
 	health: i32,
 	wave_number: i32,
-	
+
 	// Control
 	speed: f32,
 	paused: bool,
 	started: bool,
-	
+
 	// Tower building during gameplay
 	selected_build_tower: constants.Tile,
-	
+
 	// Wave management
 	enemies_to_spawn: i32,
 	enemies_spawned: i32,
 	wave_time: f32,
 	next_spawn_delay: f32,
-	
+
 	// Wave type flags (combinable Enemy_Flags — same flags as individual enemies)
 	wave_flags: Enemy_Flags,
 
 	// Pre-rolled bonus status for the next 3 upcoming waves (index 0 = wave+1).
 	// Shifts forward each time start_next_wave is called.
 	lookahead_bonus: [3]bool,
-	
-	// Deck builder
-	deck:    [dynamic]Card,
-	hand:    [dynamic]Card,
-	discard: [dynamic]Card,
-	hand_size:         i32,  // cartas robadas por refresco (empieza en DECK_HAND_SIZE)
-	selected_card_idx: int,  // índice en hand, -1 = ninguna carta seleccionada
 
-	// Selección de carta (cada DECK_SELECTION_INTERVAL oleadas)
-	card_selection_active:  bool,
-	card_selection_choices: [constants.MAX_SHOP_SLOTS]Card,
-	card_selection_bought:  [constants.MAX_SHOP_SLOTS]bool, // slots ya comprados en esta visita al shop
-	card_selection_locked:  [constants.MAX_SHOP_SLOTS]bool, // slots con lock — sobreviven al reroll
-	shop_slot_count:        i32,                            // slots activos en el shop actual (depende del bioma)
-	rerolls_this_shop:      i32,                            // contador para el costo progresivo de reroll
-	shops_since_unique:     i32,                            // pity counter para forzar UNIQUE
-	skip_streak_count:      i32,                            // skips consecutivos sin comprar (para bonus de oro)
-	shop_purchases_this_visit: i32,                         // compras en la visita actual (para skip bonus)
+	// Subsistemas (cohesión por concern)
+	cards: Card_State,
+	shop:  Shop_State,
 
 	// Stacks permanentes de relictos — indexado por Card_Kind (ver RELIC_SPECS en card.odin).
 	// Se inicializa a cero automáticamente; sim.relic_stacks[.INTEREST_BOOST], etc.
@@ -118,6 +132,34 @@ Wave_Mark :: struct {
 	flags: Enemy_Flags,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-state del editor — agrupados por concern para que cada subsistema (Map
+// Browser, Campaign Editor) tenga su propio struct cohesivo.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Estado del Map Browser modal — listado + preview + rename.
+Map_Browser_State :: struct {
+	entries:           [dynamic]Map_File_Entry,      // Lista de archivos .map disponibles
+	scroll:            i32,                          // Scroll offset
+	play_mode:         bool,                         // True cuando se abrió desde el menú Play
+	selected:          i32,                          // Índice seleccionado (-1 = ninguno)
+	preview:           Map,                          // Mapa cargado para vista previa
+	preview_valid:     bool,                         // True si hay preview cargada
+	preview_tex:       raylib.RenderTexture2D,       // Textura del preview renderizado
+	preview_tex_valid: bool,                         // True si la textura GPU es válida
+	renaming:          bool,                         // True mientras el modo rename está activo
+	rename_input:      Input_State,                  // Campo de texto del rename
+}
+
+// Estado del Campaign Editor (sólo DEVELOPER) — reutiliza el browser modal.
+// Opera directamente sobre app.campaign (single source of truth).
+Campaign_Editor_State :: struct {
+	active:        bool,  // El browser muestra UI de campaña en vez de preview
+	selected_node: i32,   // Nodo seleccionado en la lista (-1 = ninguno)
+	scroll:        i32,   // Scroll de la lista de nodos
+	dirty:         bool,  // Tiene cambios sin guardar
+}
+
 // Editor state
 Editor :: struct {
 	// Map
@@ -138,26 +180,10 @@ Editor :: struct {
 	load_map_active: bool,
 
 	// Map save/load state
-	current_map_name: string,              // Nombre del mapa cargado/guardado
-	show_map_browser: bool,               // Si el browser de mapas está abierto
-	map_browser_entries:       [dynamic]Map_File_Entry, // Lista de archivos .map disponibles
-	map_browser_scroll:        i32,       // Scroll offset del browser
-	map_browser_play_mode:     bool,      // True cuando el browser fue abierto desde el menú Play
-	map_browser_selected:      i32,       // Índice seleccionado en la lista (-1 = ninguno)
-	map_browser_preview:           Map,             // Mapa cargado para vista previa
-	map_browser_preview_valid:     bool,            // True cuando hay una vista previa válida
-	map_browser_preview_tex:       raylib.RenderTexture2D, // Textura del preview renderizado
-	map_browser_preview_tex_valid: bool,            // True cuando la textura es válida
-	map_browser_renaming:          bool,            // True mientras el modo rename está activo
-	map_browser_rename_input:      Input_State,     // Estado del campo de texto para renombrar
-
-	// Campaign editor (sólo visible cuando constants.DEVELOPER) — reutiliza el
-	// browser modal para editar campaign.bin sin pantallas nuevas.
-	campaign_editor_active:        bool,         // El browser muestra UI de campaña en vez de preview
-	campaign_data:                 Campaign_File, // Campaña en edición (cargada/creada en memoria)
-	campaign_editor_selected_node: i32,          // Nodo seleccionado en la lista (-1 = ninguno)
-	campaign_editor_scroll:        i32,          // Scroll de la lista de nodos
-	campaign_editor_dirty:         bool,         // Tiene cambios sin guardar
+	current_map_name: string,    // Nombre del mapa cargado/guardado
+	show_map_browser: bool,      // Si el browser de mapas está abierto
+	browser:          Map_Browser_State,
+	campaign_editor:  Campaign_Editor_State,
 
 	// Undo / Redo
 	undo_stack: [dynamic]Map_Snapshot, // Snapshots anteriores (el último es el más reciente)
@@ -197,6 +223,7 @@ Modal_Action :: enum {
 	NEW_GAME,
 	RESTART_RUN,
 	EXIT_GAME,
+	RESET_META,  // Wipe progresión (cristales + unlocks + campaign), keep current state
 }
 
 Confirm_Modal :: struct {
@@ -260,18 +287,28 @@ App_State :: struct {
 	// Developer mode: god mode toggle (no damage taken)
 	dev_god_mode: bool,
 
-	// Meta-progression (persisted to savegame.bin)
-	meta: Meta_State,
+	// Meta-progression (persisted to savegame.bin).
+	// Mutar via app.meta.* y setear app.meta_dirty = true (o llamar app_meta_mark_dirty).
+	// El flush real ocurre en app_meta_flush(app), llamada cada frame en el main loop
+	// y antes de cerrar la ventana. Esto evita olvidos de meta_save al sumar nuevas
+	// rutas que muten progresión.
+	meta:       Meta_State,
+	meta_dirty: bool,
 
 	// Cristales earned in the last run — set when transitioning to .RUN_COMPLETE
 	run_cristales: i32,
 
-	// Campaña — cargada desde campaign.bin al entrar a CAMPAIGN_MAP.
-	// La fuente de verdad sigue siendo el archivo; el editor (editor.campaign_data)
-	// edita una copia distinta y persiste vía campaign_editor_save.
+	// Campaña — single source of truth. Cargada desde campaign.bin la primera
+	// vez que se entra al visualizador (CAMPAIGN_MAP) o al editor.
+	// El editor de campaña opera sobre esta misma struct vía campaign_editor_*.
 	campaign:               Campaign_File,
 	campaign_loaded:        bool,
 	current_campaign_node:  i32,   // -1 = el run actual no es de campaña; >=0 = índice del nodo
+	campaign_file_mtime:    i64,   // mtime de campaign.bin para hot-reload (DEVELOPER only)
+
+	// LUMBERJACK card — true mientras el jugador está en modo "seleccionar árbol".
+	// Se activa al clickear la carta desde la mano; se desactiva al talar o cancelar.
+	lumberjack_active: bool,
 
 	// Tooltip layer — written during UI render, drawn last so it's always on top.
 	// Only one tooltip can be visible per frame; first writer wins.
@@ -368,10 +405,28 @@ app_select_tower :: proc(app: ^App_State, r, c: i32) {
 	app.selected_tower_c = c
 }
 
-// Set game state
+// Set game state.
+// Flush de meta en cada transición — barata si meta_dirty=false, garantiza que
+// los cambios persistan al cambiar de pantalla aunque el jugador cierre la
+// ventana segundos después.
 app_set_state :: proc(app: ^App_State, new_state: constants.Game_State) {
 	app.previous_state = app.state
 	app.state = new_state
+	app_meta_flush(app)
+}
+
+// Marca el meta como sucio. El próximo flush lo persistirá a disco.
+app_meta_mark_dirty :: proc(app: ^App_State) {
+	app.meta_dirty = true
+}
+
+// Persiste meta si está sucio y limpia el flag. Llamar al final del frame y
+// en transiciones de estado. Idempotente y barata cuando no hay cambios.
+app_meta_flush :: proc(app: ^App_State) {
+	if app.meta_dirty {
+		meta_save(&app.meta)
+		app.meta_dirty = false
+	}
 }
 
 // Take damage — triggers RUN_COMPLETE (defeat) when health reaches zero.
@@ -408,15 +463,15 @@ app_finish_run :: proc(app: ^App_State, victory: bool) {
 		if victory && (.OPTIONAL in node.flags) && node.reward_cristales > 0 {
 			app.meta.cristales += node.reward_cristales
 		}
-		meta_save(&app.meta)
+		app.meta_dirty = true
 		app.current_campaign_node = -1
-		app_set_state(app, .GAME_OVER)
+		app_set_state(app, .GAME_OVER)  // app_set_state hace flush
 		return
 	}
 
 	// Path no-campaña: comportamiento original.
-	meta_save(&app.meta)
-	app_set_state(app, .RUN_COMPLETE)
+	app.meta_dirty = true
+	app_set_state(app, .RUN_COMPLETE)  // app_set_state hace flush
 }
 
 // Add money

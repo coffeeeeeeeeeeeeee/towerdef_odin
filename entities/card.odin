@@ -25,6 +25,8 @@ Card_Kind :: enum {
 	MEMENTO,         // oro extra escalando con oleadas completadas (acumulable)
 	WARMED_UP,       // torres con objetivo continuo reciben +daño (acumulable)
 	CRYPTOBRO,       // la torre que mata al jefe gana +1 nivel permanente (acumulable)
+	LUMBERJACK,      // al comprar: otorga 1 carga para talar un árbol del mapa y obtener oro
+	SHOPPING_CART,   // +1 slot de reliquia por stack (aumenta el límite de tipos distintos)
 }
 
 // Una carta del mazo
@@ -268,6 +270,32 @@ RELIC_SPECS := []Relic_Spec{
 			return fmt.tprintf("Cryptobro x%d (+%d nv al matar jefe)", stacks, stacks)
 		},
 	},
+	{
+		kind         = .LUMBERJACK,
+		rarity       = .COMMON,
+		name_key     = "CARD_LUMBERJACK_NAME",
+		desc_key     = "TOOLTIP_LUMBERJACK_DESC",
+		icon_path    = "images/icon_lumberjack.png",
+		stat_format  = proc() -> string {
+			return fmt.tprintf("+$%d al talar un árbol del mapa", constants.LUMBERJACK_TREE_GOLD)
+		},
+		toast_format = proc(stacks: i32) -> string {
+			return fmt.tprintf("Leñador x%d — seleccioná un árbol", stacks)
+		},
+	},
+	{
+		kind         = .SHOPPING_CART,
+		rarity       = .EPIC,
+		name_key     = "CARD_SHOPPING_CART_NAME",
+		desc_key     = "TOOLTIP_SHOPPING_CART_DESC",
+		icon_path    = "images/icon_shopping_cart.png",
+		stat_format  = proc() -> string {
+			return fmt.tprintf("+1 slot de reliquia por stack (base %d)", constants.MAX_ACTIVE_RELICS)
+		},
+		toast_format = proc(stacks: i32) -> string {
+			return fmt.tprintf("Shopping Cart x%d (%d slots de reliquia)", stacks, constants.MAX_ACTIVE_RELICS + int(stacks))
+		},
+	},
 }
 
 // Texturas de iconos de relictos, indexadas por Card_Kind.
@@ -352,27 +380,27 @@ deck_shuffle :: proc(deck: ^[dynamic]Card) {
 // Roba una carta del tope del mazo a la mano.
 // Si el mazo está vacío, rebaraja el descarte primero.
 deck_draw_one :: proc(sim: ^Simulation) {
-	if len(sim.deck) == 0 {
-		for card in sim.discard {
-			append(&sim.deck, card)
+	if len(sim.cards.deck) == 0 {
+		for card in sim.cards.discard {
+			append(&sim.cards.deck, card)
 		}
-		clear(&sim.discard)
-		deck_shuffle(&sim.deck)
+		clear(&sim.cards.discard)
+		deck_shuffle(&sim.cards.deck)
 	}
-	if len(sim.deck) == 0 {
+	if len(sim.cards.deck) == 0 {
 		return // Sin cartas en ningún lado
 	}
-	card := pop(&sim.deck)
-	append(&sim.hand, card)
+	card := pop(&sim.cards.deck)
+	append(&sim.cards.hand, card)
 }
 
 // Descarta toda la mano y roba hand_size cartas nuevas.
 hand_refresh :: proc(sim: ^Simulation) {
-	for card in sim.hand {
-		append(&sim.discard, card)
+	for card in sim.cards.hand {
+		append(&sim.cards.discard, card)
 	}
-	clear(&sim.hand)
-	for _ in 0 ..< sim.hand_size {
+	clear(&sim.cards.hand)
+	for _ in 0 ..< sim.cards.hand_size {
 		deck_draw_one(sim)
 	}
 }
@@ -380,12 +408,12 @@ hand_refresh :: proc(sim: ^Simulation) {
 // Devuelve las cartas de la mano al mazo, rebaraja y reparte de nuevo.
 // Usado antes de la primera oleada para cambiar la mano inicial.
 hand_redeal :: proc(sim: ^Simulation) {
-	for card in sim.hand {
-		append(&sim.deck, card)
+	for card in sim.cards.hand {
+		append(&sim.cards.deck, card)
 	}
-	clear(&sim.hand)
-	deck_shuffle(&sim.deck)
-	for _ in 0 ..< sim.hand_size {
+	clear(&sim.cards.hand)
+	deck_shuffle(&sim.cards.deck)
+	for _ in 0 ..< sim.cards.hand_size {
 		deck_draw_one(sim)
 	}
 }
@@ -393,17 +421,17 @@ hand_redeal :: proc(sim: ^Simulation) {
 // Consume una carta de la mano por índice al colocarla.
 // La carta va al descarte para que pueda ser robada de nuevo (STEAL, hand_refresh, etc.).
 card_play :: proc(sim: ^Simulation, hand_idx: int) {
-	if hand_idx < 0 || hand_idx >= len(sim.hand) {
+	if hand_idx < 0 || hand_idx >= len(sim.cards.hand) {
 		return
 	}
-	card := sim.hand[hand_idx]
-	append(&sim.discard, card)
-	ordered_remove(&sim.hand, hand_idx)
+	card := sim.cards.hand[hand_idx]
+	append(&sim.cards.discard, card)
+	ordered_remove(&sim.cards.hand, hand_idx)
 }
 
 // Añade una carta directamente a la mano.
 card_add_to_hand :: proc(sim: ^Simulation, card: Card) {
-	append(&sim.hand, card)
+	append(&sim.cards.hand, card)
 }
 
 // Reparte una mano garantizada de 5 cartas y llena el mazo con el resto.
@@ -412,8 +440,8 @@ card_add_to_hand :: proc(sim: ^Simulation, card: Card) {
 //       1 de utilidad (ICE o ENHANCE), 1 reliquia aleatoria.
 // Mazo: las cartas restantes, mezcladas.
 deal_guaranteed_hand :: proc(sim: ^Simulation, meta: ^Meta_State) {
-	clear(&sim.hand)
-	clear(&sim.deck)
+	clear(&sim.cards.hand)
+	clear(&sim.cards.deck)
 
 	// Base damage pool — always unlocked towers only
 	dmg_base := [4]constants.Tower_Type{.ARCHER, .ARCHER, .CANNON, .SNIPER}
@@ -444,42 +472,42 @@ deal_guaranteed_hand :: proc(sim: ^Simulation, meta: ^Meta_State) {
 	slice_shuffle(rel[:])
 
 	// -- Mano garantizada: 3 daño + (1 utilidad si disponible) + (1 reliquia si disponible) --
-	append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[0]})
-	append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[1]})
-	append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[2]})
+	append(&sim.cards.hand, Card{kind = .TOWER, tower_type = dmg[0]})
+	append(&sim.cards.hand, Card{kind = .TOWER, tower_type = dmg[1]})
+	append(&sim.cards.hand, Card{kind = .TOWER, tower_type = dmg[2]})
 	if len(util) > 0 {
-		append(&sim.hand, Card{kind = .TOWER, tower_type = util[0]})
+		append(&sim.cards.hand, Card{kind = .TOWER, tower_type = util[0]})
 	} else {
 		// No utility towers unlocked — add an extra damage tower instead
 		extra_idx := 0
 		if len(dmg) > 3 { extra_idx = 3 }
-		append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[extra_idx]})
+		append(&sim.cards.hand, Card{kind = .TOWER, tower_type = dmg[extra_idx]})
 	}
 	if len(rel) > 0 {
-		append(&sim.hand, Card{kind = rel[0]})
+		append(&sim.cards.hand, Card{kind = rel[0]})
 	} else {
 		// No relics unlocked — add an extra damage tower instead
 		extra_idx := 0
 		if len(dmg) > 3 { extra_idx = 3 }
-		append(&sim.hand, Card{kind = .TOWER, tower_type = dmg[extra_idx]})
+		append(&sim.cards.hand, Card{kind = .TOWER, tower_type = dmg[extra_idx]})
 	}
 
 	// -- Resto al mazo --
 	for i in 3 ..< len(dmg) {
-		append(&sim.deck, Card{kind = .TOWER, tower_type = dmg[i]})
+		append(&sim.cards.deck, Card{kind = .TOWER, tower_type = dmg[i]})
 	}
 	if len(util) > 1 {
-		append(&sim.deck, Card{kind = .TOWER, tower_type = util[1]})
+		append(&sim.cards.deck, Card{kind = .TOWER, tower_type = util[1]})
 	}
 	// Add a premium deck card only if at least one is unlocked
 	if meta_is_tower_unlocked(meta, .LASER) {
-		append(&sim.deck, Card{kind = .TOWER, tower_type = .LASER})
+		append(&sim.cards.deck, Card{kind = .TOWER, tower_type = .LASER})
 	} else if meta_is_tower_unlocked(meta, .MORTAR) {
-		append(&sim.deck, Card{kind = .TOWER, tower_type = .MORTAR})
+		append(&sim.cards.deck, Card{kind = .TOWER, tower_type = .MORTAR})
 	}
-	append(&sim.deck, Card{kind = .OBSTACLE})
-	append(&sim.deck, Card{kind = .OBSTACLE})
-	deck_shuffle(&sim.deck)
+	append(&sim.cards.deck, Card{kind = .OBSTACLE})
+	append(&sim.cards.deck, Card{kind = .OBSTACLE})
+	deck_shuffle(&sim.cards.deck)
 }
 
 // Construye el mazo inicial. Delega en deal_guaranteed_hand.

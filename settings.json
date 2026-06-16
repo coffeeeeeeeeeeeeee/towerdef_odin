@@ -14,5 +14,5 @@
 	"show_damage_numbers": true,
 	"show_tower_range": false,
 	"auto_start_wave": true,
-	"auto_skip_shop": true
+	"auto_skip_shop": false
 }

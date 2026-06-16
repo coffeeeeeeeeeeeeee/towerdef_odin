@@ -2,6 +2,7 @@ package entities
 
 import "core:fmt"
 import "core:math"
+import "core:mem"
 import "core:os"
 import "core:strings"
 import "core:strconv"
@@ -474,11 +475,18 @@ map_find_path_bfs :: proc(m: ^Map, start_r, start_c, goal_r, goal_c: i32, is_fly
 	return path
 }
 
-// Save map to file
+// Save map to file (delega en map_save_bin — siempre escribe binario).
+// El parser de texto legacy se mantiene en map_load para abrir archivos viejos.
 map_save :: proc(m: ^Map, filename: string) -> bool {
+	return map_save_bin(m, filename)
+}
+
+// Mantenido como referencia/debugging. Si necesitás exportar a texto, llamá a
+// `_map_save_text_legacy` explícitamente.
+_map_save_text_legacy :: proc(m: ^Map, filename: string) -> bool {
 	// Create maps directory if it doesn't exist
 	os.make_directory("maps")
-	
+
 	// Build file content using strings.Builder
 	builder: strings.Builder
 	strings.builder_init(&builder)
@@ -704,6 +712,115 @@ map_snapshot_destroy :: proc(snap: ^Map_Snapshot) {
 
 // ─── File I/O ────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Map binary file format (.map binario, replaces .map texto).
+// El loader detecta el formato leyendo los primeros 4 bytes:
+//   "TDMB" → binario (Map_Bin_File)
+//   "FIRS" → texto legacy (FIRST_IMPACT_MAP)
+// Los saves nuevos siempre escriben binario.
+//
+// tile_data (un map[string]Tile_Data en memoria) se serializa como una grilla
+// fija [GRID_SIZE][GRID_SIZE]i32 donde 0 = sin nivel. Esto evita strings de
+// longitud variable en el archivo y mantiene todo fixed-size para
+// mem.ptr_to_bytes directo.
+// ─────────────────────────────────────────────────────────────────────────────
+
+MAP_BIN_VERSION :: u32(1)
+MAP_BIN_MAGIC   := [4]u8{'T', 'D', 'M', 'B'}
+
+Map_Bin_File :: struct {
+	magic:    [4]u8,
+	version:  u32,
+	width:    i32,
+	height:   i32,
+	biome:    i32,
+	seed:     i32,
+	_pad:     [16]u8,
+
+	grid:          [constants.GRID_SIZE][constants.GRID_SIZE]constants.Tile,
+	obstacle_grid: [constants.GRID_SIZE][constants.GRID_SIZE]constants.Tile,
+	water_grid:    [constants.GRID_SIZE][constants.GRID_SIZE]bool,
+	// tile_levels[r][c] = nivel; 0 = sin entry (default = 1 en runtime).
+	tile_levels:   [constants.GRID_SIZE][constants.GRID_SIZE]i32,
+
+	_trailing_pad: [64]u8,
+}
+
+// Guarda el mapa en formato binario. Reemplaza el texto previamente usado.
+map_save_bin :: proc(m: ^Map, filename: string) -> bool {
+	os.make_directory("maps")
+	full_path := fmt.tprintf("maps/%s", filename)
+
+	file := Map_Bin_File{
+		magic   = MAP_BIN_MAGIC,
+		version = MAP_BIN_VERSION,
+		width   = m.width,
+		height  = m.height,
+		biome   = i32(m.biome),
+		seed    = m.seed,
+	}
+	file.grid          = m.grid
+	file.obstacle_grid = m.obstacle_grid
+	file.water_grid    = m.water_grid
+
+	// Codificar tile_data en la grilla fija.
+	for k, v in m.tile_data {
+		row, col, ok := _parse_tile_data_key(k)
+		if !ok { continue }
+		if row >= 0 && row < constants.GRID_SIZE && col >= 0 && col < constants.GRID_SIZE {
+			file.tile_levels[row][col] = v.level
+		}
+	}
+
+	data := mem.ptr_to_bytes(&file)
+	return os.write_entire_file(full_path, data)
+}
+
+// Carga un mapa binario. Devuelve false si el archivo está corrupto.
+map_load_bin :: proc(m: ^Map, data: []u8) -> bool {
+	if len(data) != size_of(Map_Bin_File) { return false }
+	file := (cast(^Map_Bin_File)raw_data(data))^
+	if file.magic != MAP_BIN_MAGIC { return false }
+	if file.version != MAP_BIN_VERSION { return false }
+	if file.width  <= 0 || file.width  > constants.GRID_SIZE { return false }
+	if file.height <= 0 || file.height > constants.GRID_SIZE { return false }
+
+	// Limpiar estado previo del mapa.
+	for k in m.tile_data { delete(k) }
+	clear(&m.tile_data)
+	m.grid          = file.grid
+	m.obstacle_grid = file.obstacle_grid
+	m.water_grid    = file.water_grid
+	m.width         = file.width
+	m.height        = file.height
+	m.biome         = constants.Biome(file.biome)
+	m.seed          = file.seed
+
+	// Reconstruir tile_data desde la grilla.
+	for r in 0 ..< constants.GRID_SIZE {
+		for c in 0 ..< constants.GRID_SIZE {
+			lvl := file.tile_levels[r][c]
+			if lvl == 0 { continue }
+			key := strings.clone(fmt.tprintf("%d,%d", r, c))
+			m.tile_data[key] = constants.Tile_Data{level = lvl}
+		}
+	}
+
+	// Heightmap derivado del seed cargado.
+	map_regenerate_heightmap(m)
+	return true
+}
+
+// Parsea una key "r,c" devuelta por map_get_tile_key. ok=false si malformada.
+_parse_tile_data_key :: proc(k: string) -> (row, col: i32, ok: bool) {
+	comma_idx := strings.index_byte(k, ',')
+	if comma_idx <= 0 || comma_idx >= len(k) - 1 { return 0, 0, false }
+	row_val, r_ok := strconv.parse_int(k[:comma_idx])
+	col_val, c_ok := strconv.parse_int(k[comma_idx + 1:])
+	if !r_ok || !c_ok { return 0, 0, false }
+	return i32(row_val), i32(col_val), true
+}
+
 // Load map from file
 map_load :: proc(m: ^Map, filename: string) -> bool {
 	full_path := fmt.tprintf("maps/%s", filename)
@@ -712,6 +829,14 @@ map_load :: proc(m: ^Map, filename: string) -> bool {
 		return false
 	}
 	defer delete(data)
+
+	// Detección de formato: los primeros 4 bytes distinguen binario (TDMB) de
+	// texto legacy (FIRS de "FIRST_IMPACT_MAP").
+	if len(data) >= 4 &&
+	   data[0] == 'T' && data[1] == 'D' && data[2] == 'M' && data[3] == 'B' {
+		return map_load_bin(m, data)
+	}
+	// Continúa al parser de texto legacy abajo.
 	
 	// Parse file content
 	content := string(data)

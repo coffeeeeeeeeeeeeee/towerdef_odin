@@ -77,7 +77,7 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 	}
 
 	// Airdrop: only while simulation has started and shop is not open
-	if sim.started && !sim.card_selection_active {
+	if sim.started && !sim.shop.active {
 		airdrop_update(app, dt)  // uses real dt (not s_dt) — visual effect
 	}
 }
@@ -125,7 +125,7 @@ update_wave :: proc(app: ^entities.App_State, dt: f32) {
 				relic_flash(sim, .STEAL)
 			}
 
-			if app.settings.auto_start_wave && !sim.card_selection_active {
+			if app.settings.auto_start_wave && !sim.shop.active {
 				// Esperar INTER_WAVE_DELAY segundos antes de iniciar la siguiente oleada.
 				// La tienda abre su propio pausa — el timer se congela mientras está activa.
 				if sim.inter_wave_timer <= 0 {
@@ -293,13 +293,12 @@ start_next_wave :: proc(app: ^entities.App_State) {
 
 	// Shop al final de cada oleada (excepto la primera — el jugador ya tiene mano inicial)
 	if sim.wave_number > 1 && sim.wave_number % constants.DECK_SELECTION_INTERVAL == 0 {
-		// Reset por-visita: locks, reroll counter y purchases.
-		// El pity counter (shops_since_unique) y el skip streak persisten entre shops.
-		sim.card_selection_locked     = {}
-		sim.rerolls_this_shop         = 0
-		sim.shop_purchases_this_visit = 0
+		// Reset por-visita: reroll counter y purchases.
+		// Los locks, el pity counter (shops_since_unique) y el skip streak persisten entre shops.
+		sim.shop.rerolls_this_visit   = 0
+		sim.shop.purchases_this_visit = 0
 		generate_card_selection(app)
-		sim.card_selection_active = true
+		sim.shop.active = true
 		simulation_set_pause(app, true)
 
 		// "Skip Shop" automático: cierra la tienda de inmediato, igual que si el
@@ -313,28 +312,94 @@ start_next_wave :: proc(app: ^entities.App_State) {
 // Cierra la tienda aplicando el bonus de oro por skip (si no se compró nada),
 // reseteando selección/locks y reanudando la simulación. Comparte lógica entre
 // el botón Skip manual (menus.odin) y el auto-skip ("Skip Shop" toggle).
+// ─────────────────────────────────────────────────────────────────────────────
+// Acciones del shop — toda la mutación de sim/meta vive acá. Las procs de
+// render emiten estas acciones; nunca tocan sim directamente. Esto desacopla
+// la UI del estado y hace que cada acción sea testeable/replayable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Compra el slot indicado: descuenta oro, marca bought, aplica el efecto
+// (relic stack o añadir carta a la mano), y rompe el skip streak.
+// El caller debe verificar que el slot sea comprable (no bought, plata suficiente).
+shop_perform_buy :: proc(app: ^entities.App_State, slot_idx: int) {
+	sim := &app.sim
+	if slot_idx < 0 || slot_idx >= len(sim.shop.choices) { return }
+	card := sim.shop.choices[slot_idx]
+	if sim.shop.bought[slot_idx] { return }
+
+	price := shop_price_for_card(app, card)
+	if sim.money < price { return }
+
+	sim.money -= price
+	sim.shop.bought[slot_idx] = true
+	sim.shop.locked[slot_idx] = false  // comprar libera el lock — ya no necesita persistir
+	sim.shop.purchases_this_visit += 1
+	sim.shop.skip_streak_count = 0     // comprar rompe el streak
+
+	if entities.is_relic(card.kind) && card.kind != .LUMBERJACK {
+		apply_relic_card(app, card.kind)
+	} else {
+		entities.card_add_to_hand(&app.sim, card)
+	}
+	play_sound(.CONFIRMATION, .UI)
+}
+
+// Toggle del lock del slot indicado. El lock sobrevive al reroll.
+shop_perform_toggle_lock :: proc(app: ^entities.App_State, slot_idx: int) {
+	sim := &app.sim
+	if slot_idx < 0 || slot_idx >= len(sim.shop.locked) { return }
+	sim.shop.locked[slot_idx] = !sim.shop.locked[slot_idx]
+	play_sound(.CLICK, .UI)
+}
+
+// Reroll: cobra el costo progresivo, incrementa el contador y regenera slots.
+// Los slots locked se preservan; los demás se reemplazan.
+shop_perform_reroll :: proc(app: ^entities.App_State) {
+	sim         := &app.sim
+	reroll_cost := shop_next_reroll_cost(app)
+	if sim.money < reroll_cost { return }
+
+	sim.money -= reroll_cost
+	sim.shop.rerolls_this_visit += 1
+	generate_card_selection(app)
+	play_sound(.CLICK, .UI)
+}
+
+// Refund de 1 stack de la relic dada. Devuelve SHOP_RELIC_REFUND_PRICE.
+shop_perform_refund :: proc(app: ^entities.App_State, kind: entities.Card_Kind) {
+	sim := &app.sim
+	if sim.relic_stacks[kind] <= 0 { return }
+	sim.relic_stacks[kind] -= 1
+	entities.app_add_money(app, constants.SHOP_RELIC_REFUND_PRICE)
+	entities.add_toast(app,
+		fmt.tprintf("+$%d refund", constants.SHOP_RELIC_REFUND_PRICE),
+		.INFO)
+	play_sound(.CONFIRMATION, .UI)
+}
+
+// Skip del shop: si no se compró nada, devuelve un bonus de oro escalado por
+// el contador de skip streak. Cierra el shop y reanuda la simulación.
 shop_perform_skip :: proc(app: ^entities.App_State) {
 	sim := &app.sim
-	if sim.shop_purchases_this_visit == 0 {
-		sim.skip_streak_count += 1
-		bonus := sim.skip_streak_count * constants.SHOP_SKIP_BONUS_PER_SKIP
+	if sim.shop.purchases_this_visit == 0 {
+		sim.shop.skip_streak_count += 1
+		bonus := sim.shop.skip_streak_count * constants.SHOP_SKIP_BONUS_PER_SKIP
 		if bonus > constants.SHOP_SKIP_BONUS_CAP { bonus = constants.SHOP_SKIP_BONUS_CAP }
 		entities.app_add_money(app, bonus)
-		entities.add_toast(app, fmt.tprintf("+$%d skip racha x%d", bonus, sim.skip_streak_count), .INFO)
+		entities.add_toast(app, fmt.tprintf("+$%d skip racha x%d", bonus, sim.shop.skip_streak_count), .INFO)
 	}
-	sim.card_selection_active = false
-	sim.card_selection_bought = {}
-	sim.card_selection_locked = {}
+	sim.shop.active = false
+	sim.shop.bought = {}
 	simulation_set_pause(app, false)
 }
 
-// Rellena sim.card_selection_choices.
+// Rellena sim.shop.choices.
 // Layout por slot:
 //   slot 0           — torre o obstáculo (al azar, sin pesos de rareza)
 //   slot 1           — relicto (con pesos de rareza, solo relictos desbloqueados)
 //   slot 2 en adelante — torre/relicto al 50%
 //
-// Respeta sim.card_selection_locked: los slots con lock NO se regeneran y
+// Respeta sim.shop.locked: los slots con lock NO se regeneran y
 // sus card_selection_bought se preservan.
 //
 // El número de slots activos viene del bioma (SHOP_BASE_SLOTS + extra_slots).
@@ -351,16 +416,16 @@ generate_card_selection :: proc(app: ^entities.App_State) {
 	slot_count := constants.SHOP_BASE_SLOTS + biome_mod.extra_slots
 	if slot_count > constants.MAX_SHOP_SLOTS { slot_count = constants.MAX_SHOP_SLOTS }
 	if slot_count < 1 { slot_count = 1 }
-	sim.shop_slot_count = slot_count
+	sim.shop.slot_count = slot_count
 
 	// Reset compras solo de slots no bloqueados — los bloqueados preservan su estado
 	new_bought := [constants.MAX_SHOP_SLOTS]bool{}
 	for i in 0 ..< constants.MAX_SHOP_SLOTS {
-		if sim.card_selection_locked[i] {
-			new_bought[i] = sim.card_selection_bought[i]
+		if sim.shop.locked[i] {
+			new_bought[i] = sim.shop.bought[i]
 		}
 	}
-	sim.card_selection_bought = new_bought
+	sim.shop.bought = new_bought
 
 	// Build tower pool from unlocked towers only + 2 obstacle slots.
 	all_tower_cards := [9]entities.Card{
@@ -386,46 +451,40 @@ generate_card_selection :: proc(app: ^entities.App_State) {
 	tower_pool[tower_count + 1] = {kind = .OBSTACLE}
 	tower_count += 2
 
-	// All possible relics — filtered below to only include unlocked ones.
-	all_relics := [16]entities.Card{
-		{kind = .INTEREST_BOOST},
-		{kind = .STEAL},
-		{kind = .WEAKEN},
-		{kind = .DIVIDEND},
-		{kind = .AUTO_UPGRADE},
-		{kind = .BLOODLUST},
-		{kind = .FLAWLESS},
-		{kind = .FORMATION},
-		{kind = .FROZEN_AMP},
-		{kind = .VETERAN},
-		{kind = .LOOT},
-		{kind = .SCOUT},
-		{kind = .RECYCLER},
-		{kind = .MEMENTO},
-		{kind = .WARMED_UP},
-		{kind = .CRYPTOBRO},
-	}
-
-	// Build the relic pool from only unlocked and non-maxed relics.
-	relic_pool : [16]entities.Card
-	relic_count := 0
-	for c in all_relics {
-		if app.meta.unlocked_relics[c.kind] && !entities.relic_is_maxed(&app.sim, c.kind) {
-			relic_pool[relic_count] = c
-			relic_count += 1
+	// Contar cuántos tipos distintos de reliquias tiene el jugador activos (stacks > 0).
+	active_relic_types := 0
+	for spec in entities.RELIC_SPECS {
+		if entities.relic_stacks(sim, spec.kind) > 0 {
+			active_relic_types += 1
 		}
 	}
+	relic_cap    := constants.MAX_ACTIVE_RELICS + int(entities.relic_stacks(sim, .SHOPPING_CART))
+	at_relic_cap := active_relic_types >= relic_cap
+
+	// Build the relic pool from RELIC_SPECS — solo desbloqueados y sin stack máximo.
+	// Si el jugador alcanzó el límite de tipos distintos, solo se ofrecen reliquias que ya posee.
+	// Al agregar un relic a RELIC_SPECS queda automáticamente disponible en el shop.
+	relic_pool  := make([dynamic]entities.Card, context.temp_allocator)
+	for spec in entities.RELIC_SPECS {
+		already_has  := entities.relic_stacks(sim, spec.kind) > 0
+		expands_cap  := spec.kind == .SHOPPING_CART  // siempre disponible — expande el cap
+		if at_relic_cap && !already_has && !expands_cap { continue }
+		if app.meta.unlocked_relics[spec.kind] && !entities.relic_is_maxed(&app.sim, spec.kind) {
+			append(&relic_pool, entities.Card{kind = spec.kind})
+		}
+	}
+	relic_count := len(relic_pool)
 
 	tower_used := [11]bool{}
-	relic_used := [16]bool{}
+	relic_used := make([]bool, relic_count, context.temp_allocator)
 	cands      : [16]int
 
 	// Pity counter — sube siempre; si rolamos un UNIQUE abajo, se resetea
-	sim.shops_since_unique += 1
+	sim.shop.shops_since_unique += 1
 
 	// Generar cada slot según su patrón. Locked slots se saltan.
 	for slot in 0 ..< int(slot_count) {
-		if sim.card_selection_locked[slot] { continue }
+		if sim.shop.locked[slot] { continue }
 
 		switch slot {
 		case 0:
@@ -434,16 +493,16 @@ generate_card_selection :: proc(app: ^entities.App_State) {
 			if relic_count == 0 {
 				pick_tower_slot(sim, &tower_pool, &tower_used, &cands, slot, tower_count)
 			} else {
-				pick_relic_slot(sim, &relic_pool, relic_count, &relic_used, &cands, slot)
+				pick_relic_slot(sim, relic_pool[:], relic_count, relic_used, &cands, slot)
 			}
 		case:
 			// 50/50 torre o relicto, con fallback
 			if relic_count == 0 || rand.float32() < 0.5 {
 				if !pick_tower_slot(sim, &tower_pool, &tower_used, &cands, slot, tower_count) {
-					pick_relic_slot(sim, &relic_pool, relic_count, &relic_used, &cands, slot)
+					pick_relic_slot(sim, relic_pool[:], relic_count, relic_used, &cands, slot)
 				}
 			} else {
-				if !pick_relic_slot(sim, &relic_pool, relic_count, &relic_used, &cands, slot) {
+				if !pick_relic_slot(sim, relic_pool[:], relic_count, relic_used, &cands, slot) {
 					pick_tower_slot(sim, &tower_pool, &tower_used, &cands, slot, tower_count)
 				}
 			}
@@ -453,14 +512,14 @@ generate_card_selection :: proc(app: ^entities.App_State) {
 	// Pity UNIQUE: si pasó el threshold y no rolamos UNIQUE, forzamos una
 	has_unique := false
 	for slot in 0 ..< int(slot_count) {
-		if entities.card_rarity(sim.card_selection_choices[slot]) == .UNIQUE {
+		if entities.card_rarity(sim.shop.choices[slot]) == .UNIQUE {
 			has_unique = true
 			break
 		}
 	}
 	if has_unique {
-		sim.shops_since_unique = 0
-	} else if sim.shops_since_unique >= constants.SHOP_PITY_UNIQUE_THRESHOLD && relic_count > 0 {
+		sim.shop.shops_since_unique = 0
+	} else if sim.shop.shops_since_unique >= constants.SHOP_PITY_UNIQUE_THRESHOLD && relic_count > 0 {
 		// Buscar la primera UNIQUE en el pool de relics
 		unique_idx := -1
 		for i in 0 ..< relic_count {
@@ -472,10 +531,10 @@ generate_card_selection :: proc(app: ^entities.App_State) {
 		if unique_idx >= 0 {
 			// Colocarla en el primer slot relic no-locked, no-tower-only
 			for slot in 0 ..< int(slot_count) {
-				if sim.card_selection_locked[slot] { continue }
+				if sim.shop.locked[slot] { continue }
 				if slot == 0 { continue } // slot 0 es siempre torre
-				sim.card_selection_choices[slot] = relic_pool[unique_idx]
-				sim.shops_since_unique = 0
+				sim.shop.choices[slot] = relic_pool[unique_idx]
+				sim.shop.shops_since_unique = 0
 				break
 			}
 		}
@@ -485,8 +544,8 @@ generate_card_selection :: proc(app: ^entities.App_State) {
 	if sim.relic_stacks[.VETERAN] > 0 {
 		chance := min(f32(1.0), f32(sim.relic_stacks[.VETERAN]) * constants.VETERAN_BOOST_CHANCE)
 		for slot in 0 ..< int(slot_count) {
-			if sim.card_selection_locked[slot] { continue }
-			card := &sim.card_selection_choices[slot]
+			if sim.shop.locked[slot] { continue }
+			card := &sim.shop.choices[slot]
 			if card.kind == .TOWER && rand.float32() < chance {
 				card.bonus_level = sim.relic_stacks[.VETERAN]
 			}
@@ -500,11 +559,11 @@ pick_tower_slot :: proc(sim: ^entities.Simulation, pool: ^[11]entities.Card, use
 	if n == 0 { return false }
 	idx := buf[rand.int_max(n)]
 	used[idx] = true
-	sim.card_selection_choices[slot] = pool[idx]
+	sim.shop.choices[slot] = pool[idx]
 	return true
 }
 
-pick_relic_slot :: proc(sim: ^entities.Simulation, pool: ^[16]entities.Card, count: int, used: ^[16]bool, buf: ^[16]int, slot: int) -> bool {
+pick_relic_slot :: proc(sim: ^entities.Simulation, pool: []entities.Card, count: int, used: []bool, buf: ^[16]int, slot: int) -> bool {
 	rval := rand.float32()
 	target: constants.Card_Rarity
 	if rval < constants.RARITY_PROB_UNIQUE {
@@ -538,7 +597,7 @@ pick_relic_slot :: proc(sim: ^entities.Simulation, pool: ^[16]entities.Card, cou
 	if n == 0 { return false }
 	idx := buf[rand.int_max(n)]
 	used[idx] = true
-	sim.card_selection_choices[slot] = pool[idx]
+	sim.shop.choices[slot] = pool[idx]
 	return true
 }
 
@@ -1608,9 +1667,9 @@ simulation_cleanup :: proc(app: ^entities.App_State) {
 	delete(app.sim.spawns)
 	delete(app.sim.graph_samples)
 	delete(app.sim.wave_marks)
-	delete(app.sim.deck)
-	delete(app.sim.hand)
-	delete(app.sim.discard)
+	delete(app.sim.cards.deck)
+	delete(app.sim.cards.hand)
+	delete(app.sim.cards.discard)
 	delete(app.sim.airdrops)
 }
 
@@ -1643,20 +1702,25 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		wave_time        = 0,
 		next_spawn_delay = 0,
 		// Deck builder
-		deck      = make([dynamic]entities.Card),
-		hand      = make([dynamic]entities.Card),
-		discard   = make([dynamic]entities.Card),
-		hand_size = constants.DECK_HAND_SIZE,
-		selected_card_idx = -1,
-		card_selection_active  = false,
-		card_selection_choices = {},
-		card_selection_bought  = {},
-		card_selection_locked  = {},
-		shop_slot_count        = constants.SHOP_BASE_SLOTS,
-		rerolls_this_shop      = 0,
-		shops_since_unique     = 0,
-		skip_streak_count      = 0,
-		shop_purchases_this_visit = 0,
+		cards = entities.Card_State{
+			deck              = make([dynamic]entities.Card),
+			hand              = make([dynamic]entities.Card),
+			discard           = make([dynamic]entities.Card),
+			hand_size         = constants.DECK_HAND_SIZE,
+			selected_card_idx = -1,
+		},
+		// Shop
+		shop = entities.Shop_State{
+			active               = false,
+			choices              = {},
+			bought               = {},
+			locked               = {},
+			slot_count           = constants.SHOP_BASE_SLOTS,
+			rerolls_this_visit   = 0,
+			shops_since_unique   = 0,
+			skip_streak_count    = 0,
+			purchases_this_visit = 0,
+		},
 		auto_upgrade_timer     = 0,
 		wave_start_money       = 0,
 		steal_last_wave        = 0,
@@ -1681,7 +1745,7 @@ simulation_reset :: proc(app: ^entities.App_State) {
 	rand.reset(app.sim.seed)
 
 	// Inicializar mazo inicial y mano de apertura garantizada
-	// (build_starter_deck puebla sim.hand directamente con la composición garantizada)
+	// (build_starter_deck puebla sim.cards.hand directamente con la composición garantizada)
 	entities.build_starter_deck(&app.sim, &app.meta)
 
 	// Pre-roll bonus status for the first 3 upcoming waves (waves 1, 2, 3).
@@ -2010,7 +2074,7 @@ airdrop_collect :: proc(app: ^entities.App_State, row, col: i32) -> bool {
 			crystals := constants.AIRDROP_CRYSTAL_MIN +
 			            i32(rand.float32() * f32(constants.AIRDROP_CRYSTAL_MAX - constants.AIRDROP_CRYSTAL_MIN + 1))
 			app.meta.cristales += crystals
-			entities.meta_save(&app.meta)
+			app.meta_dirty = true
 			entities.add_toast(app, fmt.tprintf("+%d cristales!", crystals), .INFO, 2.5)
 		}
 

@@ -243,6 +243,8 @@ RELIC_FLASH_DURATION     :: f32(0.4)    // Seconds a relic icon flashes white wh
 MAX_RELIC_STACKS         :: i32(20)     // Maximum stack count for any relic
 
 RECYCLER_SELL_BONUS  :: f32(0.10)  // Extra fraction of sell price per RECYCLER stack
+LUMBERJACK_TREE_GOLD :: i32(40)    // Gold earned per tree chopped with LUMBERJACK
+MAX_ACTIVE_RELICS    :: int(5)     // Max distinct relic types the player can have active
 MEMENTO_GOLD_PER_10W :: i32(1)     // Gold per stack per 10 completed waves
 WARMED_UP_THRESHOLD  :: f32(15.0)  // Seconds of continuous targeting before warm bonus kicks in
 WARMED_UP_BONUS      :: f32(0.03)  // Extra damage multiplier per WARMED_UP stack when active
@@ -437,6 +439,42 @@ CAMPAIGN_DEFAULT_WAVES      :: i32(0)    // 0 = usa RUN_MAX_WAVES
 // Recompensa de cristales por completar un nodo opcional (encima del cálculo
 // estándar de waves/kills/lives). 0 = sin bonus.
 CAMPAIGN_OPTIONAL_REWARD :: i32(10)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Visualizador de campaña — colores y dimensiones
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Estados de nodos (fill + border)
+COLOR_CAMPAIGN_LOCKED_FILL       :: raylib.Color{ 80,  80, 100, 180}
+COLOR_CAMPAIGN_LOCKED_BORDER     :: raylib.Color{120, 120, 140, 200}
+COLOR_CAMPAIGN_AVAILABLE_FILL    :: raylib.Color{240, 220, 130, 240}
+COLOR_CAMPAIGN_AVAILABLE_BORDER  :: raylib.Color{255, 240, 160, 255}
+COLOR_CAMPAIGN_COMPLETED_FILL    :: raylib.Color{ 60, 200, 100, 240}
+COLOR_CAMPAIGN_COMPLETED_BORDER  :: raylib.Color{120, 250, 160, 255}
+COLOR_CAMPAIGN_BOSS_BORDER       :: raylib.Color{220,  80,  80, 255}
+COLOR_CAMPAIGN_FINALE_BORDER     :: raylib.Color{255, 180,  30, 255}
+
+// Halo pulsante del nodo disponible (color base, alfa modulado en runtime)
+COLOR_CAMPAIGN_PULSE             :: raylib.Color{255, 240, 120, 255}
+
+// Conexiones entre nodos
+COLOR_CAMPAIGN_CONNECTION_ACTIVE   :: raylib.Color{180, 150,  70, 220}
+COLOR_CAMPAIGN_CONNECTION_INACTIVE :: raylib.Color{ 90,  90, 110, 120}
+
+// Tooltip del visualizador
+COLOR_CAMPAIGN_TOOLTIP_BG    :: raylib.Color{ 20,  20,  30, 235}
+COLOR_CAMPAIGN_TOOLTIP_DIM   :: raylib.Color{200, 200, 220, 240}
+COLOR_CAMPAIGN_PROGRESS_DIM  :: raylib.Color{200, 200, 220, 220}
+
+// Radios de nodo según flags
+CAMPAIGN_NODE_RADIUS_OPTIONAL :: f32(10)
+CAMPAIGN_NODE_RADIUS_DEFAULT  :: f32(14)
+CAMPAIGN_NODE_RADIUS_BOSS     :: f32(18)
+CAMPAIGN_NODE_RADIUS_FINALE   :: f32(22)
+
+// Anillo blanco del nodo activo: offset del borde + grosor (en pixels)
+CAMPAIGN_ACTIVE_RING_OFFSET   :: i32(6)
+CAMPAIGN_ACTIVE_RING_THICK    :: i32(1)  // sumar 1 línea más para grosor doble
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Heightmap del terreno — desniveles continuos vía shader (visual, sin gameplay)

@@ -12,12 +12,14 @@ Fonts :: struct {
 
 // Icon textures (UI / HUD icons — los iconos de relictos se gestionan en entities/card.odin)
 Icons :: struct {
-	damage: raylib.Texture2D,
-	speed:  raylib.Texture2D,
-	crit:   raylib.Texture2D,
-	health: raylib.Texture2D,
-	wave:   raylib.Texture2D,
-	money:  raylib.Texture2D,
+	damage:        raylib.Texture2D,
+	speed:         raylib.Texture2D,
+	crit:          raylib.Texture2D,
+	health:        raylib.Texture2D,
+	wave:          raylib.Texture2D,
+	money:         raylib.Texture2D,
+	lock_locked:   raylib.Texture2D,
+	lock_unlocked: raylib.Texture2D,
 }
 
 // Global fonts instance
@@ -82,7 +84,9 @@ load_icons :: proc() {
 	game_icons.crit   = raylib.LoadTexture("images/icon_crit.png")
 	game_icons.health = raylib.LoadTexture("images/icon_health.png")
 	game_icons.wave   = raylib.LoadTexture("images/icon_wave.png")
-	game_icons.money  = raylib.LoadTexture("images/icon_money.png")
+	game_icons.money         = raylib.LoadTexture("images/icon_money.png")
+	game_icons.lock_locked   = raylib.LoadTexture("images/icon_lock_locked.png")
+	game_icons.lock_unlocked = raylib.LoadTexture("images/icon_lock_unlocked.png")
 
 	// Generate mipmaps and enable trilinear filtering for smooth downscaling
 	raylib.GenTextureMipmaps(&game_icons.damage)
@@ -91,13 +95,17 @@ load_icons :: proc() {
 	raylib.GenTextureMipmaps(&game_icons.health)
 	raylib.GenTextureMipmaps(&game_icons.wave)
 	raylib.GenTextureMipmaps(&game_icons.money)
+	raylib.GenTextureMipmaps(&game_icons.lock_locked)
+	raylib.GenTextureMipmaps(&game_icons.lock_unlocked)
 
-	raylib.SetTextureFilter(game_icons.damage, .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.speed,  .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.crit,   .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.health, .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.wave,   .TRILINEAR)
-	raylib.SetTextureFilter(game_icons.money,  .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.damage,        .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.speed,         .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.crit,          .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.health,        .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.wave,          .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.money,         .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.lock_locked,   .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.lock_unlocked, .TRILINEAR)
 }
 
 // Unload all icon textures
@@ -108,6 +116,8 @@ unload_icons :: proc() {
 	raylib.UnloadTexture(game_icons.health)
 	raylib.UnloadTexture(game_icons.wave)
 	raylib.UnloadTexture(game_icons.money)
+	raylib.UnloadTexture(game_icons.lock_locked)
+	raylib.UnloadTexture(game_icons.lock_unlocked)
 }
 
 // Unload all fonts

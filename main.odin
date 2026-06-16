@@ -4,6 +4,7 @@ import "core:encoding/json"
 import "core:fmt"
 import "core:math"
 import "core:math/rand"
+import "core:mem"
 import "core:os"
 import "vendor:raylib"
 
@@ -94,6 +95,9 @@ main :: proc() {
 	// Load meta-progression save
 	app.meta = entities.meta_load()
 	defer {
+		// Flush meta antes de cerrar — captura cualquier cambio pendiente que
+		// no haya pasado por una transición de estado.
+		entities.app_meta_flush(&app)
 		save_settings(app.settings)
 		app_destroy()
 	}
@@ -217,6 +221,11 @@ main :: proc() {
 		systems.render_game(&app)
 		raylib.EndDrawing()
 
+		// Persistir meta si quedó algo dirty este frame. Idempotente — barata
+		// cuando no hay cambios. Garantiza que ningún cambio se pierda aunque
+		// el jugador cierre la ventana inmediatamente.
+		entities.app_meta_flush(&app)
+
 		// Free all temp-allocator memory accumulated this frame.
 		// fmt.ctprintf / strings.clone_to_cstring(s, context.temp_allocator) are
 		// safe to use anywhere in the frame because their lifetime is exactly one frame.
@@ -239,13 +248,13 @@ app_init :: proc(initial_settings: entities.Settings) {
 		previous_state = .MENU,
 		toasts         = make([dynamic]entities.Toast),
 		editor = entities.Editor {
-			game_map                      = entities.map_init(),
-			current_tool                  = .EMPTY,
-			show_grid                     = true,
-			show_paths                    = false,
-			current_biome                 = .PLAIN,
-			load_map_active               = false,
-			campaign_editor_selected_node = -1,
+			game_map        = entities.map_init(),
+			current_tool    = .EMPTY,
+			show_grid       = true,
+			show_paths      = false,
+			current_biome   = .PLAIN,
+			load_map_active = false,
+			campaign_editor = entities.Campaign_Editor_State{ selected_node = -1 },
 		},
 		settings              = initial_settings,
 		zoom                  = 1.0,
@@ -269,10 +278,10 @@ app_destroy :: proc() {
 	systems.simulation_cleanup(&app)
 
 	// Free editor dynamic data
-	entities.map_file_entries_destroy(&app.editor.map_browser_entries)
-	entities.map_destroy(&app.editor.map_browser_preview)
-	if app.editor.map_browser_preview_tex_valid {
-		raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
+	entities.map_file_entries_destroy(&app.editor.browser.entries)
+	entities.map_destroy(&app.editor.browser.preview)
+	if app.editor.browser.preview_tex_valid {
+		raylib.UnloadRenderTexture(app.editor.browser.preview_tex)
 	}
 
 	for &s in app.editor.undo_stack {
@@ -295,18 +304,38 @@ app_destroy :: proc() {
 // Global app instance using entities.App_State
 app: entities.App_State
 
-// Save settings to a JSON file
-save_settings :: proc(settings: entities.Settings) {
-	data, err := json.marshal(settings, {pretty = true})
-	if err == nil {
-		os.write_entire_file("settings.json", data)
-		delete(data)
-	}
+// ─────────────────────────────────────────────────────────────────────────────
+// Persistencia de settings — formato binario fijo (settings.bin).
+// settings.json se mantiene como fallback para migración: si el usuario tenía
+// un settings.json de versión vieja, se lee y se convierte a .bin la próxima
+// vez que se guarda. Después de la migración, .json puede borrarse manualmente.
+// ─────────────────────────────────────────────────────────────────────────────
+
+SETTINGS_BIN_VERSION  :: u32(1)
+SETTINGS_BIN_PATH     :: "settings.bin"
+SETTINGS_JSON_PATH    :: "settings.json"
+
+Settings_File :: struct {
+	version:  u32,
+	_pad:     [4]u8,
+	settings: entities.Settings,
+	_trailing_pad: [64]u8,  // reserva para futuro
 }
 
-// Load settings from a JSON file, or return defaults if it doesn't exist
+// Guarda settings al disco. Siempre escribe binario; el JSON queda obsoleto
+// y puede borrarse a mano si lo deseas.
+save_settings :: proc(settings: entities.Settings) {
+	file := Settings_File{
+		version  = SETTINGS_BIN_VERSION,
+		settings = settings,
+	}
+	data := mem.ptr_to_bytes(&file)
+	os.write_entire_file(SETTINGS_BIN_PATH, data)
+}
+
+// Carga settings con fallback chain: bin → json → defaults.
 load_settings :: proc() -> entities.Settings {
-	settings := entities.Settings {
+	defaults := entities.Settings {
 		grid_size           = constants.GRID_SIZE,
 		cell_size           = constants.CELL_SIZE,
 		show_grid           = true,
@@ -324,11 +353,32 @@ load_settings :: proc() -> entities.Settings {
 		auto_start_wave     = true,
 	}
 
-	data, ok := os.read_entire_file_from_filename("settings.json")
-	if ok {
-		json.unmarshal(data, &settings)
-		delete(data)
+	// 1. Try binary
+	if data, ok := os.read_entire_file_from_filename(SETTINGS_BIN_PATH); ok {
+		defer delete(data)
+		if len(data) == size_of(Settings_File) {
+			file := (cast(^Settings_File)raw_data(data))^
+			if file.version == SETTINGS_BIN_VERSION {
+				return file.settings
+			}
+			fmt.printfln("[load_settings] settings.bin version mismatch (%d vs %d), descartando",
+				file.version, SETTINGS_BIN_VERSION)
+		} else {
+			fmt.printfln("[load_settings] settings.bin tamaño inválido (%d vs %d), descartando",
+				len(data), size_of(Settings_File))
+		}
 	}
 
-	return settings
+	// 2. Fall back to JSON for migration
+	settings := defaults
+	if data, ok := os.read_entire_file_from_filename(SETTINGS_JSON_PATH); ok {
+		defer delete(data)
+		if json.unmarshal(data, &settings) == nil {
+			fmt.println("[load_settings] migrado desde settings.json — se guardará como .bin en el próximo save")
+			return settings
+		}
+	}
+
+	// 3. Defaults
+	return defaults
 }

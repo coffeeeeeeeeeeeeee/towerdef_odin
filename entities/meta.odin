@@ -1,5 +1,6 @@
 package entities
 
+import "core:fmt"
 import "core:os"
 import "core:mem"
 import "../constants"
@@ -9,7 +10,7 @@ import "../constants"
 //   Migración: archivos v1 se descartan y arrancan zero — los unlocks de
 //   relics/towers y los cristales se pierden. Aceptable durante desarrollo;
 //   para un release habría que hacer parsing v1 explícito y upgrade.
-META_SAVE_VERSION :: u32(2)
+META_SAVE_VERSION :: u32(3)
 META_SAVE_PATH    :: "savegame.bin"
 
 // Persistent state across runs — saved to savegame.bin in the executable directory.
@@ -58,11 +59,11 @@ meta_tower_unlock_cost :: proc(t: constants.Tower_Type) -> i32 {
 // Returns 0 for non-relics (TOWER, OBSTACLE).
 meta_relic_tier :: proc(kind: Card_Kind) -> i32 {
 	#partial switch kind {
-	case .INTEREST_BOOST, .LOOT, .RECYCLER, .SCOUT, .WEAKEN:
+	case .INTEREST_BOOST, .LOOT, .RECYCLER, .SCOUT, .WEAKEN, .LUMBERJACK:
 		return 1
 	case .DIVIDEND, .STEAL, .BLOODLUST, .FLAWLESS, .MEMENTO, .WARMED_UP:
 		return 2
-	case .AUTO_UPGRADE, .FORMATION, .FROZEN_AMP, .VETERAN, .CRYPTOBRO:
+	case .AUTO_UPGRADE, .FORMATION, .FROZEN_AMP, .VETERAN, .CRYPTOBRO, .SHOPPING_CART:
 		return 3
 	}
 	return 0
@@ -141,17 +142,31 @@ meta_save :: proc(meta: ^Meta_State) {
 
 // Load meta state from savegame.bin.
 // Returns a zeroed Meta_State if the file is missing or the version mismatches.
+// IMPORTANTE: hoy no hay migración entre versiones — un save de versión vieja
+// se descarta (cristales y unlocks vuelven a 0). Esto sólo se acepta porque el
+// juego está en desarrollo. Para release implementar parser por versión
+// (ver auditoría issue #2).
 meta_load :: proc() -> Meta_State {
 	meta := Meta_State{}
 	data, ok := os.read_entire_file_from_filename(META_SAVE_PATH)
-	if ok {
-		defer delete(data)
-		if len(data) == size_of(Meta_State) {
-			meta = (cast(^Meta_State)raw_data(data))^
-			if meta.version != META_SAVE_VERSION {
-				meta = Meta_State{}
-			}
-		}
+	if !ok { return meta }
+	defer delete(data)
+
+	if len(data) != size_of(Meta_State) {
+		fmt.printfln(
+			"[meta_load] descartando savegame.bin: size=%d (esperado %d). Progreso reseteado.",
+			len(data), size_of(Meta_State),
+		)
+		return Meta_State{}
+	}
+
+	meta = (cast(^Meta_State)raw_data(data))^
+	if meta.version != META_SAVE_VERSION {
+		fmt.printfln(
+			"[meta_load] descartando savegame.bin: version=%d (esperado %d). Progreso reseteado.",
+			meta.version, META_SAVE_VERSION,
+		)
+		return Meta_State{}
 	}
 	return meta
 }

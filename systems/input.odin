@@ -44,27 +44,41 @@ input_handle_menu :: proc(app: ^entities.App_State) {
 	// manejar scroll y ESC igual que en el editor
 	if app.editor.show_map_browser {
 		if raylib.IsKeyPressed(.ESCAPE) {
-			entities.map_destroy(&app.editor.map_browser_preview)
-			app.editor.map_browser_preview_valid = false
-			if app.editor.map_browser_preview_tex_valid {
-				raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
-				app.editor.map_browser_preview_tex_valid = false
+			entities.map_destroy(&app.editor.browser.preview)
+			app.editor.browser.preview_valid = false
+			if app.editor.browser.preview_tex_valid {
+				raylib.UnloadRenderTexture(app.editor.browser.preview_tex)
+				app.editor.browser.preview_tex_valid = false
 			}
 			app.editor.show_map_browser = false
-			app.editor.map_browser_play_mode = false
+			app.editor.browser.play_mode = false
 		}
 		wheel := raylib.GetMouseWheelMove()
 		if wheel != 0 {
 			content_h     := constants.UI_MAP_BROWSER_HEIGHT - constants.UI_MAP_BROWSER_HEADER_HEIGHT - constants.UI_MAP_BROWSER_FOOTER_HEIGHT
 			visible_items := content_h / constants.UI_MAP_BROWSER_ITEM_HEIGHT
-			app.editor.map_browser_scroll -= i32(wheel)
-			if app.editor.map_browser_scroll < 0 {
-				app.editor.map_browser_scroll = 0
+			app.editor.browser.scroll -= i32(wheel)
+			if app.editor.browser.scroll < 0 {
+				app.editor.browser.scroll = 0
 			}
-			max_scroll := i32(len(app.editor.map_browser_entries)) - visible_items
+			max_scroll := i32(len(app.editor.browser.entries)) - visible_items
 			if max_scroll < 0 { max_scroll = 0 }
-			if app.editor.map_browser_scroll > max_scroll {
-				app.editor.map_browser_scroll = max_scroll
+			if app.editor.browser.scroll > max_scroll {
+				app.editor.browser.scroll = max_scroll
+			}
+		}
+	}
+
+	// ── Developer: Ctrl+Shift+R desde el menú principal → reset meta ────────
+	// Útil para testear desde cero sin tocar savegame.bin a mano.
+	when constants.DEVELOPER {
+		ctrl   := raylib.IsKeyDown(.LEFT_CONTROL) || raylib.IsKeyDown(.RIGHT_CONTROL)
+		shift  := raylib.IsKeyDown(.LEFT_SHIFT)   || raylib.IsKeyDown(.RIGHT_SHIFT)
+		if ctrl && shift && raylib.IsKeyPressed(.R) && !app.confirm_modal.active {
+			app.confirm_modal = entities.Confirm_Modal{
+				active = true,
+				text   = "[DEV] Resetear progreso?\nCristales, unlocks y campaña a cero.",
+				action = .RESET_META,
 			}
 		}
 	}
@@ -105,6 +119,20 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 			}
 		}
 
+		// LUMBERJACK — modo selección de árbol activo.
+		if app.lumberjack_active && is_valid_grid_pos(app, grid_x, grid_y) {
+			if app.editor.game_map.grid[grid_y][grid_x] == .ACCESSORY_TREE {
+				app.editor.game_map.grid[grid_y][grid_x] = .EMPTY
+				entities.app_add_money(app, constants.LUMBERJACK_TREE_GOLD)
+				entities.add_toast(app, fmt.tprintf("+$%d árbol talado", constants.LUMBERJACK_TREE_GOLD), .SUCCESS)
+				entities.card_play(&app.sim, app.sim.cards.selected_card_idx)
+				app.sim.cards.selected_card_idx = -1
+				app.lumberjack_active = false
+				play_sound(.CONFIRMATION, .UI)
+				return
+			}
+		}
+
 		if is_valid_grid_pos(app, grid_x, grid_y) {
 			// Check if clicking on a tower
 			tile := app.editor.game_map.grid[grid_y][grid_x]
@@ -139,9 +167,9 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 							if app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY && !is_forbidden &&
 							   !app.editor.game_map.water_grid[grid_y][grid_x] {
 								app.editor.game_map.obstacle_grid[grid_y][grid_x] = .OBSTACLE
-								entities.card_play(&app.sim, app.sim.selected_card_idx)
+								entities.card_play(&app.sim, app.sim.cards.selected_card_idx)
 								app.sim.selected_build_tower = .EMPTY
-								app.sim.selected_card_idx    = -1
+								app.sim.cards.selected_card_idx    = -1
 								play_sound(.CLICK, .UI)
 							}
 						} else {
@@ -154,16 +182,16 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 							if can_place {
 								app.editor.game_map.grid[grid_y][grid_x] = app.sim.selected_build_tower
 								tower := entities.tower_init(tower_type, grid_y, grid_x)
-								selected_card := app.sim.hand[app.sim.selected_card_idx]
+								selected_card := app.sim.cards.hand[app.sim.cards.selected_card_idx]
 								for _ in 0 ..< selected_card.bonus_level {
 									entities.tower_upgrade(&tower)
 								}
 								append(&app.sim.towers, tower)
 								app.sim.towers_built += 1
 								update_formation_cache(app)
-								entities.card_play(&app.sim, app.sim.selected_card_idx)
+								entities.card_play(&app.sim, app.sim.cards.selected_card_idx)
 								app.sim.selected_build_tower = .EMPTY
-								app.sim.selected_card_idx    = -1
+								app.sim.cards.selected_card_idx    = -1
 								play_sound(.CLICK, .UI)
 							}
 						}
@@ -175,9 +203,13 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 	
 	// Right click to deselect or cancel
 	if raylib.IsMouseButtonPressed(.RIGHT) {
-		if app.sim.selected_build_tower != .EMPTY {
+		if app.lumberjack_active {
+			// Cancelar modo tala — la carta vuelve a la mano sin gastarse
+			app.lumberjack_active = false
+			app.sim.cards.selected_card_idx = -1
+		} else if app.sim.selected_build_tower != .EMPTY {
 			app.sim.selected_build_tower = .EMPTY
-			app.sim.selected_card_idx    = -1
+			app.sim.cards.selected_card_idx    = -1
 		} else {
 			entities.app_deselect_tower(app)
 			app.selected_obstacle.valid = false
@@ -203,7 +235,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 	}
 
 	// ── Developer hotkeys (compiled out when DEVELOPER == false) ─────────────
-	if constants.DEVELOPER {
+	when constants.DEVELOPER {
 		// F1 — +$500
 		if raylib.IsKeyPressed(.F1) {
 			entities.app_add_money(app, 500)
@@ -229,7 +261,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 		// F5 — +100 cristales
 		if raylib.IsKeyPressed(.F5) {
 			app.meta.cristales += 100
-			entities.meta_save(&app.meta)
+			app.meta_dirty = true
 			entities.add_toast(app, "[DEV] +100 cristales", .INFO, 1.5)
 		}
 	}
@@ -273,32 +305,32 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 	// Cuando el browser está abierto: manejar scroll/ESC y bloquear el resto del input
 	if app.editor.show_map_browser {
 		if raylib.IsKeyPressed(.ESCAPE) {
-			if app.editor.map_browser_renaming {
+			if app.editor.browser.renaming {
 				// Escape cancela el rename sin cerrar el browser
-				app.editor.map_browser_renaming = false
+				app.editor.browser.renaming = false
 			} else {
-				entities.map_destroy(&app.editor.map_browser_preview)
-				app.editor.map_browser_preview_valid = false
-				if app.editor.map_browser_preview_tex_valid {
-					raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
-					app.editor.map_browser_preview_tex_valid = false
+				entities.map_destroy(&app.editor.browser.preview)
+				app.editor.browser.preview_valid = false
+				if app.editor.browser.preview_tex_valid {
+					raylib.UnloadRenderTexture(app.editor.browser.preview_tex)
+					app.editor.browser.preview_tex_valid = false
 				}
 				app.editor.show_map_browser = false
-				app.editor.map_browser_play_mode = false
+				app.editor.browser.play_mode = false
 			}
 		}
 		wheel := raylib.GetMouseWheelMove()
 		if wheel != 0 {
 			content_h     := constants.UI_MAP_BROWSER_HEIGHT - constants.UI_MAP_BROWSER_HEADER_HEIGHT - constants.UI_MAP_BROWSER_FOOTER_HEIGHT
 			visible_items := content_h / constants.UI_MAP_BROWSER_ITEM_HEIGHT
-			app.editor.map_browser_scroll -= i32(wheel)
-			if app.editor.map_browser_scroll < 0 {
-				app.editor.map_browser_scroll = 0
+			app.editor.browser.scroll -= i32(wheel)
+			if app.editor.browser.scroll < 0 {
+				app.editor.browser.scroll = 0
 			}
-			max_scroll := i32(len(app.editor.map_browser_entries)) - visible_items
+			max_scroll := i32(len(app.editor.browser.entries)) - visible_items
 			if max_scroll < 0 { max_scroll = 0 }
-			if app.editor.map_browser_scroll > max_scroll {
-				app.editor.map_browser_scroll = max_scroll
+			if app.editor.browser.scroll > max_scroll {
+				app.editor.browser.scroll = max_scroll
 			}
 		}
 		return
@@ -544,20 +576,20 @@ input_process_editor_shortcuts :: proc(app: ^entities.App_State) {
 	// Abrir/cerrar browser de mapas (Ctrl+B)
 	if ctrl && raylib.IsKeyPressed(.B) {
 		if app.editor.show_map_browser {
-			entities.map_destroy(&app.editor.map_browser_preview)
-			app.editor.map_browser_preview_valid = false
-			if app.editor.map_browser_preview_tex_valid {
-				raylib.UnloadRenderTexture(app.editor.map_browser_preview_tex)
-				app.editor.map_browser_preview_tex_valid = false
+			entities.map_destroy(&app.editor.browser.preview)
+			app.editor.browser.preview_valid = false
+			if app.editor.browser.preview_tex_valid {
+				raylib.UnloadRenderTexture(app.editor.browser.preview_tex)
+				app.editor.browser.preview_tex_valid = false
 			}
 			app.editor.show_map_browser = false
 		} else {
-			entities.map_file_entries_destroy(&app.editor.map_browser_entries)
-			app.editor.map_browser_entries = entities.map_list_saved_entries()
-			app.editor.map_browser_scroll   = 0
-			app.editor.map_browser_selected = -1
-			app.editor.map_browser_preview  = entities.map_init()
-			app.editor.map_browser_preview_valid = false
+			entities.map_file_entries_destroy(&app.editor.browser.entries)
+			app.editor.browser.entries = entities.map_list_saved_entries()
+			app.editor.browser.scroll   = 0
+			app.editor.browser.selected = -1
+			app.editor.browser.preview  = entities.map_init()
+			app.editor.browser.preview_valid = false
 			app.editor.show_map_browser = true
 		}
 	}
