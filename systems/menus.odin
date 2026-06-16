@@ -3000,21 +3000,23 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 		render_card(app, card, cx, cy, false, can_buy || unlocked, bg)
 		render_card_tooltip(app, card, raylib.Rectangle{cx, cy, CARD_W, CARD_H})
 
-		// Unlock button / unlocked badge below the card
 		btn_y := cy + CARD_H + 6
+
 		if unlocked {
-			ok_cs := strings.clone_to_cstring(constants.get_text("PROGRESSION_UNLOCKED"), context.temp_allocator)
-			ok_w  := raylib.MeasureTextEx(constants.game_fonts.semibold, ok_cs, small_size, 0).x
-			raylib.DrawTextEx(constants.game_fonts.semibold, ok_cs,
-				{cx + (CARD_W - ok_w) / 2, btn_y + (tower_btn_h - small_size) / 2},
-				small_size, 0, raylib.Color{80, 210, 80, 255})
-		} else {
-			cost_str  := fmt.tprintf("%d C", cost)
-			if render_button(cost_str, {cx, btn_y, CARD_W, tower_btn_h}, {disabled = !can_buy}) && can_buy {
-				app.meta.cristales -= cost
-				app.meta.unlocked_towers[int(t)] = true
+			btn_label := fmt.tprintf("Reembolsar %d C", cost)
+			if render_button(btn_label, {cx, btn_y, CARD_W, tower_btn_h}, {}) {
+				app.meta.unlocked_towers[int(t)] = false
+				app.meta.cristales += cost
 				app.meta_dirty = true
-				play_sound(.CONFIRMATION, .UI)
+				play_sound(.CLICK, .UI)
+			}
+		} else {
+			btn_label := fmt.tprintf("%d C", cost)
+			if render_button(btn_label, {cx, btn_y, CARD_W, tower_btn_h}, {disabled = !can_buy}) && can_buy {
+				app.meta.unlocked_towers[int(t)] = true
+				app.meta.cristales -= cost
+				app.meta_dirty = true
+				play_sound(.CLICK, .UI)
 			}
 		}
 	}
@@ -3037,7 +3039,6 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 		delete(tier_relics[2])
 	}
 
-	tier_costs := [3]i32{5, 10, 20}
 	tier_colors := [3]raylib.Color{
 		{160, 160, 160, 255},  // grey (common)
 		{ 50, 200, 100, 255},  // green (uncommon)
@@ -3062,11 +3063,11 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 		row_y  := content_y
 
 		for kind in relics {
-			unlocked   := app.meta.unlocked_relics[kind]
-			name       := entities.card_name(entities.Card{kind = kind})
-			cost       := tier_costs[ti]
-			icon_x     := col_x + cell_pad
-			icon_tex   := entities.relic_icon(kind)
+			unlocked := entities.meta_is_relic_unlocked(&app.meta, kind)
+			cost     := entities.meta_relic_unlock_cost(kind)
+			name     := entities.card_name(entities.Card{kind = kind})
+			icon_x   := col_x + cell_pad
+			icon_tex := entities.relic_icon(kind)
 
 			// Icon
 			if icon_tex.id > 0 {
@@ -3076,53 +3077,42 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 				bg := tier_colors[ti] if unlocked else raylib.Color{60, 60, 60, 255}
 				raylib.DrawRectangleRounded({icon_x, row_y, icon_size, icon_size}, 0.3, 8, bg)
 			}
-			render_card_tooltip(app, entities.Card{kind = kind}, raylib.Rectangle{icon_x, row_y, icon_size, icon_size})
 
 			// Name
 			name_cstr := strings.clone_to_cstring(name, context.temp_allocator)
 			raylib.DrawTextEx(
-				constants.game_fonts.regular,
-				name_cstr,
+				constants.game_fonts.regular, name_cstr,
 				{icon_x + icon_size + 6, row_y + icon_size / 2 - small_size / 2},
 				small_size, 0,
 				raylib.WHITE if unlocked else raylib.Color{120, 120, 120, 255},
 			)
 
-			if !unlocked {
-				can_afford := app.meta.cristales >= cost
-				btn_label  := fmt.tprintf("%d C", cost)
-				btn_w      := raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(btn_label, context.temp_allocator), small_size, 0).x + 12
-				btn_rect   := raylib.Rectangle{
-					col_x + cell_w - btn_w - cell_pad,
-					row_y + icon_size / 2 - f32(btn_height) / 2,
-					btn_w,
-					f32(btn_height),
-				}
-				if render_button(
-					btn_label, btn_rect,
-					{
-						disabled      = !can_afford,
-						text_color    = raylib.WHITE if can_afford else raylib.Color{100, 100, 100, 255},
-						button_color  = constants.UI_BUTTON_ACTION_COLOR if can_afford else raylib.Color{50, 50, 50, 255},
-						hover_color   = constants.UI_BUTTON_ACTION_HOVER if can_afford else raylib.Color{50, 50, 50, 255},
-						pressed_color = constants.UI_BUTTON_ACTION_PRESS if can_afford else raylib.Color{50, 50, 50, 255},
-					},
-				) {
-					if can_afford {
-						app.meta.cristales -= cost
-						app.meta.unlocked_relics[kind] = true
-						app.meta_dirty = true
-						play_sound(.CONFIRMATION, .UI)
-					}
+			// Botón toggle a la derecha
+			right_x := col_x + cell_w - cell_pad
+			btn_sz  := f32(btn_height)
+			mid_y   := row_y + icon_size / 2 - btn_sz / 2
+
+			if unlocked {
+				btn_label  := fmt.tprintf("Reembolsar %d C", cost)
+				btn_label_c := strings.clone_to_cstring(btn_label, context.temp_allocator)
+				btn_w      := raylib.MeasureTextEx(constants.game_fonts.regular, btn_label_c, f32(constants.UI_BUTTON_FONT_SIZE), 0).x + btn_sz
+				if render_button(btn_label, {right_x - btn_w, mid_y, btn_w, btn_sz}, {}) {
+					app.meta.unlocked_relics[kind] = false
+					app.meta.cristales += cost
+					app.meta_dirty = true
+					play_sound(.CLICK, .UI)
 				}
 			} else {
-				// Already unlocked — show "Unlocked" badge
-				badge_txt  := constants.get_text("PROGRESSION_UNLOCKED")
-				badge_cstr := strings.clone_to_cstring(badge_txt, context.temp_allocator)
-				badge_w    := raylib.MeasureTextEx(constants.game_fonts.regular, badge_cstr, small_size, 0).x
-				badge_x    := col_x + cell_w - badge_w - cell_pad
-				badge_y    := row_y + icon_size / 2 - small_size / 2
-				raylib.DrawTextEx(constants.game_fonts.regular, badge_cstr, {badge_x, badge_y}, small_size, 0, raylib.Color{80, 220, 80, 255})
+				can_buy_relic := app.meta.cristales >= cost
+				btn_label     := fmt.tprintf("%d C", cost)
+				btn_label_c   := strings.clone_to_cstring(btn_label, context.temp_allocator)
+				btn_w         := raylib.MeasureTextEx(constants.game_fonts.regular, btn_label_c, f32(constants.UI_BUTTON_FONT_SIZE), 0).x + btn_sz
+				if render_button(btn_label, {right_x - btn_w, mid_y, btn_w, btn_sz}, {disabled = !can_buy_relic}) && can_buy_relic {
+					app.meta.unlocked_relics[kind] = true
+					app.meta.cristales -= cost
+					app.meta_dirty = true
+					play_sound(.CLICK, .UI)
+				}
 			}
 
 			render_card_tooltip(app, entities.Card{kind = kind}, raylib.Rectangle{icon_x, row_y, icon_size, icon_size})

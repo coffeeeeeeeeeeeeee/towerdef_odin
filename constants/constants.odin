@@ -232,7 +232,7 @@ ENHANCE_MAX_LEVEL :: i32(5)  // Maximum levels a tower can receive via ENHANCE b
 
 WEAKEN_HP_REDUCTION      :: f32(0.10)   // HP reduction per WEAKEN stack (e.g. 2 stacks = -20% HP)
 DIVIDEND_RATE            :: f32(0.15)   // Fraction of wave spending returned per DIVIDEND stack
-AUTO_UPGRADE_INTERVAL    :: f32(2.0)    // Seconds between auto-upgrade ticks
+AUTO_UPGRADE_INTERVAL    :: f32(30.0)   // Seconds between auto-upgrade ticks (base; se divide a la mitad por stack adicional)
 BLOODLUST_BONUS_PER_KILL :: f32(0.001)  // Damage multiplier gained per kill per BLOODLUST stack (+0.1%)
 FLAWLESS_BONUS           :: i32(75)     // Gold reward per FLAWLESS stack for a perfect wave (no lives lost)
 FORMATION_BONUS          :: f32(0.25)   // Damage multiplier bonus per FORMATION stack for towers in a line of 3+

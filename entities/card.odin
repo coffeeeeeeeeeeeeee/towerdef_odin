@@ -2,6 +2,7 @@ package entities
 
 import "../constants"
 import "core:fmt"
+import "core:math"
 import "core:math/rand"
 import raylib "vendor:raylib"
 
@@ -121,10 +122,11 @@ RELIC_SPECS := []Relic_Spec{
 		desc_key     = "TOOLTIP_AUTO_UPGRADE_DESC",
 		icon_path    = "images/icon_auto.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("1 mejora cada %.0fs por stack", constants.AUTO_UPGRADE_INTERVAL)
+			return fmt.tprintf("Base %.0fs, se divide a la mitad por stack", constants.AUTO_UPGRADE_INTERVAL)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Auto-mejora x%d (cada %.0fs)", stacks, constants.AUTO_UPGRADE_INTERVAL)
+			interval := constants.AUTO_UPGRADE_INTERVAL / math.pow(f32(2), f32(stacks - 1))
+			return fmt.tprintf("Auto-mejora x%d (cada %.1fs)", stacks, interval)
 		},
 	},
 	{
@@ -467,7 +469,7 @@ deal_guaranteed_hand :: proc(sim: ^Simulation, meta: ^Meta_State) {
 	rel_candidates := [4]Card_Kind{.INTEREST_BOOST, .WEAKEN, .BLOODLUST, .FLAWLESS}
 	rel := make([dynamic]Card_Kind, context.temp_allocator)
 	for k in rel_candidates {
-		if meta.unlocked_relics[k] && !relic_is_maxed(sim, k) { append(&rel, k) }
+		if meta_is_relic_unlocked(meta, k) && !relic_is_maxed(sim, k) { append(&rel, k) }
 	}
 	slice_shuffle(rel[:])
 

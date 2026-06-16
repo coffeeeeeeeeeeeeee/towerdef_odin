@@ -67,11 +67,13 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 	// Update ice pulses
 	update_ice_pulses(app, s_dt)
 
-	// Auto-upgrade: cada AUTO_UPGRADE_INTERVAL actualiza las torres más baratas
+	// Auto-upgrade: intervalo base que se divide a la mitad por cada stack adicional.
+	// 1 stack = 30s, 2 stacks = 15s, 3 stacks = 7.5s, etc.
 	if sim.relic_stacks[.AUTO_UPGRADE] > 0 && sim.started {
 		sim.auto_upgrade_timer -= s_dt
 		if sim.auto_upgrade_timer <= 0 {
-			sim.auto_upgrade_timer = constants.AUTO_UPGRADE_INTERVAL
+			stacks := sim.relic_stacks[.AUTO_UPGRADE]
+			sim.auto_upgrade_timer = constants.AUTO_UPGRADE_INTERVAL / math.pow(f32(2), f32(stacks - 1))
 			update_auto_upgrade(app)
 		}
 	}
@@ -451,9 +453,11 @@ generate_card_selection :: proc(app: ^entities.App_State) {
 	tower_pool[tower_count + 1] = {kind = .OBSTACLE}
 	tower_count += 2
 
-	// Contar cuántos tipos distintos de reliquias tiene el jugador activos (stacks > 0).
+	// Contar cuántos tipos distintos de reliquias ocupa el jugador.
+	// SHOPPING_CART no cuenta contra el límite — expande el cap pero no ocupa slot.
 	active_relic_types := 0
 	for spec in entities.RELIC_SPECS {
+		if spec.kind == .SHOPPING_CART { continue }
 		if entities.relic_stacks(sim, spec.kind) > 0 {
 			active_relic_types += 1
 		}
@@ -469,7 +473,7 @@ generate_card_selection :: proc(app: ^entities.App_State) {
 		already_has  := entities.relic_stacks(sim, spec.kind) > 0
 		expands_cap  := spec.kind == .SHOPPING_CART  // siempre disponible — expande el cap
 		if at_relic_cap && !already_has && !expands_cap { continue }
-		if app.meta.unlocked_relics[spec.kind] && !entities.relic_is_maxed(&app.sim, spec.kind) {
+		if entities.meta_is_relic_unlocked(&app.meta, spec.kind) && !entities.relic_is_maxed(&app.sim, spec.kind) {
 			append(&relic_pool, entities.Card{kind = spec.kind})
 		}
 	}
@@ -815,7 +819,7 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 				if drop_count < MAX_DROP { drop_pool[drop_count] = {kind = .OBSTACLE}; drop_count += 1 }
 				if drop_count < MAX_DROP { drop_pool[drop_count] = {kind = .OBSTACLE}; drop_count += 1 }
 				for c in all_loot_relics {
-					if app.meta.unlocked_relics[c.kind] && !entities.relic_is_maxed(sim, c.kind) && drop_count < MAX_DROP {
+					if entities.meta_is_relic_unlocked(&app.meta, c.kind) && !entities.relic_is_maxed(sim, c.kind) && drop_count < MAX_DROP {
 						drop_pool[drop_count] = c
 						drop_count += 1
 					}
@@ -2053,7 +2057,7 @@ airdrop_collect :: proc(app: ^entities.App_State, row, col: i32) -> bool {
 		candidates  : [dynamic]entities.Card_Kind
 		defer delete(candidates)
 		for spec in entities.RELIC_SPECS {
-			if app.meta.unlocked_relics[spec.kind] && !entities.relic_is_maxed(sim, spec.kind) {
+			if entities.meta_is_relic_unlocked(&app.meta, spec.kind) && !entities.relic_is_maxed(sim, spec.kind) {
 				append(&candidates, spec.kind)
 			}
 		}

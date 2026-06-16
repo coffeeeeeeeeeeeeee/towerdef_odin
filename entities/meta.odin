@@ -7,15 +7,15 @@ import "../constants"
 
 // Version 1: original (cristales, unlocks).
 // Version 2: agrega progreso de campaña (campaign_completed/best/stars).
-//   Migración: archivos v1 se descartan y arrancan zero — los unlocks de
-//   relics/towers y los cristales se pierden. Aceptable durante desarrollo;
-//   para un release habría que hacer parsing v1 explícito y upgrade.
-META_SAVE_VERSION :: u32(3)
+// Version 3: agrega SHOPPING_CART/LUMBERJACK al enum (size change).
+// Version 4: costos de reliquias por rareza (bool arrays, misma estructura que v3 pero distinto significado).
+//   Migración: archivos anteriores se descartan y arrancan zero. Aceptable durante desarrollo.
+META_SAVE_VERSION :: u32(4)
 META_SAVE_PATH    :: "savegame.bin"
 
 // Persistent state across runs — saved to savegame.bin in the executable directory.
 Meta_State :: struct {
-	version:         u32,
+	version:          u32,
 	cristales:       i32,                    // total accumulated currency
 	total_runs:      i32,                    // total runs completed
 	best_score:      i32,                    // best run score ever
@@ -33,16 +33,16 @@ Meta_State :: struct {
 	_pad: [16]u8,  // reserva para futuro (reducido de 55 al meter campaign_*)
 }
 
-// Towers that are always available without spending cristales.
-meta_is_tower_unlocked :: proc(meta: ^Meta_State, t: constants.Tower_Type) -> bool {
+// Towers always free — never require cristales.
+meta_tower_is_free :: proc(t: constants.Tower_Type) -> bool {
 	#partial switch t {
 	case .ARCHER, .CANNON, .SNIPER:
 		return true
 	}
-	return meta.unlocked_towers[int(t)]
+	return false
 }
 
-// Cristal cost to unlock a tower (0 for always-free towers).
+// Cristales necesarios para desbloquear una torre (0 = siempre libre).
 meta_tower_unlock_cost :: proc(t: constants.Tower_Type) -> i32 {
 	#partial switch t {
 	case .ICE:     return 5
@@ -55,28 +55,43 @@ meta_tower_unlock_cost :: proc(t: constants.Tower_Type) -> i32 {
 	return 0
 }
 
-// Tier of a relic — determines its unlock cost.
-// Returns 0 for non-relics (TOWER, OBSTACLE).
-meta_relic_tier :: proc(kind: Card_Kind) -> i32 {
-	#partial switch kind {
-	case .INTEREST_BOOST, .LOOT, .RECYCLER, .SCOUT, .WEAKEN, .LUMBERJACK:
-		return 1
-	case .DIVIDEND, .STEAL, .BLOODLUST, .FLAWLESS, .MEMENTO, .WARMED_UP:
-		return 2
-	case .AUTO_UPGRADE, .FORMATION, .FROZEN_AMP, .VETERAN, .CRYPTOBRO, .SHOPPING_CART:
-		return 3
+// Torre desbloqueada si es gratuita o si fue comprada con cristales.
+meta_is_tower_unlocked :: proc(meta: ^Meta_State, t: constants.Tower_Type) -> bool {
+	if meta_tower_is_free(t) { return true }
+	return meta.unlocked_towers[int(t)]
+}
+
+// Cristales necesarios para desbloquear una reliquia según su rareza.
+// COMMON=1, UNCOMMON=2, RARE=4, EPIC=6, UNIQUE=10
+meta_relic_unlock_cost :: proc(kind: Card_Kind) -> i32 {
+	spec, ok := relic_spec_for(kind)
+	if !ok { return 0 }
+	switch spec.rarity {
+	case .COMMON:   return 1
+	case .UNCOMMON: return 2
+	case .RARE:     return 4
+	case .EPIC:     return 6
+	case .UNIQUE:   return 10
 	}
 	return 0
 }
 
-// Cristal cost to unlock a relic based on tier (Tier1=5, Tier2=10, Tier3=20).
-meta_relic_unlock_cost :: proc(kind: Card_Kind) -> i32 {
-	switch meta_relic_tier(kind) {
-	case 1: return 5
-	case 2: return 10
-	case 3: return 20
-	case: return 0
+// Reliquia desbloqueada si fue comprada con cristales.
+meta_is_relic_unlocked :: proc(meta: ^Meta_State, kind: Card_Kind) -> bool {
+	return meta.unlocked_relics[kind]
+}
+
+// Tier de una reliquia para agruparla en la pantalla de progresión (1-3).
+// Returns 0 para no-reliquias.
+meta_relic_tier :: proc(kind: Card_Kind) -> i32 {
+	spec, ok := relic_spec_for(kind)
+	if !ok { return 0 }
+	switch spec.rarity {
+	case .COMMON:            return 1
+	case .UNCOMMON:          return 2
+	case .RARE, .EPIC, .UNIQUE: return 3
 	}
+	return 0
 }
 
 // Per-component cristal contributions — used for the end-of-run breakdown.
