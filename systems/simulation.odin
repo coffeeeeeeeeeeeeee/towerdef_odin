@@ -678,7 +678,7 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			entities.enemy_set_path(&enemy, spawn.path)
 
 			append(&sim.enemies, enemy)
-			play_sound(.ENEMY_SPAWN, .SFX)
+			play_sound_at(.ENEMY_SPAWN, .SFX, enemy.x, enemy.y, app)
 		}
 	}
 }
@@ -718,7 +718,7 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 				damage = constants.ENEMY_GOAL_DAMAGE_BOSS
 			}
 			entities.app_take_damage(app, damage)
-			play_sound(.ENEMY_REACH_GOAL, .SFX)
+			play_sound_at(.ENEMY_REACH_GOAL, .SFX, enemy.x, enemy.y, app)
 
 			// Invalida punteros de proyectiles antes de remover
 			nullify_projectile_targets(sim, enemy)
@@ -754,7 +754,7 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 
 		// Check death
 		if enemy.hp <= 0 {
-			play_sound(.ENEMY_DEATH, .SFX)
+			play_sound_at(.ENEMY_DEATH, .SFX, enemy.x, enemy.y, app)
 
 			// Enemy died - give reward
 			reward := constants.ENEMY_REWARD_DEFAULT
@@ -998,7 +998,7 @@ update_ice_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 		tower.range,
 	)
 	append(&app.sim.ice_pulses, pulse)
-	play_sound(.TOWER_ICE, .SFX)
+	play_sound_at(.TOWER_ICE, .SFX, f32(tower.c), f32(tower.r), app)
 }
 
 // Update TESLA tower — instant chain lightning hitting up to TESLA_CHAIN_COUNT enemies
@@ -1081,7 +1081,7 @@ update_tesla_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 		cur_dmg *= constants.TESLA_CHAIN_FALLOFF
 	}
 
-	play_sound(.TOWER_ICE, .SFX)
+	play_sound_at(.TOWER_ICE, .SFX, f32(tower.c), f32(tower.r), app)
 }
 
 // Update MORTAR tower — fires a slow ballistic shell without waiting for alignment
@@ -1109,7 +1109,7 @@ update_mortar_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 		tower.c,
 	)
 	append(&sim.projectiles, proj)
-	play_sound(.TOWER_CANNON, .SFX)
+	play_sound_at(.TOWER_CANNON, .SFX, f32(tower.c), f32(tower.r), app)
 }
 
 // Recalcula el enhance_bonus de cada torre según los Potenciadores activos en rango.
@@ -1171,7 +1171,7 @@ update_laser_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, dt:
 				is_crit,
 			)
 			entities.laser_reset_accumulation(tower)
-			play_sound(.TOWER_LASER, .SFX)
+			play_sound_at(.TOWER_LASER, .SFX, f32(tower.c), f32(tower.r), app)
 		}
 	}
 
@@ -1238,10 +1238,10 @@ update_projectile_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower
 
 		// SFX: play tower fire sound
 		switch tower.type {
-		case .ARCHER:  play_sound(.TOWER_ARCHER, .SFX)
-		case .CANNON:  play_sound(.TOWER_CANNON, .SFX)
-		case .SNIPER:  play_sound(.TOWER_SNIPER, .SFX)
-		case .MISSILE: play_sound(.TOWER_MISSILE, .SFX)
+		case .ARCHER:  play_sound_at(.TOWER_ARCHER,  .SFX, f32(tower.c), f32(tower.r), app)
+		case .CANNON:  play_sound_at(.TOWER_CANNON,  .SFX, f32(tower.c), f32(tower.r), app)
+		case .SNIPER:  play_sound_at(.TOWER_SNIPER,  .SFX, f32(tower.c), f32(tower.r), app)
+		case .MISSILE: play_sound_at(.TOWER_MISSILE, .SFX, f32(tower.c), f32(tower.r), app)
 		case .LASER, .ICE, .ENHANCE, .TESLA, .MORTAR: // handled separately
 		}
 	}
@@ -1366,14 +1366,14 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 				proj.target.hp -= scaled_dmg
 				if source_tower != nil { source_tower.total_damage += scaled_dmg }
 				spawn_damage_number(app, proj.target.x + 0.5, proj.target.y + 0.5, scaled_dmg, is_crit)
-				play_sound(.PROJECTILE_HIT, .SFX)
+				play_sound_at(.PROJECTILE_HIT, .SFX, proj.target.x, proj.target.y, app)
 			}
 
 			// AoE: se activa siempre al impactar, haya o no objetivo vivo.
 			// Esto genera la explosión "en el suelo" cuando el objetivo murió antes de ser alcanzado.
 			if proj.aoe > 0 {
 				spawn_explosion(app, proj.x, proj.y, proj.aoe)
-				play_sound(.EXPLOSION, .SFX)
+				play_sound_at(.EXPLOSION, .SFX, proj.x, proj.y, app)
 
 				for &enemy in sim.enemies {
 					if proj.target != nil && &enemy == proj.target {

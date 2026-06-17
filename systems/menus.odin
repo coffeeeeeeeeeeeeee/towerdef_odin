@@ -168,7 +168,7 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	button_font_size   := f32(constants.UI_BUTTON_FONT_SIZE)
 	gap                := i32(10)
 
-	savegame_exists := os.exists(entities.META_SAVE_PATH)
+	savegame_exists := os.exists(entities.meta_save_path())
 
 	// Slot count: Continue (conditional) + Nueva Campaña + Editor + Settings + Progression + Exit
 	slot_count := (4 if constants.DEVELOPER else 3) + (1 if savegame_exists else 0)
@@ -1590,15 +1590,18 @@ settings_row_pct_slider :: proc(
 	return
 }
 
-// Fila label + botón toggle ON/OFF. Devuelve true si se clickeó — caller debe
+// Fila label + switch ON/OFF. Devuelve true si se clickeó — caller debe
 // togglear el bool y aplicar side effects.
 settings_row_toggle :: proc(
 	label_key: string, value: bool,
 	cx, ctrl_x, item_y, btn_width, btn_height: i32, font_size: f32,
 ) -> bool {
 	settings_draw_label(constants.get_text(label_key), cx, item_y, font_size)
-	on_off := constants.get_text("UI_ON") if value else constants.get_text("UI_OFF")
-	return render_button(on_off, {f32(ctrl_x), f32(item_y), f32(btn_width), f32(btn_height)})
+	SWITCH_W :: f32(52)
+	SWITCH_H :: f32(26)
+	sw_x := f32(ctrl_x) + f32(btn_width) - SWITCH_W
+	sw_y := f32(item_y) + (f32(btn_height) - SWITCH_H) / 2
+	return render_switch("", value, {sw_x, sw_y, SWITCH_W, SWITCH_H})
 }
 
 render_settings_menu :: proc(app: ^entities.App_State) {
@@ -1615,8 +1618,8 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 	btn_width := i32(constants.UI_BUTTON_WIDTH)
 	spacing := i32(constants.UI_PANEL_MARGIN)
 
-	// Panel dimensions — 13 setting rows
-	num_items :: 13
+	// Panel dimensions — 14 setting rows
+	num_items :: 14
 	panel_width := i32(350)
 	panel_inner_height := i32(num_items) * (item_height + spacing) - spacing
 	panel_total_height := panel_inner_height + 60 // extra for title + padding
@@ -1641,6 +1644,7 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 		raylib.SetMasterVolume(new_master)
 		set_volume(.UI,  new_master * app.settings.ui_volume)
 		set_volume(.SFX, new_master * app.settings.sfx_volume)
+		music_set_volume(new_master * app.settings.music_volume)
 	}
 	item_y += item_height + spacing
 
@@ -1657,6 +1661,14 @@ render_settings_menu :: proc(app: ^entities.App_State) {
 		cx, ctrl_x, item_y, btn_width, btn_height, font_size); ch {
 		app.settings.sfx_volume = new_sfx_vol
 		set_volume(.SFX, app.settings.master_volume * new_sfx_vol)
+	}
+	item_y += item_height + spacing
+
+	// --- Music Volume ---
+	if new_music_vol, ch := settings_row_pct_slider("SETTINGS_MUSIC_VOLUME", app.settings.music_volume,
+		cx, ctrl_x, item_y, btn_width, btn_height, font_size); ch {
+		app.settings.music_volume = new_music_vol
+		music_set_volume(app.settings.master_volume * new_music_vol)
 	}
 	item_y += item_height + spacing
 

@@ -759,6 +759,8 @@ UI_SEGMENTS      :: 8
 UI_ROUNDNESS     :: f32(0.05)
 UI_SHADOW_OFFSET :: 4
 
+UI_SLIDER_ROUNDNESS :: f32(0.5)
+
 UI_PANEL_HEADER_SIZE :: 32  // Font size for the panel header/hero text
 UI_PANEL_TITLE_SIZE  :: 22
 UI_PANEL_LABEL_SIZE  :: 18

@@ -203,6 +203,7 @@ Settings :: struct {
 	master_volume: f32,
 	ui_volume:     f32, // inicializar en 1.0
 	sfx_volume:    f32, // inicializar en 1.0
+	music_volume:  f32, // inicializar en 1.0
 	
 	// Display
 	fullscreen: bool,

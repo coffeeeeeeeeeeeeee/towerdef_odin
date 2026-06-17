@@ -553,20 +553,20 @@ render_slider :: proc(rect: raylib.Rectangle, value: f32) -> f32 {
 			track_rect.width,
 			track_rect.height,
 		},
-		constants.UI_ROUNDNESS,
+		constants.UI_SLIDER_ROUNDNESS,
 		constants.UI_SEGMENTS,
 		constants.UI_BUTTON_SHADOW_COLOR,
 	)
 
 	// Track background
-	raylib.DrawRectangleRounded(track_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, constants.UI_BUTTON_COLOR)
+	raylib.DrawRectangleRounded(track_rect, constants.UI_SLIDER_ROUNDNESS, constants.UI_SEGMENTS, constants.UI_BUTTON_COLOR)
 
 	// Filled portion (left of thumb)
 	fill_width := new_value * rect.width
 	if fill_width > 0 {
 		raylib.DrawRectangleRounded(
 			{rect.x, track_y, fill_width, track_height},
-			constants.UI_ROUNDNESS,
+			constants.UI_SLIDER_ROUNDNESS,
 			constants.UI_SEGMENTS,
 			constants.UI_BUTTON_HOVER_COLOR,
 		)
@@ -1394,4 +1394,68 @@ render_input :: proc(
 	}
 
 	return confirmed
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// render_switch — toggle ON/OFF estilo píldora con círculo deslizante.
+//
+// Uso:
+//   if render_switch("Música", música_activa, {x, y, 52, 28}) {
+//       música_activa = !música_activa
+//   }
+//
+// rect: posición y tamaño del interruptor (sin el label).
+// El label se dibuja alineado a la izquierda del rect, centrado verticalmente.
+// Retorna true si fue clickeado en este frame.
+// ─────────────────────────────────────────────────────────────────────────────
+render_switch :: proc(label: string, value: bool, rect: raylib.Rectangle) -> bool {
+	mx := f32(raylib.GetMouseX())
+	my := f32(raylib.GetMouseY())
+
+	hovered := mx >= rect.x && mx <= rect.x + rect.width &&
+	           my >= rect.y && my <= rect.y + rect.height
+	clicked  := hovered && raylib.IsMouseButtonPressed(.LEFT)
+
+	// ── Colores ───────────────────────────────────────────────────────────────
+	SWITCH_ON       :: raylib.Color{ 60, 190,  90, 255}
+	SWITCH_ON_HOVER :: raylib.Color{ 80, 210, 110, 255}
+	SWITCH_OFF      :: raylib.Color{110, 110, 110, 255}
+	SWITCH_OFF_HOVER:: raylib.Color{140, 140, 140, 255}
+
+	track_color: raylib.Color
+	if value {
+		track_color = SWITCH_ON_HOVER if hovered else SWITCH_ON
+	} else {
+		track_color = SWITCH_OFF_HOVER if hovered else SWITCH_OFF
+	}
+
+	// ── Track (píldora) ───────────────────────────────────────────────────────
+	roundness :: f32(1.0)   // completamente redondo
+	segments  :: i32(16)
+	raylib.DrawRectangleRounded(rect, roundness, segments, track_color)
+
+	// ── Círculo deslizante ────────────────────────────────────────────────────
+	pad    := rect.height * 0.12
+	radius := rect.height / 2 - pad
+	circle_y := rect.y + rect.height / 2
+	circle_x: f32
+	if value {
+		circle_x = rect.x + rect.width - radius - pad * 2
+	} else {
+		circle_x = rect.x + radius + pad * 2
+	}
+	raylib.DrawCircle(i32(circle_x), i32(circle_y), radius, raylib.WHITE)
+
+	// ── Label a la izquierda ──────────────────────────────────────────────────
+	if label != "" {
+		font      := constants.game_fonts.regular
+		font_size := f32(constants.UI_BUTTON_FONT_SIZE)
+		label_c   := strings.clone_to_cstring(label, context.temp_allocator)
+		label_w   := raylib.MeasureTextEx(font, label_c, font_size, 0).x
+		label_x   := rect.x - label_w - 10
+		label_y   := rect.y + (rect.height - font_size) / 2
+		raylib.DrawTextEx(font, label_c, {label_x, label_y}, font_size, 0, constants.UI_TEXT_COLOR)
+	}
+
+	return clicked
 }

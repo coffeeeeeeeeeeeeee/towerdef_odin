@@ -11,7 +11,23 @@ import "../constants"
 // Version 4: costos de reliquias por rareza (bool arrays, misma estructura que v3 pero distinto significado).
 //   Migración: archivos anteriores se descartan y arrancan zero. Aceptable durante desarrollo.
 META_SAVE_VERSION :: u32(4)
-META_SAVE_PATH    :: "savegame.bin"
+GAME_SAVE_DIR     :: "towerdef"
+
+// Devuelve la ruta al archivo de guardado según la plataforma.
+// Usa context.temp_allocator — válido en el frame actual.
+// Linux : ~/.local/share/towerdef/savegame.bin
+// Windows: savegame.bin (directorio junto al ejecutable)
+meta_save_path :: proc() -> string {
+	when ODIN_OS == .Linux {
+		home := os.get_env("HOME", context.temp_allocator)
+		if home == "" { return "savegame.bin" }
+		dir := fmt.tprintf("%s/.local/share/%s", home, GAME_SAVE_DIR)
+		os.make_directory(dir)
+		return fmt.tprintf("%s/savegame.bin", dir)
+	} else {
+		return "savegame.bin"
+	}
+}
 
 // Persistent state across runs — saved to savegame.bin in the executable directory.
 Meta_State :: struct {
@@ -148,29 +164,30 @@ meta_record_campaign_result :: proc(
 	}
 }
 
-// Save meta state to savegame.bin.
+// Save meta state al archivo de guardado de la plataforma.
 meta_save :: proc(meta: ^Meta_State) {
 	meta.version = META_SAVE_VERSION
 	data := mem.ptr_to_bytes(meta)
-	os.write_entire_file(META_SAVE_PATH, data)
+	os.write_entire_file(meta_save_path(), data)
 }
 
-// Load meta state from savegame.bin.
+// Load meta state desde el archivo de guardado de la plataforma.
 // Returns a zeroed Meta_State if the file is missing or the version mismatches.
 // IMPORTANTE: hoy no hay migración entre versiones — un save de versión vieja
 // se descarta (cristales y unlocks vuelven a 0). Esto sólo se acepta porque el
 // juego está en desarrollo. Para release implementar parser por versión
 // (ver auditoría issue #2).
 meta_load :: proc() -> Meta_State {
+	path := meta_save_path()
 	meta := Meta_State{}
-	data, ok := os.read_entire_file_from_filename(META_SAVE_PATH)
+	data, ok := os.read_entire_file_from_filename(path)
 	if !ok { return meta }
 	defer delete(data)
 
 	if len(data) != size_of(Meta_State) {
 		fmt.printfln(
-			"[meta_load] descartando savegame.bin: size=%d (esperado %d). Progreso reseteado.",
-			len(data), size_of(Meta_State),
+			"[meta_load] descartando %s: size=%d (esperado %d). Progreso reseteado.",
+			path, len(data), size_of(Meta_State),
 		)
 		return Meta_State{}
 	}
@@ -178,8 +195,8 @@ meta_load :: proc() -> Meta_State {
 	meta = (cast(^Meta_State)raw_data(data))^
 	if meta.version != META_SAVE_VERSION {
 		fmt.printfln(
-			"[meta_load] descartando savegame.bin: version=%d (esperado %d). Progreso reseteado.",
-			meta.version, META_SAVE_VERSION,
+			"[meta_load] descartando %s: version=%d (esperado %d). Progreso reseteado.",
+			path, meta.version, META_SAVE_VERSION,
 		)
 		return Meta_State{}
 	}

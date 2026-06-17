@@ -69,6 +69,8 @@ main :: proc() {
 	// Initialize audio system
 	systems.audio_init()
 	defer systems.audio_cleanup()
+	systems.music_init()
+	defer systems.music_cleanup()
 
 	// Load nebula background shader
 	systems.nebula_init()
@@ -89,6 +91,7 @@ main :: proc() {
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
 	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)
+	systems.music_set_volume(initial_settings.master_volume * initial_settings.music_volume)
 
 	// Initialize game
 	app_init(initial_settings)
@@ -208,6 +211,12 @@ main :: proc() {
 			}
 		}
 
+		// Update music stream (every frame)
+		// muffled = PAUSED o shop abierto durante PLAYING
+		music_muffled := app.state == .PAUSED ||
+		                 (app.state == .PLAYING && app.sim.shop.active)
+		systems.music_update(app.state, dt, music_muffled)
+
 		// Update simulation (if playing)
 		if app.state == .PLAYING {
 			systems.simulation_update(&app, dt)
@@ -311,7 +320,7 @@ app: entities.App_State
 // vez que se guarda. Después de la migración, .json puede borrarse manualmente.
 // ─────────────────────────────────────────────────────────────────────────────
 
-SETTINGS_BIN_VERSION  :: u32(1)
+SETTINGS_BIN_VERSION  :: u32(2)
 SETTINGS_BIN_PATH     :: "settings.bin"
 SETTINGS_JSON_PATH    :: "settings.json"
 
@@ -344,6 +353,7 @@ load_settings :: proc() -> entities.Settings {
 		master_volume       = 1.0,
 		ui_volume           = 1.0,
 		sfx_volume          = 1.0,
+		music_volume        = 1.0,
 		fullscreen          = false,
 		vsync               = true,
 		antialiasing        = 2, // 4x default
