@@ -320,6 +320,24 @@ start_next_wave :: proc(app: ^entities.App_State) {
 // la UI del estado y hace que cada acción sea testeable/replayable.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Devuelve true si el jugador NO puede comprar un relic de tipo 'kind' porque
+// ya alcanzó el límite de tipos distintos y no tiene ningún stack de ese tipo.
+// SHOPPING_CART siempre devuelve false (nunca está bloqueado — expande el cap).
+shop_relic_cap_blocks :: proc(sim: ^entities.Simulation, kind: entities.Card_Kind) -> bool {
+	if kind == .SHOPPING_CART { return false }
+	// Si ya posee algún stack de este tipo, puede acumular más sin ocupar nuevo slot.
+	if entities.relic_stacks(sim, kind) > 0 { return false }
+	active_relic_types := 0
+	for spec in entities.RELIC_SPECS {
+		if spec.kind == .SHOPPING_CART { continue }
+		if entities.relic_stacks(sim, spec.kind) > 0 {
+			active_relic_types += 1
+		}
+	}
+	relic_cap := constants.MAX_ACTIVE_RELICS + int(entities.relic_stacks(sim, .SHOPPING_CART))
+	return active_relic_types >= relic_cap
+}
+
 // Compra el slot indicado: descuenta oro, marca bought, aplica el efecto
 // (relic stack o añadir carta a la mano), y rompe el skip streak.
 // El caller debe verificar que el slot sea comprable (no bought, plata suficiente).
@@ -331,6 +349,11 @@ shop_perform_buy :: proc(app: ^entities.App_State, slot_idx: int) {
 
 	price := shop_price_for_card(app, card)
 	if sim.money < price { return }
+
+	// Bloquear compra de relic si ya se alcanzó el límite de tipos distintos.
+	if entities.is_relic(card.kind) && card.kind != .LUMBERJACK {
+		if shop_relic_cap_blocks(sim, card.kind) { return }
+	}
 
 	sim.money -= price
 	sim.shop.bought[slot_idx] = true

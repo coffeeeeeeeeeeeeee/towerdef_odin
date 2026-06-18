@@ -2437,7 +2437,9 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		locked   := sim.shop.locked[i]
 		is_relic := entities.is_relic(card.kind)
 		price    := shop_price_for_card(app, card)
-		can_buy  := price <= sim.money
+		relic_capped := entities.is_relic(card.kind) && card.kind != .LUMBERJACK &&
+		               shop_relic_cap_blocks(sim, card.kind)
+		can_buy  := price <= sim.money && !relic_capped
 		synergy  := shop_card_has_synergy(sim, card)
 
 		// Carta comprada: no renderizar — el slot queda vacío
