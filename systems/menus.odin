@@ -2457,6 +2457,9 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		// show_price = false: dibujamos el precio nosotros con el modificador del bioma
 		render_card(app, card, cx, draw_cy, false, can_buy, bg, false)
 
+		// Rectángulo real de la textura (ajustado a proporciones de la imagen)
+		tex_rect := card_bg_draw_rect(card, cx, draw_cy)
+
 		// Precio con modificador de bioma — sobreescribe el que dibujaría render_card
 		cost_str  := fmt.ctprintf("$%d", price)
 		cost_size : f32 = 15
@@ -2475,10 +2478,10 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		// lock_locked cuando el slot está bloqueado; lock_unlocked al hacer hover sobre
 		// un slot desbloqueado (pista visual de que click derecho lo bloquea).
 		LOCK_BG_PAD  :: f32(3)
-		lock_bg_rect := raylib.Rectangle{cx + 4, draw_cy + 4, LOCK_ICON_SIZE + LOCK_BG_PAD*2, LOCK_ICON_SIZE + LOCK_BG_PAD*2}
+		lock_bg_rect := raylib.Rectangle{tex_rect.x + 4, tex_rect.y + 4, LOCK_ICON_SIZE + LOCK_BG_PAD*2, LOCK_ICON_SIZE + LOCK_BG_PAD*2}
 		if locked {
 			raylib.DrawRectangleRoundedLinesEx(
-				{cx, draw_cy, CARD_W, CARD_H},
+				tex_rect,
 				constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 2.5,
 				raylib.Color{220, 180, 60, 240},
 			)
@@ -2498,7 +2501,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		// Indicador de sinergia — símbolo "~" en esquina superior derecha
 		if synergy {
 			draw_text_with_outline(
-				fmt.ctprintf("~"), {cx + CARD_W - 18, draw_cy + 6}, 14, 0,
+				fmt.ctprintf("~"), {tex_rect.x + tex_rect.width - 18, tex_rect.y + 6}, 14, 0,
 				raylib.Color{120, 230, 255, 255}, raylib.Color{0, 0, 0, 200}, 1,
 				constants.game_fonts.bold,
 			)
@@ -2507,7 +2510,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		// Borde dorado al hacer hover sobre carta comprable (sin lock, que ya tiene su borde)
 		if hovered && can_buy && !locked {
 			raylib.DrawRectangleRoundedLinesEx(
-				{cx, draw_cy, CARD_W, CARD_H},
+				tex_rect,
 				constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 2.5,
 				raylib.Color{255, 215, 0, 220},
 			)

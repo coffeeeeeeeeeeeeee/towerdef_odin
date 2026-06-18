@@ -20,6 +20,12 @@ Icons :: struct {
 	money:         raylib.Texture2D,
 	lock_locked:   raylib.Texture2D,
 	lock_unlocked: raylib.Texture2D,
+
+	// Card background images per rarity
+	card_bg_common:   raylib.Texture2D,
+	card_bg_uncommon: raylib.Texture2D,
+	card_bg_rare:     raylib.Texture2D,
+	card_bg_epic:     raylib.Texture2D,
 }
 
 // Global fonts instance
@@ -88,6 +94,11 @@ load_icons :: proc() {
 	game_icons.lock_locked   = raylib.LoadTexture("images/icon_lock_locked.png")
 	game_icons.lock_unlocked = raylib.LoadTexture("images/icon_lock_unlocked.png")
 
+	game_icons.card_bg_common   = raylib.LoadTexture("images/cards/common.png")
+	game_icons.card_bg_uncommon = raylib.LoadTexture("images/cards/uncommon.png")
+	game_icons.card_bg_rare     = raylib.LoadTexture("images/cards/rare.png")
+	game_icons.card_bg_epic     = raylib.LoadTexture("images/cards/epic.png")
+
 	// Generate mipmaps and enable trilinear filtering for smooth downscaling
 	raylib.GenTextureMipmaps(&game_icons.damage)
 	raylib.GenTextureMipmaps(&game_icons.speed)
@@ -106,6 +117,16 @@ load_icons :: proc() {
 	raylib.SetTextureFilter(game_icons.money,         .TRILINEAR)
 	raylib.SetTextureFilter(game_icons.lock_locked,   .TRILINEAR)
 	raylib.SetTextureFilter(game_icons.lock_unlocked, .TRILINEAR)
+
+	raylib.GenTextureMipmaps(&game_icons.card_bg_common)
+	raylib.GenTextureMipmaps(&game_icons.card_bg_uncommon)
+	raylib.GenTextureMipmaps(&game_icons.card_bg_rare)
+	raylib.GenTextureMipmaps(&game_icons.card_bg_epic)
+
+	raylib.SetTextureFilter(game_icons.card_bg_common,   .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.card_bg_uncommon, .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.card_bg_rare,     .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.card_bg_epic,     .TRILINEAR)
 }
 
 // Unload all icon textures
@@ -118,6 +139,11 @@ unload_icons :: proc() {
 	raylib.UnloadTexture(game_icons.money)
 	raylib.UnloadTexture(game_icons.lock_locked)
 	raylib.UnloadTexture(game_icons.lock_unlocked)
+
+	raylib.UnloadTexture(game_icons.card_bg_common)
+	raylib.UnloadTexture(game_icons.card_bg_uncommon)
+	raylib.UnloadTexture(game_icons.card_bg_rare)
+	raylib.UnloadTexture(game_icons.card_bg_epic)
 }
 
 // Unload all fonts

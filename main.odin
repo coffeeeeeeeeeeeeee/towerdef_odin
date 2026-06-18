@@ -66,6 +66,10 @@ main :: proc() {
 	entities.load_relic_icons()
 	defer entities.unload_relic_icons()
 
+	// Initialize UI shaders
+	systems.card_grayscale_shader_init()
+	defer systems.card_grayscale_shader_unload()
+
 	// Initialize audio system
 	systems.audio_init()
 	defer systems.audio_cleanup()

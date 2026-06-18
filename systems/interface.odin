@@ -7,6 +7,18 @@ import "core:math"
 import "core:strings"
 import "vendor:raylib"
 
+// ── Grayscale shader (cartas no disponibles) ──────────────────────────────────
+
+_card_grayscale_shader: raylib.Shader
+
+card_grayscale_shader_init :: proc() {
+	_card_grayscale_shader = raylib.LoadShader(nil, "assets/grayscale.glsl")
+}
+
+card_grayscale_shader_unload :: proc() {
+	raylib.UnloadShader(_card_grayscale_shader)
+}
+
 // Formatea un número para el HUD: < 1000 → "999", 1000–9999 → "1.2k", ≥ 10000 → "12k"
 format_short :: proc(n: i32) -> string {
 	if n < 1000 { return fmt.tprintf("%d", n) }
@@ -1006,36 +1018,50 @@ render_card :: proc(
 	bg_override := raylib.Color{},
 	show_price: bool = false,
 ) {
-	bg: raylib.Color
-	if !can_afford {
-		bg = raylib.Color{110, 110, 115, 255}
-	} else if bg_override.a > 0 {
-		bg = bg_override
+	// Calcular dimensiones de la textura primero (necesario para la sombra)
+	rarity      := entities.card_rarity(card)
+	card_bg_tex := rarity_card_tex(rarity)
+
+	draw_x, draw_y, draw_w, draw_h: f32
+	if card_bg_tex != nil {
+		img_w  := f32(card_bg_tex.width)
+		img_h  := f32(card_bg_tex.height)
+		scale  := min(CARD_W / img_w, CARD_H / img_h)
+		draw_w  = img_w * scale
+		draw_h  = img_h * scale
+		draw_x  = x + (CARD_W - draw_w) / 2
+		draw_y  = y + (CARD_H - draw_h) / 2
 	} else {
-		bg = constants.UI_PANEL_COLOR
+		draw_x = x;  draw_y = y
+		draw_w = CARD_W;  draw_h = CARD_H
 	}
 
-	// Sombra de la carta
+	// Sombra — ajustada al tamaño real de la textura (fuera del shader)
 	card_shadow_rect := raylib.Rectangle{
-		x + constants.UI_SHADOW_OFFSET,
-		y + constants.UI_SHADOW_OFFSET,
-		CARD_W, CARD_H
+		draw_x + constants.UI_SHADOW_OFFSET,
+		draw_y + constants.UI_SHADOW_OFFSET,
+		draw_w, draw_h,
 	}
 	raylib.DrawRectangleRounded(card_shadow_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, constants.UI_SHADOW_COLOR)
 
-	// Fondo de la carta
-	card_rect := raylib.Rectangle{x, y, CARD_W, CARD_H}
-	raylib.DrawRectangleRounded(card_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, bg)
+	// Escala de grises para cartas no disponibles
+	grayscale := !can_afford && _card_grayscale_shader.id > 1
+	if grayscale { raylib.BeginShaderMode(_card_grayscale_shader) }
 
-	// Borde sutil
-	raylib.DrawRectangleRoundedLinesEx(card_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 1.5, raylib.Color{160, 160, 160, 120})
+	// Imagen de fondo por rareza
+	if card_bg_tex != nil {
+		src_rect := raylib.Rectangle{0, 0, f32(card_bg_tex.width), f32(card_bg_tex.height)}
+		dst_rect := raylib.Rectangle{draw_x, draw_y, draw_w, draw_h}
+		raylib.DrawTexturePro(card_bg_tex^, src_rect, dst_rect, {0, 0}, 0, raylib.WHITE)
+	}
+
+	card_rect := raylib.Rectangle{draw_x, draw_y, draw_w, draw_h}
 
 	// Preview — ocupa el tercio superior
 	preview_size : f32 = 58
 	preview_x := x + (CARD_W - preview_size) / 2
 	preview_y := y + 12
 	icon_cx   := x + CARD_W / 2
-	icon_cy   := preview_y + preview_size / 2
 	if card.kind == .OBSTACLE {
 		draw_obstacle_preview(preview_x, preview_y, preview_size)
 	} else if card.kind == .TOWER {
@@ -1053,18 +1079,15 @@ render_card :: proc(
 	name := entities.card_name(card)
 	name_size : f32 = 12
 	name_w := raylib.MeasureTextEx(constants.game_fonts.regular, strings.clone_to_cstring(name, context.temp_allocator), name_size, 0).x
-	name_color := constants.UI_PANEL_TEXT_COLOR
-	if !can_afford { name_color = raylib.Color{185, 185, 185, 255} }
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
 		strings.clone_to_cstring(name, context.temp_allocator),
 		{x + (CARD_W - name_w) / 2, y + 78},
-		name_size, 0, name_color,
+		name_size, 0, constants.UI_PANEL_TEXT_COLOR,
 	)
 
 	// Bonus level badge — solo torres con bonus_level > 0
 	if card.kind == .TOWER && card.bonus_level > 0 {
-		// "+X" en esquina superior derecha
 		bonus_str  := fmt.ctprintf("+%d", card.bonus_level)
 		bonus_size : f32 = 13
 		bonus_w    := raylib.MeasureTextEx(constants.game_fonts.bold, bonus_str, bonus_size, 0).x
@@ -1074,7 +1097,6 @@ render_card :: proc(
 			raylib.Color{100, 220, 255, 255}, raylib.Color{0, 0, 0, 200}, 1,
 			constants.game_fonts.bold)
 
-		// "→ Nv. X" debajo del nombre
 		level_str  := fmt.ctprintf("-> Nv. %d", card.bonus_level + 1)
 		level_size : f32 = 11
 		level_w    := raylib.MeasureTextEx(constants.game_fonts.regular, level_str, level_size, 0).x
@@ -1108,6 +1130,8 @@ render_card :: proc(
 
 	// Badge de rareza — siempre al pie de la carta
 	render_rarity(entities.card_rarity(card), x, y + CARD_H - 24, CARD_W)
+
+	if grayscale { raylib.EndShaderMode() }
 }
 
 // Devuelve el color de acento (badge/borde) según rareza.
@@ -1120,6 +1144,41 @@ rarity_border_color :: proc(rarity: constants.Card_Rarity) -> raylib.Color {
 	case .UNIQUE:   return constants.RARITY_COLOR_UNIQUE
 	}
 	return constants.RARITY_COLOR_COMMON
+}
+
+// Devuelve el rectángulo real donde se renderiza la textura de fondo de una carta.
+// Útil fuera de render_card para alinear bordes y decoraciones al contorno exacto.
+// Si no hay textura cargada devuelve el rectángulo completo {x, y, CARD_W, CARD_H}.
+card_bg_draw_rect :: proc(card: entities.Card, x, y: f32) -> raylib.Rectangle {
+	rarity := entities.card_rarity(card)
+	tex    := rarity_card_tex(rarity)
+	if tex == nil {
+		return {x, y, CARD_W, CARD_H}
+	}
+	img_w  := f32(tex.width)
+	img_h  := f32(tex.height)
+	scale  := min(CARD_W / img_w, CARD_H / img_h)
+	draw_w := img_w * scale
+	draw_h := img_h * scale
+	return raylib.Rectangle{
+		x + (CARD_W - draw_w) / 2,
+		y + (CARD_H - draw_h) / 2,
+		draw_w, draw_h,
+	}
+}
+
+// Devuelve la textura de fondo de carta según rareza.
+// UNIQUE reutiliza la imagen de EPIC; si la textura no cargó (width==0) devuelve nil.
+rarity_card_tex :: proc(rarity: constants.Card_Rarity) -> ^raylib.Texture2D {
+	tex: ^raylib.Texture2D
+	switch rarity {
+	case .COMMON:            tex = &constants.game_icons.card_bg_common
+	case .UNCOMMON:          tex = &constants.game_icons.card_bg_uncommon
+	case .RARE:              tex = &constants.game_icons.card_bg_rare
+	case .EPIC, .UNIQUE:     tex = &constants.game_icons.card_bg_epic
+	}
+	if tex == nil || tex.width == 0 { return nil }
+	return tex
 }
 
 // Devuelve el color de fondo de carta según rareza.
