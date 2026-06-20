@@ -160,7 +160,7 @@ render_tooltip_layer :: proc(app: ^entities.App_State) {
 		}
 
 		// ── Layout: name + rarity badge + separator + content lines ─────────
-		NAME_SIZE  : f32 = FONT_SIZE + 1
+		NAME_SIZE  : f32 = FONT_SIZE + 5
 		BEDGE_H    : f32 = 20   // altura del badge de rareza (mismo que render_rarity)
 		SEP_H      : f32 = 8    // espacio entre badge y primera línea de contenido
 		rarity     := entities.card_rarity(card)
@@ -190,7 +190,7 @@ render_tooltip_layer :: proc(app: ^entities.App_State) {
 			NAME_SIZE, 0, rarity_col,
 		)
 
-		// Badge de rareza (centrado bajo el nombre)
+		// Badge de rareza (alineado a la derecha bajo el nombre)
 		badge_y := r.y + PAD + NAME_SIZE + 4
 		render_rarity(rarity, r.x, badge_y, r.width)
 
@@ -750,6 +750,88 @@ render_button :: proc(
 
 	return false
 }
+
+// Like render_button but draws an icon texture instead of text.
+// rect.width and rect.height define the button size; the icon is centered inside with padding.
+render_icon_button :: proc(icon: raylib.Texture2D, rect: raylib.Rectangle, opts := Button_Opts{}) -> bool {
+	enabled := !opts.disabled
+
+	x      := i32(rect.x)
+	y      := i32(rect.y)
+	width  := i32(rect.width)
+	height := i32(rect.height)
+
+	mouse_x := raylib.GetMouseX()
+	mouse_y := raylib.GetMouseY()
+
+	hovered := mouse_x >= x && mouse_x <= x + width && mouse_y >= y && mouse_y <= y + height
+	if !enabled || ui_active_dropdown_id != "" {
+		hovered = false
+	}
+
+	button_color         := opts.button_color
+	button_hover_color   := opts.hover_color
+	button_pressed_color := opts.pressed_color
+
+	color := constants.UI_BUTTON_COLOR
+	if button_color.a != 0 { color = button_color }
+	if !enabled {
+		color = raylib.DARKGRAY
+	} else if hovered {
+		if button_hover_color.a != 0 {
+			color = button_hover_color
+		} else {
+			color = constants.UI_BUTTON_HOVER_COLOR
+		}
+		if raylib.IsMouseButtonDown(.LEFT) {
+			if button_pressed_color.a != 0 {
+				color = button_pressed_color
+			} else {
+				color = constants.UI_BUTTON_PRESSED_COLOR
+			}
+		}
+	}
+
+	// Shadow
+	raylib.DrawRectangleRounded(
+		{f32(x + constants.UI_BUTTON_SHADOW_OFFSET), f32(y + constants.UI_BUTTON_SHADOW_OFFSET), f32(width), f32(height)},
+		constants.UI_BUTTON_ROUNDNESS, 8, constants.UI_BUTTON_SHADOW_COLOR,
+	)
+	// Background
+	raylib.DrawRectangleRounded(
+		{f32(x), f32(y), f32(width), f32(height)},
+		constants.UI_BUTTON_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, color,
+	)
+
+	// Icon centered with 4px padding
+	pad       := f32(4)
+	icon_size := f32(height) - pad * 2
+	icon_x    := f32(x) + (f32(width) - icon_size) / 2
+	icon_y    := f32(y) + pad
+	src       := raylib.Rectangle{0, 0, f32(icon.width), f32(icon.height)}
+	dest      := raylib.Rectangle{icon_x, icon_y, icon_size, icon_size}
+	// Dark icon on white (default) bg; white icon on colored (active) bg
+	tint : raylib.Color
+	if !enabled {
+		tint = raylib.Color{180, 180, 180, 255}
+	} else if opts.button_color.a != 0 {
+		tint = raylib.WHITE
+	} else {
+		tint = raylib.Color{40, 40, 40, 255}
+	}
+	raylib.DrawTexturePro(icon, src, dest, {0, 0}, 0, tint)
+
+	append(&ui_click_blocks, raylib.Rectangle{f32(x), f32(y), f32(width), f32(height)})
+
+	if hovered && raylib.IsMouseButtonPressed(.LEFT) &&
+	   !ui_is_modal_blocked(i32(mouse_x), i32(mouse_y)) {
+		play_sound(.CLICK, .UI)
+		return true
+	}
+
+	return false
+}
+
 tower_panel_active: bool = false
 tower_panel_strategy_active: i32 = 0 // 0 = FIRST, 1 = LAST, 2 = MAX_HP, 3 = MIN_HP
 
@@ -1195,7 +1277,7 @@ rarity_card_bg :: proc(rarity: constants.Card_Rarity) -> raylib.Color {
 
 // Renderiza una etiqueta de rareza al pie de una carta.
 // badge_y: coordenada Y de la parte superior del badge.
-render_rarity :: proc(rarity: constants.Card_Rarity, card_x, badge_y, card_w: f32) {
+render_rarity :: proc(rarity: constants.Card_Rarity, card_x, badge_y, card_w: f32, right_align: bool = false) {
 	BADGE_H  : f32 = 20
 	PAD      : f32 = 8
 	FONT_SZ  : f32 = 11
@@ -1212,7 +1294,9 @@ render_rarity :: proc(rarity: constants.Card_Rarity, card_x, badge_y, card_w: f3
 	text_w := raylib.MeasureTextEx(constants.game_fonts.semibold,
 		strings.clone_to_cstring(label, context.temp_allocator), FONT_SZ, 0).x
 	badge_w := text_w + PAD * 2
-	badge_x := card_x + (card_w - badge_w) / 2
+	badge_x := right_align \
+		? card_x + card_w - badge_w \
+		: card_x + (card_w - badge_w) / 2
 
 	bg_col := rarity_border_color(rarity)
 	badge_rect := raylib.Rectangle{badge_x, badge_y, badge_w, BADGE_H}

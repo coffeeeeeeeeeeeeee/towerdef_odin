@@ -26,6 +26,13 @@ Icons :: struct {
 	card_bg_uncommon: raylib.Texture2D,
 	card_bg_rare:     raylib.Texture2D,
 	card_bg_epic:     raylib.Texture2D,
+
+	// Playback control buttons
+	btn_play:     raylib.Texture2D,
+	btn_pause:    raylib.Texture2D,
+	btn_speed_1x: raylib.Texture2D,
+	btn_speed_2x: raylib.Texture2D,
+	btn_speed_3x: raylib.Texture2D,
 }
 
 // Global fonts instance
@@ -85,14 +92,14 @@ load_fonts :: proc() {
 
 // Load all icon textures
 load_icons :: proc() {
-	game_icons.damage = raylib.LoadTexture("images/icon_damage.png")
-	game_icons.speed  = raylib.LoadTexture("images/icon_speed.png")
-	game_icons.crit   = raylib.LoadTexture("images/icon_crit.png")
-	game_icons.health = raylib.LoadTexture("images/icon_health.png")
-	game_icons.wave   = raylib.LoadTexture("images/icon_wave.png")
-	game_icons.money         = raylib.LoadTexture("images/icon_money.png")
-	game_icons.lock_locked   = raylib.LoadTexture("images/icon_lock_locked.png")
-	game_icons.lock_unlocked = raylib.LoadTexture("images/icon_lock_unlocked.png")
+	game_icons.damage = raylib.LoadTexture("images/damage.png")
+	game_icons.speed  = raylib.LoadTexture("images/speed.png")
+	game_icons.crit   = raylib.LoadTexture("images/crit.png")
+	game_icons.health = raylib.LoadTexture("images/health.png")
+	game_icons.wave   = raylib.LoadTexture("images/wave.png")
+	game_icons.money         = raylib.LoadTexture("images/money.png")
+	game_icons.lock_locked   = raylib.LoadTexture("images/lock_locked.png")
+	game_icons.lock_unlocked = raylib.LoadTexture("images/lock_unlocked.png")
 
 	game_icons.card_bg_common   = raylib.LoadTexture("images/cards/common.png")
 	game_icons.card_bg_uncommon = raylib.LoadTexture("images/cards/uncommon.png")
@@ -127,6 +134,24 @@ load_icons :: proc() {
 	raylib.SetTextureFilter(game_icons.card_bg_uncommon, .TRILINEAR)
 	raylib.SetTextureFilter(game_icons.card_bg_rare,     .TRILINEAR)
 	raylib.SetTextureFilter(game_icons.card_bg_epic,     .TRILINEAR)
+
+	game_icons.btn_play     = raylib.LoadTexture("images/play.png")
+	game_icons.btn_pause    = raylib.LoadTexture("images/pause.png")
+	game_icons.btn_speed_1x = raylib.LoadTexture("images/1x.png")
+	game_icons.btn_speed_2x = raylib.LoadTexture("images/2x.png")
+	game_icons.btn_speed_3x = raylib.LoadTexture("images/3x.png")
+
+	raylib.GenTextureMipmaps(&game_icons.btn_play)
+	raylib.GenTextureMipmaps(&game_icons.btn_pause)
+	raylib.GenTextureMipmaps(&game_icons.btn_speed_1x)
+	raylib.GenTextureMipmaps(&game_icons.btn_speed_2x)
+	raylib.GenTextureMipmaps(&game_icons.btn_speed_3x)
+
+	raylib.SetTextureFilter(game_icons.btn_play,     .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.btn_pause,    .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.btn_speed_1x, .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.btn_speed_2x, .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.btn_speed_3x, .TRILINEAR)
 }
 
 // Unload all icon textures
@@ -144,6 +169,12 @@ unload_icons :: proc() {
 	raylib.UnloadTexture(game_icons.card_bg_uncommon)
 	raylib.UnloadTexture(game_icons.card_bg_rare)
 	raylib.UnloadTexture(game_icons.card_bg_epic)
+
+	raylib.UnloadTexture(game_icons.btn_play)
+	raylib.UnloadTexture(game_icons.btn_pause)
+	raylib.UnloadTexture(game_icons.btn_speed_1x)
+	raylib.UnloadTexture(game_icons.btn_speed_2x)
+	raylib.UnloadTexture(game_icons.btn_speed_3x)
 }
 
 // Unload all fonts

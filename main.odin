@@ -70,6 +70,10 @@ main :: proc() {
 	systems.card_grayscale_shader_init()
 	defer systems.card_grayscale_shader_unload()
 
+	// Initialize glow particle shader
+	systems.glow_circle_shader_init()
+	defer systems.glow_circle_shader_unload()
+
 	// Initialize audio system
 	systems.audio_init()
 	defer systems.audio_cleanup()

@@ -397,7 +397,7 @@ CARD_EXTRA_DRAW_NAME|SPANISH|Robar una carta
 CARD_EXTRA_DRAW_NAME|PORTUGUESE|Roubar uma carta
 CARD_WEAKEN_NAME|ENGLISH|Weaken
 CARD_WEAKEN_NAME|SPANISH|Debilitamiento
-CARD_WEAKEN_NAME|PORTUGUESE|Debilitamiento
+CARD_WEAKEN_NAME|PORTUGUESE|Debilitar
 
 # Rareza de cartas
 RARITY_COMMON|ENGLISH|Common
@@ -414,7 +414,7 @@ RARITY_EPIC|SPANISH|Épico
 RARITY_EPIC|PORTUGUESE|Épico
 RARITY_UNIQUE|ENGLISH|Unique
 RARITY_UNIQUE|SPANISH|Único
-RARITY_UNIQUE|PORTUGUESE|Único|Enfraquecer
+RARITY_UNIQUE|PORTUGUESE|Único
 # Shop
 SHOP_TITLE|ENGLISH|SHOP
 SHOP_TITLE|SPANISH|TIENDA
@@ -708,3 +708,152 @@ RUN_LIVES_REMAINING|PORTUGUESE|Vidas restantes
 RUN_ACUM_CRISTALES|ENGLISH|Total crystals
 RUN_ACUM_CRISTALES|SPANISH|Cristales acumulados
 RUN_ACUM_CRISTALES|PORTUGUESE|Cristais acumulados
+
+CARD_OVERDRIVE_NAME|ENGLISH|Overdrive
+CARD_OVERDRIVE_NAME|SPANISH|Sobremarcha
+CARD_OVERDRIVE_NAME|PORTUGUESE|Overdrive
+TOOLTIP_OVERDRIVE_DESC|ENGLISH|Apply to a tower: permanently increases its attack speed
+TOOLTIP_OVERDRIVE_DESC|SPANISH|Aplicar a una torre: aumenta permanentemente su velocidad de ataque
+TOOLTIP_OVERDRIVE_DESC|PORTUGUESE|Aplicar a uma torre: aumenta permanentemente sua velocidade de ataque
+STAT_OVERDRIVE|ENGLISH|+%d%% attack speed (permanent, per tower)
+STAT_OVERDRIVE|SPANISH|+%d%% velocidad de ataque (permanente, por torre)
+STAT_OVERDRIVE|PORTUGUESE|+%d%% velocidade de ataque (permanente, por torre)
+TOAST_OVERDRIVE|ENGLISH|Tower boosted! +%d%% attack speed
+TOAST_OVERDRIVE|SPANISH|¡Torre potenciada! +%d%% velocidad de ataque
+TOAST_OVERDRIVE|PORTUGUESE|Torre turbinada! +%d%% velocidade de ataque
+TOAST_OVERDRIVE_SELECT|ENGLISH|Select a tower to boost
+TOAST_OVERDRIVE_SELECT|SPANISH|Selecciona una torre para potenciar
+TOAST_OVERDRIVE_SELECT|PORTUGUESE|Selecione uma torre para turbinar
+CARD_GARDENER_NAME|ENGLISH|Gardener
+CARD_GARDENER_NAME|SPANISH|Jardinero
+CARD_GARDENER_NAME|PORTUGUESE|Jardineiro
+TOOLTIP_GARDENER_DESC|ENGLISH|Move a tower to a new position, keeping all its upgrades
+TOOLTIP_GARDENER_DESC|SPANISH|Mueve una torre a una nueva posición, conservando todos sus mejoras
+TOOLTIP_GARDENER_DESC|PORTUGUESE|Move uma torre para uma nova posição, mantendo todas as melhorias
+TOAST_GARDENER|ENGLISH|Tower moved!
+TOAST_GARDENER|SPANISH|¡Torre reubicada!
+TOAST_GARDENER|PORTUGUESE|Torre reposicionada!
+
+# Relic stat lines (shown in tooltip below description)
+STAT_INTEREST_BOOST|ENGLISH|+%.0f%% per stack/wave
+STAT_INTEREST_BOOST|SPANISH|+%.0f%% por stack/oleada
+STAT_INTEREST_BOOST|PORTUGUESE|+%.0f%% por stack/onda
+STAT_WEAKEN|ENGLISH|-%.0f%% enemy HP per stack
+STAT_WEAKEN|SPANISH|-%.0f%% HP enemigo por stack
+STAT_WEAKEN|PORTUGUESE|-%.0f%% HP inimigo por stack
+STAT_DIVIDEND|ENGLISH|+%.0f%% of saved gold/stack
+STAT_DIVIDEND|SPANISH|+%.0f%% del oro ahorrado/stack
+STAT_DIVIDEND|PORTUGUESE|+%.0f%% do ouro guardado/stack
+STAT_STEAL|ENGLISH|+%d card(s) per stack/wave
+STAT_STEAL|SPANISH|+%d carta(s) por stack/oleada
+STAT_STEAL|PORTUGUESE|+%d carta(s) por stack/onda
+STAT_AUTO_UPGRADE|ENGLISH|Base %.0fs, halved per stack
+STAT_AUTO_UPGRADE|SPANISH|Base %.0fs, se divide a la mitad por stack
+STAT_AUTO_UPGRADE|PORTUGUESE|Base %.0fs, reduzido à metade por stack
+STAT_BLOODLUST|ENGLISH|+%.1f%% damage per kill/stack
+STAT_BLOODLUST|SPANISH|+%.1f%% daño por kill/stack
+STAT_BLOODLUST|PORTUGUESE|+%.1f%% dano por kill/stack
+STAT_FLAWLESS|ENGLISH|+$%d gold per stack (perfect wave)
+STAT_FLAWLESS|SPANISH|+$%d oro por stack (ola perfecta)
+STAT_FLAWLESS|PORTUGUESE|+$%d ouro por stack (onda perfeita)
+STAT_FORMATION|ENGLISH|+%.0f%% damage per stack (3+ same in line)
+STAT_FORMATION|SPANISH|+%.0f%% daño por stack (3+ iguales)
+STAT_FORMATION|PORTUGUESE|+%.0f%% dano por stack (3+ iguais)
+STAT_FROZEN_AMP|ENGLISH|+%.0f%% damage per stack vs slowed
+STAT_FROZEN_AMP|SPANISH|+%.0f%% daño por stack vs lentos
+STAT_FROZEN_AMP|PORTUGUESE|+%.0f%% dano por stack vs lentos
+STAT_VETERAN|ENGLISH|+1 initial level per stack
+STAT_VETERAN|SPANISH|+1 nivel inicial por stack
+STAT_VETERAN|PORTUGUESE|+1 nível inicial por stack
+STAT_LOOT|ENGLISH|%.1f%% chance/kill per stack
+STAT_LOOT|SPANISH|%.1f%% chance/kill por stack
+STAT_LOOT|PORTUGUESE|%.1f%% chance/kill por stack
+STAT_SCOUT|ENGLISH|Announces next wave type
+STAT_SCOUT|SPANISH|Anuncia el tipo de la próxima oleada
+STAT_SCOUT|PORTUGUESE|Anuncia o tipo da próxima onda
+STAT_RECYCLER|ENGLISH|+%.0f%% sell value per stack
+STAT_RECYCLER|SPANISH|+%.0f%% de venta por stack
+STAT_RECYCLER|PORTUGUESE|+%.0f%% de venda por stack
+STAT_MEMENTO|ENGLISH|+$%d/stack/wave every 10 waves
+STAT_MEMENTO|SPANISH|+$%d/stack/oleada cada 10 olas
+STAT_MEMENTO|PORTUGUESE|+$%d/stack/onda a cada 10 ondas
+STAT_WARMED_UP|ENGLISH|+%.0f%% dmg/stack (>%.0fs on target)
+STAT_WARMED_UP|SPANISH|+%.0f%% daño/stack (>%.0fs con objetivo)
+STAT_WARMED_UP|PORTUGUESE|+%.0f%% dano/stack (>%.0fs com alvo)
+STAT_CRYPTOBRO|ENGLISH|Gives boss-killer tower permanent levels = stacks
+STAT_CRYPTOBRO|SPANISH|Otorga tantos niveles permanentes como stacks tenga a la torre que mata al jefe
+STAT_CRYPTOBRO|PORTUGUESE|Concede níveis permanentes iguais aos stacks à torre que mata o chefe
+STAT_LUMBERJACK|ENGLISH|+$%d when chopping a map tree
+STAT_LUMBERJACK|SPANISH|+$%d al talar un árbol del mapa
+STAT_LUMBERJACK|PORTUGUESE|+$%d ao cortar uma árvore do mapa
+STAT_SHOPPING_CART|ENGLISH|+1 relic slot per stack (base %d)
+STAT_SHOPPING_CART|SPANISH|+1 slot de reliquia por stack (base %d)
+STAT_SHOPPING_CART|PORTUGUESE|+1 slot de relíquia por stack (base %d)
+
+# Relic toast messages (shown on acquisition)
+TOAST_INTEREST_BOOST|ENGLISH|Interest x%d (%.0f%%/wave)
+TOAST_INTEREST_BOOST|SPANISH|Interés x%d (%.0f%%/oleada)
+TOAST_INTEREST_BOOST|PORTUGUESE|Juros x%d (%.0f%%/onda)
+TOAST_WEAKEN|ENGLISH|Weaken x%d (-%.0f%% enemy HP)
+TOAST_WEAKEN|SPANISH|Debilitar x%d (-%.0f%% HP enemigos)
+TOAST_WEAKEN|PORTUGUESE|Debilitar x%d (-%.0f%% HP inimigos)
+TOAST_DIVIDEND|ENGLISH|Dividend x%d (%.0f%%/wave)
+TOAST_DIVIDEND|SPANISH|Dividendo x%d (%.0f%%/oleada)
+TOAST_DIVIDEND|PORTUGUESE|Dividendo x%d (%.0f%%/onda)
+TOAST_STEAL|ENGLISH|Thief x%d (+%d card/wave)
+TOAST_STEAL|SPANISH|Ladrón x%d (+%d carta/oleada)
+TOAST_STEAL|PORTUGUESE|Ladrão x%d (+%d carta/onda)
+TOAST_AUTO_UPGRADE|ENGLISH|Auto-upgrade x%d (every %.1fs)
+TOAST_AUTO_UPGRADE|SPANISH|Auto-mejora x%d (cada %.1fs)
+TOAST_AUTO_UPGRADE|PORTUGUESE|Auto-melhoria x%d (a cada %.1fs)
+TOAST_BLOODLUST|ENGLISH|Bloodlust x%d (+%.1f%% dmg/kill)
+TOAST_BLOODLUST|SPANISH|Sed de sangre x%d (+%.1f%% daño/kill)
+TOAST_BLOODLUST|PORTUGUESE|Sede de sangue x%d (+%.1f%% dano/kill)
+TOAST_FLAWLESS|ENGLISH|Flawless x%d (+$%d/perfect wave)
+TOAST_FLAWLESS|SPANISH|Impecable x%d (+$%d/oleada perfecta)
+TOAST_FLAWLESS|PORTUGUESE|Impecável x%d (+$%d/onda perfeita)
+TOAST_FORMATION|ENGLISH|Formation x%d (+%.0f%% dmg, 3+ in line)
+TOAST_FORMATION|SPANISH|Formación x%d (+%.0f%% daño en línea de 3+)
+TOAST_FORMATION|PORTUGUESE|Formação x%d (+%.0f%% dano em linha de 3+)
+TOAST_FROZEN_AMP|ENGLISH|Cryo Amp x%d (+%.0f%% dmg vs slowed)
+TOAST_FROZEN_AMP|SPANISH|Crioamplificador x%d (+%.0f%% daño a ralentizados)
+TOAST_FROZEN_AMP|PORTUGUESE|Criomagnificador x%d (+%.0f%% dano a lentos)
+TOAST_VETERAN|ENGLISH|Veteran x%d (%.0f%% chance/pre-leveled card)
+TOAST_VETERAN|SPANISH|Veterano x%d (%.0f%% chance/carta pre-nivelada)
+TOAST_VETERAN|PORTUGUESE|Veterano x%d (%.0f%% chance/carta pré-nivelada)
+TOAST_LOOT|ENGLISH|Looter x%d (%.1f%% chance/kill)
+TOAST_LOOT|SPANISH|Saqueador x%d (%.1f%% chance/kill)
+TOAST_LOOT|PORTUGUESE|Saqueador x%d (%.1f%% chance/kill)
+TOAST_SCOUT|ENGLISH|Scout x%d (wave alert)
+TOAST_SCOUT|SPANISH|Explorador x%d (alerta de oleada)
+TOAST_SCOUT|PORTUGUESE|Explorador x%d (alerta de onda)
+TOAST_RECYCLER|ENGLISH|Recycler x%d (+%.0f%% tower sell)
+TOAST_RECYCLER|SPANISH|Reciclador x%d (+%.0f%% venta torres)
+TOAST_RECYCLER|PORTUGUESE|Reciclador x%d (+%.0f%% venda torres)
+TOAST_MEMENTO|ENGLISH|Memento x%d (+$%d every 10 waves)
+TOAST_MEMENTO|SPANISH|Recuerdo x%d (+$%d cada 10 olas)
+TOAST_MEMENTO|PORTUGUESE|Memento x%d (+$%d a cada 10 ondas)
+TOAST_WARMED_UP|ENGLISH|Warmed Up x%d (+%.0f%% sustained dmg)
+TOAST_WARMED_UP|SPANISH|En calor x%d (+%.0f%% daño continuo)
+TOAST_WARMED_UP|PORTUGUESE|Aquecido x%d (+%.0f%% dano contínuo)
+TOAST_CRYPTOBRO|ENGLISH|Cryptobro x%d (+%d lv on boss kill)
+TOAST_CRYPTOBRO|SPANISH|Cryptobro x%d (+%d nv al matar jefe)
+TOAST_CRYPTOBRO|PORTUGUESE|Cryptobro x%d (+%d nv ao matar chefe)
+TOAST_LUMBERJACK|ENGLISH|Lumberjack x%d — pick a tree
+TOAST_LUMBERJACK|SPANISH|Leñador x%d — seleccioná un árbol
+TOAST_LUMBERJACK|PORTUGUESE|Lenhador x%d — selecione uma árvore
+TOAST_SHOPPING_CART|ENGLISH|Shopping Cart x%d (%d relic slots)
+TOAST_SHOPPING_CART|SPANISH|Shopping Cart x%d (%d slots de reliquia)
+TOAST_SHOPPING_CART|PORTUGUESE|Carrinho x%d (%d slots de relíquia)
+CARD_REBOUND_NAME|ENGLISH|Rebound
+CARD_REBOUND_NAME|SPANISH|Rebote
+CARD_REBOUND_NAME|PORTUGUESE|Ricochete
+TOOLTIP_REBOUND_DESC|ENGLISH|Projectiles bounce to a nearby enemy on hit
+TOOLTIP_REBOUND_DESC|SPANISH|Los proyectiles rebotan a un enemigo cercano al impactar
+TOOLTIP_REBOUND_DESC|PORTUGUESE|Projéteis ricocheteiam em inimigo próximo ao acertar
+STAT_REBOUND|ENGLISH|+1 bounce per %d stacks (range %.0f tiles)
+STAT_REBOUND|SPANISH|+1 rebote por cada %d stacks (rango %.0f tiles)
+STAT_REBOUND|PORTUGUESE|+1 ricochete por %d stacks (alcance %.0f tiles)
+TOAST_REBOUND|ENGLISH|Rebound x%d (%d bounce(s))
+TOAST_REBOUND|SPANISH|Rebote x%d (%d rebote(s))
+TOAST_REBOUND|PORTUGUESE|Ricochete x%d (%d ricochete(s))

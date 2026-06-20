@@ -67,6 +67,20 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 	// Update ice pulses
 	update_ice_pulses(app, s_dt)
 
+	// Update glow particles (solo avanza t; screen_dy se computa en el render)
+	{
+		i := 0
+		for i < len(sim.glow_particles) {
+			p := &sim.glow_particles[i]
+			p.t += s_dt
+			if p.t >= p.lifetime {
+				unordered_remove(&sim.glow_particles, i)
+			} else {
+				i += 1
+			}
+		}
+	}
+
 	// Auto-upgrade: intervalo base que se divide a la mitad por cada stack adicional.
 	// 1 stack = 30s, 2 stacks = 15s, 3 stacks = 7.5s, etc.
 	if sim.relic_stacks[.AUTO_UPGRADE] > 0 && sim.started {
@@ -351,7 +365,9 @@ shop_perform_buy :: proc(app: ^entities.App_State, slot_idx: int) {
 	if sim.money < price { return }
 
 	// Bloquear compra de relic si ya se alcanzó el límite de tipos distintos.
-	if entities.is_relic(card.kind) && card.kind != .LUMBERJACK {
+	// Excepciones: cartas de acción con target (LUMBERJACK, OVERDRIVE) van a la mano, no al pool de relictos.
+	is_action_relic := card.kind == .LUMBERJACK || card.kind == .OVERDRIVE || card.kind == .GARDENER
+	if entities.is_relic(card.kind) && !is_action_relic {
 		if shop_relic_cap_blocks(sim, card.kind) { return }
 	}
 
@@ -361,7 +377,7 @@ shop_perform_buy :: proc(app: ^entities.App_State, slot_idx: int) {
 	sim.shop.purchases_this_visit += 1
 	sim.shop.skip_streak_count = 0     // comprar rompe el streak
 
-	if entities.is_relic(card.kind) && card.kind != .LUMBERJACK {
+	if entities.is_relic(card.kind) && !is_action_relic {
 		apply_relic_card(app, card.kind)
 	} else {
 		entities.card_add_to_hand(&app.sim, card)
@@ -702,6 +718,7 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 
 			append(&sim.enemies, enemy)
 			play_sound_at(.ENEMY_SPAWN, .SFX, enemy.x, enemy.y, app)
+			spawn_glow_particles(sim, enemy.x, enemy.y, entities.enemy_get_size(&enemy), .SPAWN)
 		}
 	}
 }
@@ -742,6 +759,7 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			}
 			entities.app_take_damage(app, damage)
 			play_sound_at(.ENEMY_REACH_GOAL, .SFX, enemy.x, enemy.y, app)
+			spawn_glow_particles(sim, enemy.x, enemy.y, entities.enemy_get_size(enemy), .GOAL_REACH)
 
 			// Invalida punteros de proyectiles antes de remover
 			nullify_projectile_targets(sim, enemy)
@@ -1426,8 +1444,50 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 				}
 			}
 
-			// Remove projectile
-			ordered_remove(&sim.projectiles, i)
+			// REBOUND: rebotar a enemigo cercano si la reliquia está activa
+			bounced := false
+			if sim.relic_stacks[.REBOUND] > 0 {
+				// Inicializar bounces_left al primer impacto
+				if proj.bounces_left < 0 {
+					proj.bounces_left = sim.relic_stacks[.REBOUND] / constants.REBOUND_STACKS_PER_BOUNCE
+				}
+				if proj.bounces_left > 0 {
+					hit_x := proj.x
+					hit_y := proj.y
+					exclude := proj.last_hit_enemy
+					if proj.target != nil { exclude = proj.target }
+
+					bounce_target : ^entities.Enemy = nil
+					best_dist     := constants.REBOUND_RANGE + 1
+					for &enemy in sim.enemies {
+						if &enemy == exclude { continue }
+						if enemy.hp <= 0 { continue }
+						dx := enemy.x - hit_x
+						dy := enemy.y - hit_y
+						d  := math.sqrt_f32(dx*dx + dy*dy)
+						if d <= constants.REBOUND_RANGE && d < best_dist {
+							bounce_target = &enemy
+							best_dist = d
+						}
+					}
+
+					if bounce_target != nil {
+						proj.last_hit_enemy  = exclude
+						proj.target          = bounce_target
+						proj.target_orig_x   = bounce_target.x
+						proj.target_orig_y   = bounce_target.y
+						proj.target_last_x   = bounce_target.x
+						proj.target_last_y   = bounce_target.y
+						proj.bounces_left   -= 1
+						bounced = true
+					}
+				}
+			}
+
+			// Remove projectile si no rebotó
+			if !bounced {
+				ordered_remove(&sim.projectiles, i)
+			}
 		}
 	}
 }
@@ -1674,6 +1734,45 @@ simulation_remove_tower_at :: proc(app: ^entities.App_State, row, col: i32) -> b
 	return false
 }
 
+// Emite N partículas de glow en la posición dada.
+// kind == .SPAWN  → círculos blancos que suben
+// kind == .GOAL_REACH → círculos rojo oscuro que bajan
+spawn_glow_particles :: proc(sim: ^entities.Simulation, gx, gy: f32, enemy_radius: f32, kind: entities.Glow_Particle_Kind) {
+	// Mismo lifetime para todos → equidistancia garantizada con easing cuadrático idéntico.
+	// Cada anillo i viaja (i+1)*RING_STEP celdas: separación constante = RING_STEP*progress².
+	RING_STEP :: f32(0.45)   // distancia entre anillos consecutivos, en fracciones de celda
+	LIFETIME  :: f32(0.50)
+
+	// 0.4 = radio del círculo de spawn/goal (render_spawn / render_goal usan cs * 0.4)
+	circle_r :: f32(0.4)
+
+	for i in 0 ..< 4 {
+		dist := f32(i + 1) * RING_STEP  // distancia total que recorre este anillo
+		// SPAWN: parte del centro (dy=0), sube (dy negativo al final)
+		// GOAL:  parte desplazado arriba (dy negativo), llega al centro (dy=0)
+		dy_s := f32(0)
+		dy_e := -dist
+
+		// SPAWN:      empieza en el círculo verde (circle_r=0.4) → se achica al tamaño del enemigo
+		// GOAL_REACH: empieza en el círculo rojo (circle_r=0.4, desde arriba) → se achica al tamaño del enemigo
+		//             Los anillos caen grandes y se contraen al llegar al centro — espejo del spawn.
+		r_start := circle_r
+		r_end   := enemy_radius
+
+		append(&sim.glow_particles, entities.Glow_Particle{
+			grid_x       = gx + 0.5,
+			grid_y       = gy + 0.5,
+			t            = 0,
+			lifetime     = LIFETIME,
+			radius_start = r_start,
+			radius_end   = r_end,
+			dy_start     = dy_s,
+			dy_end       = dy_e,
+			kind         = kind,
+		})
+	}
+}
+
 // Cleanup simulation
 simulation_cleanup :: proc(app: ^entities.App_State) {
 	// Free enemies
@@ -1694,6 +1793,7 @@ simulation_cleanup :: proc(app: ^entities.App_State) {
 	delete(app.sim.spawns)
 	delete(app.sim.graph_samples)
 	delete(app.sim.wave_marks)
+	delete(app.sim.glow_particles)
 	delete(app.sim.cards.deck)
 	delete(app.sim.cards.hand)
 	delete(app.sim.cards.discard)
@@ -1718,6 +1818,7 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		laser_beams      = make([dynamic]entities.Laser_Beam),
 		ice_pulses       = make([dynamic]entities.Ice_Pulse),
 		spawns           = make([dynamic]entities.Spawn_Point),
+		glow_particles   = make([dynamic]entities.Glow_Particle),
 		money            = constants.DEFAULT_MONEY,
 		health           = constants.DEFAULT_HEALTH,
 		wave_number      = 0,

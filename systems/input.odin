@@ -119,17 +119,85 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 			}
 		}
 
-		// LUMBERJACK — modo selección de árbol activo.
-		if app.lumberjack_active && is_valid_grid_pos(app, grid_x, grid_y) {
-			if app.editor.game_map.grid[grid_y][grid_x] == .ACCESSORY_TREE {
-				app.editor.game_map.grid[grid_y][grid_x] = .EMPTY
-				entities.app_add_money(app, constants.LUMBERJACK_TREE_GOLD)
-				entities.add_toast(app, fmt.tprintf("+$%d árbol talado", constants.LUMBERJACK_TREE_GOLD), .SUCCESS)
-				entities.card_play(&app.sim, app.sim.cards.selected_card_idx)
-				app.sim.cards.selected_card_idx = -1
-				app.lumberjack_active = false
-				play_sound(.CONFIRMATION, .UI)
-				return
+		// Cartas de acción con target pendiente (LUMBERJACK, OVERDRIVE, …)
+		if app.pending_tower_action != .TOWER && is_valid_grid_pos(app, grid_x, grid_y) {
+			tile := app.editor.game_map.grid[grid_y][grid_x]
+			#partial switch app.pending_tower_action {
+			case .LUMBERJACK:
+				if tile == .ACCESSORY_TREE {
+					app.editor.game_map.grid[grid_y][grid_x] = .EMPTY
+					entities.app_add_money(app, constants.LUMBERJACK_TREE_GOLD)
+					entities.add_toast(app, fmt.tprintf("+$%d árbol talado", constants.LUMBERJACK_TREE_GOLD), .SUCCESS)
+					entities.card_play(&app.sim, app.sim.cards.selected_card_idx)
+					app.sim.cards.selected_card_idx = -1
+					app.pending_tower_action = .TOWER
+					play_sound(.CONFIRMATION, .UI)
+					return
+				}
+			case .OVERDRIVE:
+				is_tower_tile := tile == .TOWER_ARCHER || tile == .TOWER_CANNON ||
+				                 tile == .TOWER_SNIPER  || tile == .TOWER_MISSILE ||
+				                 tile == .TOWER_LASER   || tile == .TOWER_ICE ||
+				                 tile == .TOWER_ENHANCE || tile == .TOWER_TESLA ||
+				                 tile == .TOWER_MORTAR
+				if is_tower_tile {
+					for &t in app.sim.towers {
+						if t.r == grid_y && t.c == grid_x {
+							t.overdrive_stacks += 1
+							entities.tower_recompute_stats(&t)
+							entities.add_toast(app, fmt.tprintf("+%d%% vel. ataque", i32(constants.OVERDRIVE_SPEED_PER_STACK * 100)), .SUCCESS)
+							break
+						}
+					}
+					entities.card_play(&app.sim, app.sim.cards.selected_card_idx)
+					app.sim.cards.selected_card_idx = -1
+					app.pending_tower_action = .TOWER
+					play_sound(.CONFIRMATION, .UI)
+					return
+				}
+			case .GARDENER:
+				is_tower_tile := tile == .TOWER_ARCHER || tile == .TOWER_CANNON ||
+				                 tile == .TOWER_SNIPER  || tile == .TOWER_MISSILE ||
+				                 tile == .TOWER_LASER   || tile == .TOWER_ICE ||
+				                 tile == .TOWER_ENHANCE || tile == .TOWER_TESLA ||
+				                 tile == .TOWER_MORTAR
+				if app.gardener_source == {-1, -1} {
+					// Fase 1: seleccionar torre origen
+					if is_tower_tile {
+						app.gardener_source = {i32(grid_y), i32(grid_x)}
+						play_sound(.SELECT, .UI)
+						return
+					}
+				} else {
+					// Fase 2: seleccionar tile destino vacío
+					can_place := tile == .EMPTY &&
+					             app.editor.game_map.obstacle_grid[grid_y][grid_x] == .EMPTY &&
+					             !app.editor.game_map.water_grid[grid_y][grid_x]
+					if can_place {
+						src_r    := app.gardener_source[0]
+						src_c    := app.gardener_source[1]
+						src_tile := app.editor.game_map.grid[src_r][src_c]
+						app.editor.game_map.grid[grid_y][grid_x] = src_tile
+						app.editor.game_map.grid[src_r][src_c]   = .EMPTY
+						for &t in app.sim.towers {
+							if t.r == src_r && t.c == src_c {
+								t.r = i32(grid_y)
+								t.c = i32(grid_x)
+								break
+							}
+						}
+						update_formation_cache(app)
+						entities.add_toast(app, constants.get_text("TOAST_GARDENER"), .SUCCESS)
+						entities.card_play(&app.sim, app.sim.cards.selected_card_idx)
+						app.sim.cards.selected_card_idx = -1
+						app.pending_tower_action = .TOWER
+						app.gardener_source      = {-1, -1}
+						play_sound(.CONFIRMATION, .UI)
+						return
+					}
+				}
+			case:
+				// Otro kind con target pendiente — no hacer nada
 			}
 		}
 
@@ -141,6 +209,8 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 			#partial switch tile {
 			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
 			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
+				// Si hay acción pendiente que necesita torre, no seleccionar — ya fue manejado arriba
+				if app.pending_tower_action != .TOWER { break }
 				// Select tower for upgrade
 				select_tower_at(app, grid_y, grid_x)
 				app.selected_obstacle.valid = false // Deselect obstacle
@@ -203,10 +273,11 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 	
 	// Right click to deselect or cancel
 	if raylib.IsMouseButtonPressed(.RIGHT) {
-		if app.lumberjack_active {
-			// Cancelar modo tala — la carta vuelve a la mano sin gastarse
-			app.lumberjack_active = false
+		if app.pending_tower_action != .TOWER {
+			// Cancelar acción con target — la carta vuelve a la mano sin gastarse
+			app.pending_tower_action = .TOWER
 			app.sim.cards.selected_card_idx = -1
+			app.gardener_source = {-1, -1}
 		} else if app.sim.selected_build_tower != .EMPTY {
 			app.sim.selected_build_tower = .EMPTY
 			app.sim.cards.selected_card_idx    = -1

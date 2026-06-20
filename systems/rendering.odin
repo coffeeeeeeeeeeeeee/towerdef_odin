@@ -126,6 +126,55 @@ heightmap_shader_unload :: proc() {
 	raylib.UnloadShader(heightmap_shader.shader)
 }
 
+// ── Glow circle shader (enemy spawn / goal-reach particles) ─────────────────
+
+_glow_circle_shader: raylib.Shader
+_glow_white_tex:     raylib.Texture2D  // 1×1 white pixel — ensures UV interpolates 0..1
+
+glow_circle_shader_init :: proc() {
+	_glow_circle_shader = raylib.LoadShader(nil, "assets/glow_circle.glsl")
+	img := raylib.GenImageColor(1, 1, raylib.WHITE)
+	_glow_white_tex = raylib.LoadTextureFromImage(img)
+	raylib.UnloadImage(img)
+}
+
+glow_circle_shader_unload :: proc() {
+	raylib.UnloadShader(_glow_circle_shader)
+	raylib.UnloadTexture(_glow_white_tex)
+}
+
+render_glow_particles :: proc(app: ^entities.App_State, cs: f32) {
+	if len(app.sim.glow_particles) == 0 { return }
+
+	raylib.BeginShaderMode(_glow_circle_shader)
+	defer raylib.EndShaderMode()
+
+	for &p in app.sim.glow_particles {
+		progress  := p.t / p.lifetime           // 0..1
+		ease      := progress * progress         // cuadrático: acelera hacia el final
+		alpha     := u8((1.0 - progress) * 255)
+
+		color := raylib.Color{255, 255, 255, alpha}
+
+		radius_px := (p.radius_start + (p.radius_end - p.radius_start) * progress) * cs
+		quad_half := radius_px * 2.2  // ring_d=0.45 → ring edge sits at 0.45*2.2*r = r
+
+		dy_cells  := p.dy_start + (p.dy_end - p.dy_start) * ease
+		sx := f32(app.camera_offset_x) + p.grid_x * cs
+		sy := f32(app.camera_offset_y) + p.grid_y * cs + dy_cells * cs
+
+		// DrawTexturePro interpolates UV 0..1 across the quad — required for shader
+		raylib.DrawTexturePro(
+			_glow_white_tex,
+			{0, 0, 1, 1},
+			{sx - quad_half, sy - quad_half, quad_half * 2, quad_half * 2},
+			{0, 0},
+			0,
+			color,
+		)
+	}
+}
+
 // ── Cloud layer shader ───────────────────────────────────────────────────────
 
 Cloud_Shader :: struct {
@@ -240,9 +289,60 @@ render_tower_ranges :: proc(app: ^entities.App_State) {
 
 // Render map objects (towers, spawn, goal, accessories, obstacles) - intermediate layer
 render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
-	cs := f32(app.settings.cell_size) * app.zoom
+	cs    := f32(app.settings.cell_size) * app.zoom
+	mouse := raylib.GetMousePosition()
 
-	// Draw gameplay tiles (towers, accessories)
+	// ── Pasada 1: overlays de casillas posibles (debajo de los objetos del mapa) ──
+	if app.pending_tower_action != .TOWER && (app.state == .PLAYING || app.state == .PAUSED) {
+		for row in 0 ..< m.height {
+			for col in 0 ..< m.width {
+				tile    := m.grid[row][col]
+				x       := f32(col) * cs + f32(app.camera_offset_x)
+				y       := f32(row) * cs + f32(app.camera_offset_y)
+				pad     := cs * 0.1
+				rect    := raylib.Rectangle{x + pad, y + pad, cs * 0.8, cs * 0.8}
+				hovered := raylib.CheckCollisionPointRec(mouse, raylib.Rectangle{x, y, cs, cs})
+				alpha   := u8(hovered ? 40 : 100)
+
+				is_tower_tile := tile == .TOWER_ARCHER || tile == .TOWER_CANNON ||
+				                 tile == .TOWER_SNIPER  || tile == .TOWER_MISSILE ||
+				                 tile == .TOWER_LASER   || tile == .TOWER_ICE ||
+				                 tile == .TOWER_ENHANCE || tile == .TOWER_TESLA ||
+				                 tile == .TOWER_MORTAR
+
+				#partial switch app.pending_tower_action {
+				case .LUMBERJACK:
+					if tile == .ACCESSORY_TREE && !m.water_grid[row][col] {
+						raylib.DrawRectangleRounded(rect, 0.35, 6, raylib.Color{255, 200, 50, alpha})
+					}
+				case .OVERDRIVE:
+					if is_tower_tile {
+						raylib.DrawRectangleRounded(rect, 0.35, 6, raylib.Color{100, 200, 255, alpha})
+					}
+				case .GARDENER:
+					if app.gardener_source == {-1, -1} {
+						// Fase 1: overlay verde sobre todas las torres
+						if is_tower_tile {
+							raylib.DrawRectangleRounded(rect, 0.35, 6, raylib.Color{80, 220, 100, alpha})
+						}
+					} else {
+						// Fase 2: origen naranja fijo + destinos vacíos en verde
+						if app.gardener_source == {i32(row), i32(col)} {
+							raylib.DrawRectangleRounded(rect, 0.35, 6, raylib.Color{255, 160, 40, 160})
+						} else if tile == .EMPTY &&
+						          m.obstacle_grid[row][col] == .EMPTY &&
+						          !m.water_grid[row][col] {
+							raylib.DrawRectangleRounded(rect, 0.35, 6, raylib.Color{80, 220, 100, alpha})
+						}
+					}
+				case .TOWER:
+					// inactivo — nunca se llega aquí
+				}
+			}
+		}
+	}
+
+	// ── Pasada 2: objetos del mapa (encima de los overlays) ──────────────────────
 	for row in 0 ..< m.height {
 		for col in 0 ..< m.width {
 			tile := m.grid[row][col]
@@ -252,7 +352,6 @@ render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
 			#partial switch tile {
 			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
 			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
-				// In game mode, find tower entity
 				if app.state == .PLAYING || app.state == .PAUSED {
 					for &tower in app.sim.towers {
 						if tower.r == i32(row) && tower.c == i32(col) {
@@ -261,7 +360,6 @@ render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
 						}
 					}
 				} else {
-					// In editor, render tower directly from tile type
 					tower_type := tile_to_tower_type(tile)
 					draw_tower_tile(x, y, cs, tower_type, 0, false)
 				}
@@ -277,11 +375,6 @@ render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
 					render_water_lily(x, y, cs, i32(row), i32(col))
 				} else {
 					render_tree(x, y, cs, m.biome, i32(row), i32(col))
-					// LUMBERJACK: resaltar árboles talables en modo selección
-					if app.lumberjack_active {
-						raylib.DrawRectangle(i32(x), i32(y), i32(cs), i32(cs), raylib.Color{255, 200, 50, 60})
-						raylib.DrawRectangleLinesEx(raylib.Rectangle{x, y, cs, cs}, 2, raylib.Color{255, 180, 0, 220})
-					}
 				}
 
 			case .ACCESSORY_BLOCK:
@@ -302,6 +395,17 @@ render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
 		sx := f32(app.selected_tower_c) * cs + f32(app.camera_offset_x)
 		sy := f32(app.selected_tower_r) * cs + f32(app.camera_offset_y)
 		render_reticle(sx, sy, cs, constants.UI_RETICLE_COLOR)
+	}
+
+	// Retícula sobre el tile hovereado en modo selección de carta activa
+	if app.pending_tower_action != .TOWER && (app.state == .PLAYING || app.state == .PAUSED) {
+		hover_col := int((mouse.x - f32(app.camera_offset_x)) / cs)
+		hover_row := int((mouse.y - f32(app.camera_offset_y)) / cs)
+		if hover_col >= 0 && hover_col < int(m.width) && hover_row >= 0 && hover_row < int(m.height) {
+			rx := f32(hover_col) * cs + f32(app.camera_offset_x)
+			ry := f32(hover_row) * cs + f32(app.camera_offset_y)
+			render_reticle(rx, ry, cs, constants.UI_RETICLE_COLOR)
+		}
 	}
 
 	// Draw reticle for selected obstacle in PLAYING/PAUSED modes
@@ -1089,6 +1193,9 @@ render_gameplay :: proc(app: ^entities.App_State) {
 
 	// Render enemies
 	render_enemies(app, cs)
+
+	// Render glow particles (spawn / goal-reach ring effects, above enemies)
+	render_glow_particles(app, cs)
 
 	// Render enemy paths for debugging (if enabled)
 	if app.editor.show_paths {

@@ -29,6 +29,10 @@ Projectile :: struct {
 
 	// Rotation
 	angle: f32,  // Direction of movement in radians
+
+	// Rebound relic
+	bounces_left:   i32,     // rebotes restantes; -1 = no inicializado (se fija al primer impacto)
+	last_hit_enemy: ^Enemy,  // enemigo del último impacto (excluir al buscar rebote)
 }
 
 // Initialize a projectile
@@ -57,6 +61,8 @@ projectile_init :: proc(
 		aoe = aoe,
 		source_r = source_r,
 		source_c = source_c,
+		bounces_left   = -1,  // se inicializa al primer impacto según relic_stacks[.REBOUND]
+		last_hit_enemy = nil,
 	}
 }
 

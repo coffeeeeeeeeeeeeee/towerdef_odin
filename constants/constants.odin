@@ -243,11 +243,14 @@ RELIC_FLASH_DURATION     :: f32(0.4)    // Seconds a relic icon flashes white wh
 MAX_RELIC_STACKS         :: i32(20)     // Maximum stack count for any relic
 
 RECYCLER_SELL_BONUS  :: f32(0.10)  // Extra fraction of sell price per RECYCLER stack
-LUMBERJACK_TREE_GOLD :: i32(40)    // Gold earned per tree chopped with LUMBERJACK
+LUMBERJACK_TREE_GOLD :: i32(120)   // Gold earned per tree chopped with LUMBERJACK
 MAX_ACTIVE_RELICS    :: int(5)     // Max distinct relic types the player can have active
 MEMENTO_GOLD_PER_10W :: i32(1)     // Gold per stack per 10 completed waves
-WARMED_UP_THRESHOLD  :: f32(15.0)  // Seconds of continuous targeting before warm bonus kicks in
-WARMED_UP_BONUS      :: f32(0.03)  // Extra damage multiplier per WARMED_UP stack when active
+WARMED_UP_THRESHOLD       :: f32(15.0)  // Seconds of continuous targeting before warm bonus kicks in
+WARMED_UP_BONUS           :: f32(0.03)  // Extra damage multiplier per WARMED_UP stack when active
+REBOUND_STACKS_PER_BOUNCE :: i32(2)     // Stacks needed per extra bounce
+REBOUND_RANGE             :: f32(2.0)   // Max tile distance to search for a bounce target
+OVERDRIVE_SPEED_PER_STACK :: f32(0.10)  // +10% attack speed per OVERDRIVE stack on a tower
 
 CARD_REROLL_COST     :: i32(50)    // Gold cost to reroll the 3-card selection
 CARD_SELL_PRICE      :: i32(25)    // Gold received when selling a non-relic card from hand
@@ -782,7 +785,7 @@ UI_TOOLTIP_PADDING_H  :: i32(8)
 UI_TOOLTIP_PADDING_V  :: i32(5)
 UI_TOOLTIP_OFFSET     :: i32(8)    // Distance above the trigger area
 UI_TOOLTIP_SEGMENTS   :: f32(8)
-UI_TOOLTIP_ROUNDNESS  :: f32(0.3)
+UI_TOOLTIP_ROUNDNESS  :: f32(0.12)
 UI_TOOLTIP_SHADOW_OFF :: f32(4)
 
 UI_TOAST_FONT_SIZE     :: i32(16)
@@ -818,6 +821,14 @@ UI_BUTTON_PAUSE_PRESS   :: raylib.Color{160, 120,   0, 255}
 
 // Transparente — usado como valor nulo en parámetros de color de botones
 COLOR_NONE              :: raylib.Color{  0,   0,   0,   0}
+
+// Cristales — moneda de progresión
+COLOR_CRISTAL           :: raylib.Color{100, 200, 255, 255}
+COLOR_CRISTAL_HOVER     :: raylib.Color{ 70, 170, 230, 255}
+COLOR_CRISTAL_PRESS     :: raylib.Color{ 50, 140, 200, 255}
+COLOR_CRISTAL_DARK      :: raylib.Color{ 40,  80, 110, 255}  // botón de reembolso
+COLOR_CRISTAL_DARK_HOVER :: raylib.Color{ 55, 100, 135, 255}
+COLOR_CRISTAL_DARK_PRESS :: raylib.Color{ 70, 120, 160, 255}
 
 UI_TEXT_COLOR            :: raylib.Color{ 20,  20,  20, 255}
 UI_OVERLAY_COLOR         :: raylib.Color{  0,   0,   0, 200}

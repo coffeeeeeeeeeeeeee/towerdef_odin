@@ -35,6 +35,20 @@ Card_State :: struct {
 	selected_card_idx: int,  // índice en hand, -1 = ninguna carta seleccionada
 }
 
+// Glow particle effect (enemy spawn = white circles rise; goal reach = dark red circles fall)
+Glow_Particle_Kind :: enum { SPAWN, GOAL_REACH }
+
+Glow_Particle :: struct {
+	grid_x, grid_y: f32,   // world position (grid coords, cell-centered)
+	t:              f32,   // time alive [0..lifetime]
+	lifetime:       f32,
+	radius_start:   f32,   // ring radius at t=0 (fraction of cell_size)
+	radius_end:     f32,   // ring radius at t=lifetime (fraction of cell_size)
+	dy_start:       f32,   // vertical offset at t=0        (cell fractions, up = negative)
+	dy_end:         f32,   // vertical offset at t=lifetime (cell fractions, up = negative)
+	kind:           Glow_Particle_Kind,
+}
+
 Simulation :: struct {
 	// Entities
 	towers: [dynamic]Tower,
@@ -116,6 +130,9 @@ Simulation :: struct {
 	graph_samples: [dynamic]Graph_Sample,
 	wave_marks: [dynamic]Wave_Mark,
 	_sample_timer: f32,
+
+	// Glow particle effects (spawn / goal reach)
+	glow_particles: [dynamic]Glow_Particle,
 }
 
 // Data point sampled periodically for the game-over graph
@@ -307,9 +324,15 @@ App_State :: struct {
 	current_campaign_node:  i32,   // -1 = el run actual no es de campaña; >=0 = índice del nodo
 	campaign_file_mtime:    i64,   // mtime de campaign.bin para hot-reload (DEVELOPER only)
 
-	// LUMBERJACK card — true mientras el jugador está en modo "seleccionar árbol".
-	// Se activa al clickear la carta desde la mano; se desactiva al talar o cancelar.
-	lumberjack_active: bool,
+	// Modo "seleccionar tile/torre" para cartas de acción con target.
+	// .TOWER (zero value) = inactivo. Cualquier otro kind = carta esperando selección.
+	// Lumberjack espera un árbol; Overdrive espera una torre.
+	pending_tower_action: Card_Kind,
+
+	// GARDENER: coordenadas de la torre seleccionada en Fase 1.
+	// {-1, -1} = Fase 1 (esperando selección de torre origen).
+	// Cualquier otro valor = Fase 2 (esperando tile destino).
+	gardener_source: [2]i32,
 
 	// Tooltip layer — written during UI render, drawn last so it's always on top.
 	// Only one tooltip can be visible per frame; first writer wins.

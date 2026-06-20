@@ -28,6 +28,9 @@ Card_Kind :: enum {
 	CRYPTOBRO,       // la torre que mata al jefe gana +1 nivel permanente (acumulable)
 	LUMBERJACK,      // al comprar: otorga 1 carga para talar un árbol del mapa y obtener oro
 	SHOPPING_CART,   // +1 slot de reliquia por stack (aumenta el límite de tipos distintos)
+	REBOUND,         // proyectiles rebotan a enemigo cercano (+1 rebote por cada 2 stacks)
+	OVERDRIVE,       // se aplica a una torre: +10% velocidad de ataque por stack (acumulable en torre)
+	GARDENER,        // activa: mueve una torre de lugar conservando todos sus stats
 }
 
 // Una carta del mazo
@@ -45,7 +48,7 @@ Card :: struct {
 //   2. Añadir entrada en RELIC_SPECS abajo (kind, rarity, keys, icon, procs)
 //   3. Aplicar el efecto en start_next_wave / kill / etc. (simulation.odin)
 //   4. Agregar traducción en translations.txt
-//   5. Agregar imagen en images/icon_<nombre>.png
+//   5. Agregar imagen en images/relics/<nombre>.png
 //
 // Todo lo demás (is_relic, relic_icon, relic_stacks, relic_apply,
 // card_name, card_rarity, tooltips, toasts, load/unload de iconos) se
@@ -68,12 +71,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .UNCOMMON,
 		name_key     = "CARD_INTEREST_BOOST_NAME",
 		desc_key     = "TOOLTIP_INTEREST_BOOST_DESC",
-		icon_path    = "images/icon_interest.png",
+		icon_path    = "images/relics/interest.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+%.0f%% por stack/oleada", constants.INTEREST_RATE * 100)
+			return fmt.tprintf(constants.get_text("STAT_INTEREST_BOOST"), constants.INTEREST_RATE * 100)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Interés x%d (%.0f%%/oleada)", stacks, f32(stacks) * constants.INTEREST_RATE * 100)
+			return fmt.tprintf(constants.get_text("TOAST_INTEREST_BOOST"), stacks, f32(stacks) * constants.INTEREST_RATE * 100)
 		},
 	},
 	{
@@ -81,12 +84,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .RARE,
 		name_key     = "CARD_WEAKEN_NAME",
 		desc_key     = "TOOLTIP_WEAKEN_DESC",
-		icon_path    = "images/icon_weaken.png",
+		icon_path    = "images/relics/weaken.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("-%.0f%% HP enemigo por stack", constants.WEAKEN_HP_REDUCTION * 100)
+			return fmt.tprintf(constants.get_text("STAT_WEAKEN"), constants.WEAKEN_HP_REDUCTION * 100)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Debilitar x%d (-%.0f%% HP enemigos)", stacks, f32(stacks) * constants.WEAKEN_HP_REDUCTION * 100)
+			return fmt.tprintf(constants.get_text("TOAST_WEAKEN"), stacks, f32(stacks) * constants.WEAKEN_HP_REDUCTION * 100)
 		},
 	},
 	{
@@ -94,12 +97,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .UNCOMMON,
 		name_key     = "CARD_DIVIDEND_NAME",
 		desc_key     = "TOOLTIP_DIVIDEND_DESC",
-		icon_path    = "images/icon_dividend.png",
+		icon_path    = "images/relics/dividend.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+%.0f%% del oro ahorrado/stack", constants.DIVIDEND_RATE * 100)
+			return fmt.tprintf(constants.get_text("STAT_DIVIDEND"), constants.DIVIDEND_RATE * 100)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Dividendo x%d (%.0f%%/oleada)", stacks, f32(stacks) * constants.DIVIDEND_RATE * 100)
+			return fmt.tprintf(constants.get_text("TOAST_DIVIDEND"), stacks, f32(stacks) * constants.DIVIDEND_RATE * 100)
 		},
 	},
 	{
@@ -107,12 +110,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .UNCOMMON,
 		name_key     = "CARD_STEAL_NAME",
 		desc_key     = "TOOLTIP_STEAL_DESC",
-		icon_path    = "images/icon_steal.png",
+		icon_path    = "images/relics/steal.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+%d carta(s) por stack/oleada", constants.STEAL_CARDS_PER_STACK)
+			return fmt.tprintf(constants.get_text("STAT_STEAL"), constants.STEAL_CARDS_PER_STACK)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Ladrón x%d (+%d carta/oleada)", stacks, stacks)
+			return fmt.tprintf(constants.get_text("TOAST_STEAL"), stacks, stacks)
 		},
 	},
 	{
@@ -120,13 +123,13 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .COMMON,
 		name_key     = "CARD_AUTO_UPGRADE_NAME",
 		desc_key     = "TOOLTIP_AUTO_UPGRADE_DESC",
-		icon_path    = "images/icon_auto.png",
+		icon_path    = "images/relics/auto.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("Base %.0fs, se divide a la mitad por stack", constants.AUTO_UPGRADE_INTERVAL)
+			return fmt.tprintf(constants.get_text("STAT_AUTO_UPGRADE"), constants.AUTO_UPGRADE_INTERVAL)
 		},
 		toast_format = proc(stacks: i32) -> string {
 			interval := constants.AUTO_UPGRADE_INTERVAL / math.pow(f32(2), f32(stacks - 1))
-			return fmt.tprintf("Auto-mejora x%d (cada %.1fs)", stacks, interval)
+			return fmt.tprintf(constants.get_text("TOAST_AUTO_UPGRADE"), stacks, interval)
 		},
 	},
 	{
@@ -134,12 +137,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .UNIQUE,
 		name_key     = "CARD_BLOODLUST_NAME",
 		desc_key     = "TOOLTIP_BLOODLUST_DESC",
-		icon_path    = "images/icon_bloodlust.png",
+		icon_path    = "images/relics/bloodlust.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+%.1f%% daño por kill/stack", constants.BLOODLUST_BONUS_PER_KILL * 100)
+			return fmt.tprintf(constants.get_text("STAT_BLOODLUST"), constants.BLOODLUST_BONUS_PER_KILL * 100)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Sed de sangre x%d (+%.1f%% daño/kill)", stacks, f32(stacks) * constants.BLOODLUST_BONUS_PER_KILL * 100)
+			return fmt.tprintf(constants.get_text("TOAST_BLOODLUST"), stacks, f32(stacks) * constants.BLOODLUST_BONUS_PER_KILL * 100)
 		},
 	},
 	{
@@ -147,12 +150,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .UNIQUE,
 		name_key     = "CARD_FLAWLESS_NAME",
 		desc_key     = "TOOLTIP_FLAWLESS_DESC",
-		icon_path    = "images/icon_flawless.png",
+		icon_path    = "images/relics/flawless.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+$%d oro por stack (ola perfecta)", constants.FLAWLESS_BONUS)
+			return fmt.tprintf(constants.get_text("STAT_FLAWLESS"), constants.FLAWLESS_BONUS)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Impecable x%d (+$%d/oleada perfecta)", stacks, constants.FLAWLESS_BONUS * stacks)
+			return fmt.tprintf(constants.get_text("TOAST_FLAWLESS"), stacks, constants.FLAWLESS_BONUS * stacks)
 		},
 	},
 	{
@@ -160,12 +163,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .RARE,
 		name_key     = "CARD_FORMATION_NAME",
 		desc_key     = "TOOLTIP_FORMATION_DESC",
-		icon_path    = "images/icon_formation.png",
+		icon_path    = "images/relics/formation.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+%.0f%% daño por stack (3+ iguales)", constants.FORMATION_BONUS * 100)
+			return fmt.tprintf(constants.get_text("STAT_FORMATION"), constants.FORMATION_BONUS * 100)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Formación x%d (+%.0f%% daño en línea de 3+)", stacks, f32(stacks) * constants.FORMATION_BONUS * 100)
+			return fmt.tprintf(constants.get_text("TOAST_FORMATION"), stacks, f32(stacks) * constants.FORMATION_BONUS * 100)
 		},
 	},
 	{
@@ -173,12 +176,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .RARE,
 		name_key     = "CARD_FROZEN_AMP_NAME",
 		desc_key     = "TOOLTIP_FROZEN_AMP_DESC",
-		icon_path    = "images/icon_frozen_amp.png",
+		icon_path    = "images/relics/frozen_amp.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+%.0f%% daño por stack vs lentos", constants.FROZEN_AMP_BONUS * 100)
+			return fmt.tprintf(constants.get_text("STAT_FROZEN_AMP"), constants.FROZEN_AMP_BONUS * 100)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Crioamplificador x%d (+%.0f%% daño a ralentizados)", stacks, f32(stacks) * constants.FROZEN_AMP_BONUS * 100)
+			return fmt.tprintf(constants.get_text("TOAST_FROZEN_AMP"), stacks, f32(stacks) * constants.FROZEN_AMP_BONUS * 100)
 		},
 	},
 	{
@@ -186,12 +189,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .RARE,
 		name_key     = "CARD_VETERAN_NAME",
 		desc_key     = "TOOLTIP_VETERAN_DESC",
-		icon_path    = "images/icon_veteran.png",
+		icon_path    = "images/relics/veteran.png",
 		stat_format  = proc() -> string {
-			return "+1 nivel inicial por stack"
+			return constants.get_text("STAT_VETERAN")
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Veterano x%d (%.0f%% chance/carta pre-nivelada)", stacks, min(f32(100), f32(stacks) * constants.VETERAN_BOOST_CHANCE * 100))
+			return fmt.tprintf(constants.get_text("TOAST_VETERAN"), stacks, min(f32(100), f32(stacks) * constants.VETERAN_BOOST_CHANCE * 100))
 		},
 	},
 	{
@@ -199,12 +202,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .UNCOMMON,
 		name_key     = "CARD_LOOT_NAME",
 		desc_key     = "TOOLTIP_LOOT_DESC",
-		icon_path    = "images/icon_loot.png",
+		icon_path    = "images/relics/loot.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("%.1f%% chance/kill por stack", constants.DECK_CARD_DROP_CHANCE * 100)
+			return fmt.tprintf(constants.get_text("STAT_LOOT"), constants.DECK_CARD_DROP_CHANCE * 100)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Saqueador x%d (%.1f%% chance/kill)", stacks, f32(stacks) * constants.DECK_CARD_DROP_CHANCE * 100)
+			return fmt.tprintf(constants.get_text("TOAST_LOOT"), stacks, f32(stacks) * constants.DECK_CARD_DROP_CHANCE * 100)
 		},
 	},
 	{
@@ -212,12 +215,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .COMMON,
 		name_key     = "CARD_SCOUT_NAME",
 		desc_key     = "TOOLTIP_SCOUT_DESC",
-		icon_path    = "images/icon_scout.png",
+		icon_path    = "images/relics/scout.png",
 		stat_format  = proc() -> string {
-			return "Anuncia el tipo de la próxima oleada"
+			return constants.get_text("STAT_SCOUT")
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Explorador x%d (alerta de oleada)", stacks)
+			return fmt.tprintf(constants.get_text("TOAST_SCOUT"), stacks)
 		},
 	},
 	{
@@ -225,12 +228,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .COMMON,
 		name_key     = "CARD_RECYCLER_NAME",
 		desc_key     = "TOOLTIP_RECYCLER_DESC",
-		icon_path    = "images/icon_recycler.png",
+		icon_path    = "images/relics/recycler.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+%.0f%% de venta por stack", constants.RECYCLER_SELL_BONUS * 100)
+			return fmt.tprintf(constants.get_text("STAT_RECYCLER"), constants.RECYCLER_SELL_BONUS * 100)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Reciclador x%d (+%.0f%% venta torres)", stacks, f32(stacks) * constants.RECYCLER_SELL_BONUS * 100)
+			return fmt.tprintf(constants.get_text("TOAST_RECYCLER"), stacks, f32(stacks) * constants.RECYCLER_SELL_BONUS * 100)
 		},
 	},
 	{
@@ -238,12 +241,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .COMMON,
 		name_key     = "CARD_MEMENTO_NAME",
 		desc_key     = "TOOLTIP_MEMENTO_DESC",
-		icon_path    = "images/icon_memento.png",
+		icon_path    = "images/relics/memento.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+$%d/stack/oleada cada 10 olas", constants.MEMENTO_GOLD_PER_10W)
+			return fmt.tprintf(constants.get_text("STAT_MEMENTO"), constants.MEMENTO_GOLD_PER_10W)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Recuerdo x%d (+$%d cada 10 olas)", stacks, i32(stacks) * constants.MEMENTO_GOLD_PER_10W)
+			return fmt.tprintf(constants.get_text("TOAST_MEMENTO"), stacks, i32(stacks) * constants.MEMENTO_GOLD_PER_10W)
 		},
 	},
 	{
@@ -251,12 +254,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .UNCOMMON,
 		name_key     = "CARD_WARMED_UP_NAME",
 		desc_key     = "TOOLTIP_WARMED_UP_DESC",
-		icon_path    = "images/icon_warmed_up.png",
+		icon_path    = "images/relics/warmed_up.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+%.0f%% daño/stack (>%.0fs con objetivo)", constants.WARMED_UP_BONUS * 100, constants.WARMED_UP_THRESHOLD)
+			return fmt.tprintf(constants.get_text("STAT_WARMED_UP"), constants.WARMED_UP_BONUS * 100, constants.WARMED_UP_THRESHOLD)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("En calor x%d (+%.0f%% daño continuo)", stacks, f32(stacks) * constants.WARMED_UP_BONUS * 100)
+			return fmt.tprintf(constants.get_text("TOAST_WARMED_UP"), stacks, f32(stacks) * constants.WARMED_UP_BONUS * 100)
 		},
 	},
 	{
@@ -264,12 +267,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .UNCOMMON,
 		name_key     = "CARD_CRYPTOBRO_NAME",
 		desc_key     = "TOOLTIP_CRYPTOBRO_DESC",
-		icon_path    = "images/icon_cryptobro.png",
+		icon_path    = "images/relics/cryptobro.png",
 		stat_format  = proc() -> string {
-			return "Otorga tantos niveles permanentes como stacks tenga a la torre que mata al jefe"
+			return constants.get_text("STAT_CRYPTOBRO")
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Cryptobro x%d (+%d nv al matar jefe)", stacks, stacks)
+			return fmt.tprintf(constants.get_text("TOAST_CRYPTOBRO"), stacks, stacks)
 		},
 	},
 	{
@@ -277,12 +280,12 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .COMMON,
 		name_key     = "CARD_LUMBERJACK_NAME",
 		desc_key     = "TOOLTIP_LUMBERJACK_DESC",
-		icon_path    = "images/icon_lumberjack.png",
+		icon_path    = "images/relics/lumberjack.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+$%d al talar un árbol del mapa", constants.LUMBERJACK_TREE_GOLD)
+			return fmt.tprintf(constants.get_text("STAT_LUMBERJACK"), constants.LUMBERJACK_TREE_GOLD)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Leñador x%d — seleccioná un árbol", stacks)
+			return fmt.tprintf(constants.get_text("TOAST_LUMBERJACK"), stacks)
 		},
 	},
 	{
@@ -290,12 +293,50 @@ RELIC_SPECS := []Relic_Spec{
 		rarity       = .EPIC,
 		name_key     = "CARD_SHOPPING_CART_NAME",
 		desc_key     = "TOOLTIP_SHOPPING_CART_DESC",
-		icon_path    = "images/icon_shopping_cart.png",
+		icon_path    = "images/relics/shopping_cart.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf("+1 slot de reliquia por stack (base %d)", constants.MAX_ACTIVE_RELICS)
+			return fmt.tprintf(constants.get_text("STAT_SHOPPING_CART"), constants.MAX_ACTIVE_RELICS)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf("Shopping Cart x%d (%d slots de reliquia)", stacks, constants.MAX_ACTIVE_RELICS + int(stacks))
+			return fmt.tprintf(constants.get_text("TOAST_SHOPPING_CART"), stacks, constants.MAX_ACTIVE_RELICS + int(stacks))
+		},
+	},
+	{
+		kind         = .REBOUND,
+		rarity       = .RARE,
+		name_key     = "CARD_REBOUND_NAME",
+		desc_key     = "TOOLTIP_REBOUND_DESC",
+		icon_path    = "images/relics/rebound.png",
+		stat_format  = proc() -> string {
+			return fmt.tprintf(constants.get_text("STAT_REBOUND"), constants.REBOUND_STACKS_PER_BOUNCE, constants.REBOUND_RANGE)
+		},
+		toast_format = proc(stacks: i32) -> string {
+			bounces := stacks / constants.REBOUND_STACKS_PER_BOUNCE
+			return fmt.tprintf(constants.get_text("TOAST_REBOUND"), stacks, bounces)
+		},
+	},
+	{
+		kind         = .OVERDRIVE,
+		rarity       = .UNCOMMON,
+		name_key     = "CARD_OVERDRIVE_NAME",
+		desc_key     = "TOOLTIP_OVERDRIVE_DESC",
+		icon_path    = "images/relics/overdrive.png",
+		stat_format  = proc() -> string {
+			return fmt.tprintf(constants.get_text("STAT_OVERDRIVE"), i32(constants.OVERDRIVE_SPEED_PER_STACK * 100))
+		},
+		toast_format = proc(stacks: i32) -> string {
+			return fmt.tprintf(constants.get_text("TOAST_OVERDRIVE"), i32(constants.OVERDRIVE_SPEED_PER_STACK * 100))
+		},
+	},
+	{
+		kind         = .GARDENER,
+		rarity       = .COMMON,
+		name_key     = "CARD_GARDENER_NAME",
+		desc_key     = "TOOLTIP_GARDENER_DESC",
+		icon_path    = "images/relics/gardener.png",
+		stat_format  = proc() -> string { return "" },
+		toast_format = proc(stacks: i32) -> string {
+			return constants.get_text("TOAST_GARDENER")
 		},
 	},
 }

@@ -9,8 +9,10 @@ import "../constants"
 // Version 2: agrega progreso de campaña (campaign_completed/best/stars).
 // Version 3: agrega SHOPPING_CART/LUMBERJACK al enum (size change).
 // Version 4: costos de reliquias por rareza (bool arrays, misma estructura que v3 pero distinto significado).
+// Version 5: agrega REBOUND al enum Card_Kind; descarta saves anteriores para evitar bits stale.
+// Version 6: agrega OVERDRIVE al enum Card_Kind; descarta saves anteriores para evitar bits stale.
 //   Migración: archivos anteriores se descartan y arrancan zero. Aceptable durante desarrollo.
-META_SAVE_VERSION :: u32(4)
+META_SAVE_VERSION :: u32(6)
 GAME_SAVE_DIR     :: "towerdef"
 
 // Devuelve la ruta al archivo de guardado según la plataforma.

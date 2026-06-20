@@ -58,6 +58,11 @@ Tower :: struct {
 	// Reset to 0 when no target is found. Bonus kicks in at WARMED_UP_THRESHOLD.
 	warm_timer: f32,
 
+	// OVERDRIVE relic: stacks applied to this specific tower.
+	// Each stack permanently reduces cooldown by OVERDRIVE_SPEED_PER_STACK.
+	// Baked into t.cooldown via tower_recompute_stats.
+	overdrive_stacks: i32,
+
 	// Lifetime damage statistics
 	total_damage: f32,
 }
@@ -98,6 +103,10 @@ tower_recompute_stats :: proc(t: ^Tower) {
 	n := f32(t.level - 1)
 	t.damage   = t.base_damage   * (1 + constants.TOWER_DAMAGE_PER_LEVEL * n)
 	t.cooldown = t.base_cooldown / (1 + constants.TOWER_SPEED_PER_LEVEL  * n)
+	// OVERDRIVE: cada stack reduce el cooldown un % adicional sobre el valor ya escalado por nivel
+	if t.overdrive_stacks > 0 {
+		t.cooldown /= (1.0 + constants.OVERDRIVE_SPEED_PER_STACK * f32(t.overdrive_stacks))
+	}
 	min_cd := constants.TOWER_SPECS[t.type].min_cooldown
 	if min_cd > 0 && t.cooldown < min_cd {
 		t.cooldown = min_cd
