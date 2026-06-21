@@ -2085,8 +2085,11 @@ airdrop_update :: proc(app: ^entities.App_State, dt: f32) {
 	sim.airdrop_timer -= dt
 	if sim.airdrop_timer <= 0 {
 		airdrop_spawn(app)
-		sim.airdrop_timer = constants.AIRDROP_SPAWN_INTERVAL_MIN +
-		                    rand.float32() * (constants.AIRDROP_SPAWN_INTERVAL_MAX - constants.AIRDROP_SPAWN_INTERVAL_MIN)
+		// Reliquia AIRDROP: divide el intervalo por (1 + stacks * factor) → nunca llega a 0
+		base_interval := constants.AIRDROP_SPAWN_INTERVAL_MIN +
+		                 rand.float32() * (constants.AIRDROP_SPAWN_INTERVAL_MAX - constants.AIRDROP_SPAWN_INTERVAL_MIN)
+		speed_factor  := 1.0 + constants.AIRDROP_RELIC_SPEED_PER_STACK * f32(sim.relic_stacks[.AIRDROP])
+		sim.airdrop_timer = base_interval / speed_factor
 	}
 
 	// Update each airdrop
@@ -2176,22 +2179,57 @@ airdrop_collect :: proc(app: ^entities.App_State, row, col: i32) -> bool {
 		         i32(rand.float32() * f32(constants.AIRDROP_MONEY_MAX - constants.AIRDROP_MONEY_MIN + 1))
 		entities.app_add_money(app, money)
 
-		// 2. Reliquia aleatoria (de las desbloqueadas y no maxeadas)
-		relic_given := false
-		candidates  : [dynamic]entities.Card_Kind
-		defer delete(candidates)
+		// 2. Carta de reliquia aleatoria a la mano (de las desbloqueadas y no maxeadas).
+		// Con la reliquia AIRDROP, las rarezas más altas tienen más peso.
+		relic_given  := false
+		airdrop_stacks := sim.relic_stacks[.AIRDROP]
+
+		// Pesos por rareza: base + bonus por stack de AIRDROP
+		// Con 0 stacks: Common=40, Uncommon=15, Rare=4, Epic=1 → ~67/25/7/2%
+		// Con 20 stacks: Common=40, Uncommon=55, Rare=64, Epic=41 → ~20/28/32/21%
+		rarity_weight :: proc(rarity: constants.Card_Rarity, stacks: i32) -> int {
+			switch rarity {
+			case .COMMON:   return 40
+			case .UNCOMMON: return 15 + int(stacks) * 2
+			case .RARE:     return 4  + int(stacks) * 3
+			case .EPIC:     return 1  + int(stacks) * 2
+			case .UNIQUE:   return 0
+			}
+			return 0
+		}
+
+		// Construir pool con pesos
+		pool_kinds:   [dynamic]entities.Card_Kind
+		pool_weights: [dynamic]int
+		defer delete(pool_kinds)
+		defer delete(pool_weights)
+		total_weight := 0
 		for spec in entities.RELIC_SPECS {
 			if entities.meta_is_relic_unlocked(&app.meta, spec.kind) && !entities.relic_is_maxed(sim, spec.kind) {
-				append(&candidates, spec.kind)
+				w := rarity_weight(entities.card_rarity(entities.Card{kind = spec.kind}), airdrop_stacks)
+				if w > 0 {
+					append(&pool_kinds, spec.kind)
+					append(&pool_weights, w)
+					total_weight += w
+				}
 			}
 		}
-		if len(candidates) > 0 {
-			idx  := rand.int_max(len(candidates))
-			kind := candidates[idx]
-			entities.relic_apply(sim, kind)
-			sim.relic_flash_timers[kind] = constants.RELIC_FLASH_DURATION
+		if len(pool_kinds) > 0 {
+			// Selección ponderada
+			roll := rand.int_max(total_weight)
+			cum  := 0
+			kind := pool_kinds[0]
+			for i in 0 ..< len(pool_kinds) {
+				cum += pool_weights[i]
+				if roll < cum {
+					kind = pool_kinds[i]
+					break
+				}
+			}
+			card := entities.Card{kind = kind}
+			entities.card_add_to_hand(sim, card)
 			relic_given = true
-			relic_name  := entities.card_name(entities.Card{kind = kind})
+			relic_name  := entities.card_name(card)
 			entities.add_toast(app, fmt.tprintf("📦 %s + $%d", relic_name, money), .SUCCESS, 3.0)
 		} else {
 			entities.add_toast(app, fmt.tprintf("📦 $%d", money), .SUCCESS, 2.5)

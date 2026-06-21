@@ -287,10 +287,29 @@ render_tower_ranges :: proc(app: ^entities.App_State) {
 	}
 }
 
+// Dibuja un overlay difuminado sobre un tile para marcar un action target.
+// El blur se simula con LAYERS rectángulos concéntricos: el más externo cubre el
+// tile completo y el más interno cubre el 80%. Cada capa tiene el mismo alpha base,
+// por lo que el área central (cubierta por todas las capas) acumula más opacidad.
+// layer_alpha controla la intensidad: más bajo = más sutil (p.ej. al hacer hover).
+draw_action_target :: proc(x, y, cs: f32, color: raylib.Color, layer_alpha: u8 = 20) {
+	LAYERS   :: 5
+	PAD_STEP :: f32(0.025)   // cada capa se inset 2.5% del tile
+	for k in 0 ..< LAYERS {
+		pad := cs * PAD_STEP * f32(k)
+		sz  := cs - 2 * pad
+		c   := raylib.Color{color.r, color.g, color.b, layer_alpha}
+		raylib.DrawRectangleRounded(raylib.Rectangle{x + pad, y + pad, sz, sz}, 0.4, 6, c)
+	}
+}
+
 // Render map objects (towers, spawn, goal, accessories, obstacles) - intermediate layer
 render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	cs    := f32(app.settings.cell_size) * app.zoom
 	mouse := raylib.GetMousePosition()
+
+	COLOR_TARGET_VALID   :: raylib.Color{60, 220, 90, 255}   // verde: action target válido
+	COLOR_TARGET_INVALID :: raylib.Color{220, 60, 60, 255}   // rojo: inválido / origen Gardener
 
 	// ── Pasada 1: overlays de casillas posibles (debajo de los objetos del mapa) ──
 	if app.pending_tower_action != .TOWER && (app.state == .PLAYING || app.state == .PAUSED) {
@@ -299,10 +318,9 @@ render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
 				tile    := m.grid[row][col]
 				x       := f32(col) * cs + f32(app.camera_offset_x)
 				y       := f32(row) * cs + f32(app.camera_offset_y)
-				pad     := cs * 0.1
-				rect    := raylib.Rectangle{x + pad, y + pad, cs * 0.8, cs * 0.8}
 				hovered := raylib.CheckCollisionPointRec(mouse, raylib.Rectangle{x, y, cs, cs})
-				alpha   := u8(hovered ? 40 : 100)
+				// Hover más sutil: layer_alpha más bajo para dar mayor transparencia
+				layer_a := u8(hovered ? 10 : 20)
 
 				is_tower_tile := tile == .TOWER_ARCHER || tile == .TOWER_CANNON ||
 				                 tile == .TOWER_SNIPER  || tile == .TOWER_MISSILE ||
@@ -310,33 +328,45 @@ render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
 				                 tile == .TOWER_ENHANCE || tile == .TOWER_TESLA ||
 				                 tile == .TOWER_MORTAR
 
+				drew_target := false
+
 				#partial switch app.pending_tower_action {
 				case .LUMBERJACK:
 					if tile == .ACCESSORY_TREE && !m.water_grid[row][col] {
-						raylib.DrawRectangleRounded(rect, 0.35, 6, raylib.Color{255, 200, 50, alpha})
+						draw_action_target(x, y, cs, COLOR_TARGET_VALID, layer_a)
+						drew_target = true
 					}
 				case .OVERDRIVE:
 					if is_tower_tile {
-						raylib.DrawRectangleRounded(rect, 0.35, 6, raylib.Color{100, 200, 255, alpha})
+						draw_action_target(x, y, cs, COLOR_TARGET_VALID, layer_a)
+						drew_target = true
 					}
 				case .GARDENER:
 					if app.gardener_source == {-1, -1} {
-						// Fase 1: overlay verde sobre todas las torres
+						// Fase 1: torres válidas en verde
 						if is_tower_tile {
-							raylib.DrawRectangleRounded(rect, 0.35, 6, raylib.Color{80, 220, 100, alpha})
+							draw_action_target(x, y, cs, COLOR_TARGET_VALID, layer_a)
+							drew_target = true
 						}
 					} else {
-						// Fase 2: origen naranja fijo + destinos vacíos en verde
+						// Fase 2: origen siempre en rojo, destinos válidos en verde
 						if app.gardener_source == {i32(row), i32(col)} {
-							raylib.DrawRectangleRounded(rect, 0.35, 6, raylib.Color{255, 160, 40, 160})
+							draw_action_target(x, y, cs, COLOR_TARGET_INVALID, 25)
+							drew_target = true
 						} else if tile == .EMPTY &&
 						          m.obstacle_grid[row][col] == .EMPTY &&
 						          !m.water_grid[row][col] {
-							raylib.DrawRectangleRounded(rect, 0.35, 6, raylib.Color{80, 220, 100, alpha})
+							draw_action_target(x, y, cs, COLOR_TARGET_VALID, layer_a)
+							drew_target = true
 						}
 					}
 				case .TOWER:
-					// inactivo — nunca se llega aquí
+					// inactivo
+				}
+
+				// Tile hovereado sin ser target válido → overlay rojo sutil
+				if hovered && !drew_target {
+					draw_action_target(x, y, cs, COLOR_TARGET_INVALID, 8)
 				}
 			}
 		}

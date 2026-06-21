@@ -939,6 +939,9 @@ INPUT_CURSOR_COLOR       :: raylib.Color{ 30,  30,  30, 255}
 
 AIRDROP_SPAWN_INTERVAL_MIN :: f32(20.0)  // Segundos mínimos entre drops
 AIRDROP_SPAWN_INTERVAL_MAX :: f32(50.0)  // Segundos máximos entre drops
+// Reliquia AIRDROP: cada stack divide el intervalo por (1 + N * factor).
+// Con 5 stacks = 2x más frecuente; con 20 stacks = 5x más frecuente.
+AIRDROP_RELIC_SPEED_PER_STACK :: f32(0.20)
 AIRDROP_PLANE_SPEED        :: f32(180.0) // Velocidad del avión (world px/s)
 AIRDROP_PLANE_Y_OFFSET     :: f32(-60.0) // Y del avión relativo al borde superior del mapa
 AIRDROP_BOX_FALL_SPEED     :: f32(2.2)   // Duración de la caída del paracaídas (segundos)

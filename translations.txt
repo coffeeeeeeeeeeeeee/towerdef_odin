@@ -733,6 +733,18 @@ TOOLTIP_GARDENER_DESC|PORTUGUESE|Move uma torre para uma nova posição, mantend
 TOAST_GARDENER|ENGLISH|Tower moved!
 TOAST_GARDENER|SPANISH|¡Torre reubicada!
 TOAST_GARDENER|PORTUGUESE|Torre reposicionada!
+CARD_AIRDROP_NAME|ENGLISH|Airdrop
+CARD_AIRDROP_NAME|SPANISH|Airdrop
+CARD_AIRDROP_NAME|PORTUGUESE|Airdrop
+TOOLTIP_AIRDROP_DESC|ENGLISH|Airdrops arrive more frequently and drop rarer relic cards
+TOOLTIP_AIRDROP_DESC|SPANISH|Los airdrops llegan más seguido y otorgan cartas de mayor rareza
+TOOLTIP_AIRDROP_DESC|PORTUGUESE|Airdrops chegam mais rápido e concedem cartas de maior raridade
+STAT_AIRDROP|ENGLISH|+%d%% speed per stack · rarer cards with more stacks
+STAT_AIRDROP|SPANISH|+%d%% velocidad por stack · cartas más raras con más stacks
+STAT_AIRDROP|PORTUGUESE|+%d%% velocidade por stack · cartas mais raras com mais stacks
+TOAST_AIRDROP|ENGLISH|Airdrops %d%% faster!
+TOAST_AIRDROP|SPANISH|¡Airdrops %d%% más rápidos!
+TOAST_AIRDROP|PORTUGUESE|Airdrops %d%% mais rápidos!
 
 # Relic stat lines (shown in tooltip below description)
 STAT_INTEREST_BOOST|ENGLISH|+%.0f%% per stack/wave

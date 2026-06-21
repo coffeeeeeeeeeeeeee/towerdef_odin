@@ -31,6 +31,7 @@ Card_Kind :: enum {
 	REBOUND,         // proyectiles rebotan a enemigo cercano (+1 rebote por cada 2 stacks)
 	OVERDRIVE,       // se aplica a una torre: +10% velocidad de ataque por stack (acumulable en torre)
 	GARDENER,        // activa: mueve una torre de lugar conservando todos sus stats
+	AIRDROP,         // pasiva: airdrops más frecuentes y cartas de mayor rareza por stack
 }
 
 // Una carta del mazo
@@ -337,6 +338,19 @@ RELIC_SPECS := []Relic_Spec{
 		stat_format  = proc() -> string { return "" },
 		toast_format = proc(stacks: i32) -> string {
 			return constants.get_text("TOAST_GARDENER")
+		},
+	},
+	{
+		kind         = .AIRDROP,
+		rarity       = .COMMON,
+		name_key     = "CARD_AIRDROP_NAME",
+		desc_key     = "TOOLTIP_AIRDROP_DESC",
+		icon_path    = "images/relics/airdrop.png",
+		stat_format  = proc() -> string {
+			return fmt.tprintf(constants.get_text("STAT_AIRDROP"), i32(constants.AIRDROP_RELIC_SPEED_PER_STACK * 100))
+		},
+		toast_format = proc(stacks: i32) -> string {
+			return fmt.tprintf(constants.get_text("TOAST_AIRDROP"), i32(constants.AIRDROP_RELIC_SPEED_PER_STACK * 100 * f32(stacks)))
 		},
 	},
 }
