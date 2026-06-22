@@ -97,18 +97,12 @@ void main() {
     float edge = smoothstep(0.38, 0.62, sum) - smoothstep(0.50, 0.62, sum);
 
     // ── Phase 2: world-anchored caustics ─────────────────────────────────────
-    // Convert gl_FragCoord (y=0 at bottom, OpenGL) → world px (anchored to map).
-    // Equivalent to the original (-iResolution + 2*fragCoord)/iResolution.y
-    // but using world coordinates so the pattern moves with pan and zoom.
     float screenH   = 1.0 / texelSize.y;
     vec2  screenPos = vec2(gl_FragCoord.x, screenH - gl_FragCoord.y);  // flip y
     vec2  worldPos  = (screenPos - u_camera_offset) / u_zoom;
-    // Normalizar por tamaño de tile (32 px = 1 metro) → p en unidades de tile.
-    // Las cáusticas tienen la misma escala física independientemente de resolución o zoom.
-    vec2  p         = worldPos / 32.0;
+    vec2  p         = worldPos / 32.0;  // 1 unit = 1 tile = 1 metro
 
     // Para vista top-down usamos worldPos directamente como coordenada del noise.
-    // Evita la singularidad de perspectiva del original (diseñado para p centrado en 0).
     vec3 pos = vec3(p.x, u_time * 0.75, p.y);
     pos *= 3.0;
 

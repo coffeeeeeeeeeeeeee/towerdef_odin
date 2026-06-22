@@ -273,6 +273,8 @@ cloud_shader_unload :: proc() {
 }
 
 cloud_shader_draw :: proc(app: ^entities.App_State) {
+	if app.zoom == constants.ZOOM_MAX { return }
+
 	// Opacity: 1.0 at ZOOM_MIN, 0.0 at ZOOM_FADE_OUT
 	// smoothstep maps zoom → [0,1] then we invert
 	zoom_fade_out :: f32(1.3)
@@ -306,8 +308,14 @@ cloud_shader_draw :: proc(app: ^entities.App_State) {
 // Render the entire game
 render_game :: proc(app: ^entities.App_State) {
 	ui_blocks_clear()
-	raylib.ClearBackground(raylib.BLACK)
-	nebula_draw()
+	raylib.ClearBackground(raylib.BLACK)		
+
+	if app.state == .MENU ||
+		app.state == .RUN_COMPLETE ||
+		app.state == .CAMPAIGN_MAP ||
+		app.state == .PROGRESSION {
+			nebula_draw()
+	}
 
 	// Map and gameplay are only visible while actually playing or editing.
 	// In menu/overlay states the nebula is the sole background.
