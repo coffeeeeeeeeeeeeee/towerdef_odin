@@ -524,8 +524,8 @@ Grass_Style :: struct {
 }
 
 BIOME_GRASS_STYLES := [Biome]Grass_Style {
-	.PLAIN    = {alpha = 0.30, density = 1.0, grass_color = {0.38, 0.55, 0.15, 1.0}},
-	.FOREST   = {alpha = 0.45, density = 1.5, grass_color = {0.18, 0.40, 0.10, 1.0}},
+	.PLAIN    = {alpha = 0.80, density = 1.0, grass_color = {0.58, 0.72, 0.42, 1.0}},
+	.FOREST   = {alpha = 0.95, density = 1.6, grass_color = {0.16, 0.42, 0.09, 1.0}},
 	.DESERT   = {alpha = 0.0,  density = 0.0, grass_color = {0, 0, 0, 1}},
 	.MOUNTAIN = {alpha = 0.0,  density = 0.0, grass_color = {0, 0, 0, 1}},
 }
@@ -573,7 +573,7 @@ INTEREST_RATE    :: f32(0.05)  // Fraction of current gold awarded as interest a
 // Environment colors
 // =============================================================================
 
-COLOR_GRID_LINE  :: raylib.Color{150, 150, 150, 100}
+COLOR_GRID_LINE  :: raylib.Color{238, 238, 238, 255}
 COLOR_PATH       :: raylib.Color{210, 180, 140, 255}
 COLOR_SPAWN      :: raylib.Color{100, 200, 100, 255}
 COLOR_GOAL       :: raylib.Color{200, 100, 100, 255}

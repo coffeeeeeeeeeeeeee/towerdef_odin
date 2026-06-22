@@ -56,13 +56,16 @@ nebula_draw :: proc() {
 // ── Water blob shader ────────────────────────────────────────────────────────
 
 Water_Shader :: struct {
-	shader:    raylib.Shader,
-	loc_texel: i32,
-	loc_water: i32,
-	loc_edge:  i32,
-	mask_tex:  raylib.RenderTexture2D,
-	tex_w:     i32,
-	tex_h:     i32,
+	shader:      raylib.Shader,
+	loc_texel:   i32,
+	loc_water:   i32,
+	loc_edge:    i32,
+	loc_time:    i32,
+	loc_cam:     i32,
+	loc_zoom:    i32,
+	mask_tex:    raylib.RenderTexture2D,
+	tex_w:       i32,
+	tex_h:       i32,
 }
 
 water_shader: Water_Shader
@@ -73,6 +76,9 @@ water_shader_init :: proc() {
 	water_shader.loc_texel = raylib.GetShaderLocation(s, "texelSize")
 	water_shader.loc_water = raylib.GetShaderLocation(s, "waterColor")
 	water_shader.loc_edge  = raylib.GetShaderLocation(s, "edgeColor")
+	water_shader.loc_time  = raylib.GetShaderLocation(s, "u_time")
+	water_shader.loc_cam   = raylib.GetShaderLocation(s, "u_camera_offset")
+	water_shader.loc_zoom  = raylib.GetShaderLocation(s, "u_zoom")
 	water_shader_resize()
 }
 
@@ -610,12 +616,12 @@ render_map :: proc(app: ^entities.App_State, m: ^entities.Map, for_preview: bool
 	// Grass overlay — se dibuja ANTES del agua para que el agua la tape naturalmente.
 	if !for_preview { render_grass_overlay(app, m, cs) }
 
-	render_water_layer(m, cs, app.camera_offset_x, app.camera_offset_y, for_preview)
-	render_paths(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y)
-
-	// Heightmap overlay — desniveles sutiles por celda + contornos.
-	// Se dibuja DESPUÉS de paths/water para que tinte todo el grid (decisión del usuario).
+	// Heightmap overlay — se dibuja ANTES del agua para que el agua lo tape
+	// en las celdas acuáticas (sin heightmap ni contornos sobre el agua).
 	render_heightmap_overlay(app, m, cs)
+
+	render_water_layer(m, cs, app.camera_offset_x, app.camera_offset_y, app.zoom, for_preview)
+	render_paths(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y)
 
 	// Grid lines
 	if app.settings.show_grid {
@@ -827,6 +833,7 @@ render_paths :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset
 
 // Render grid lines
 render_grid_lines :: proc(app: ^entities.App_State, cs: f32, map_w, map_h: i32) {
+	raylib.BeginBlendMode(.MULTIPLIED)
 	// Vertical lines (one per column boundary)
 	for i in 0 ..= map_w {
 		x := i32(f32(i) * cs) + app.camera_offset_x
@@ -845,6 +852,7 @@ render_grid_lines :: proc(app: ^entities.App_State, cs: f32, map_w, map_h: i32) 
 			constants.COLOR_GRID_LINE,
 		)
 	}
+	raylib.EndBlendMode()
 }
 render_spawn :: proc(x, y, cs: f32) {
 	// Draw spawn circle
@@ -2085,16 +2093,22 @@ water_render_mask :: proc(m: ^entities.Map, cs: f32, camera_offset_x, camera_off
 
 // Fase 2: aplica el shader de blur+threshold sobre la máscara pre-computada.
 // Dibuja al render target activo (pantalla o una RenderTexture2D de preview).
-water_render_apply :: proc() {
+water_render_apply :: proc(cam_x: f32 = 0, cam_y: f32 = 0, zoom: f32 = 1.0) {
 	wc := constants.COLOR_WATER
 	ec := constants.COLOR_WATER_EDGE
 	water_color := [4]f32{f32(wc.r)/255, f32(wc.g)/255, f32(wc.b)/255, f32(wc.a)/255}
 	edge_color  := [4]f32{f32(ec.r)/255, f32(ec.g)/255, f32(ec.b)/255, f32(ec.a)/255}
 	texel_size  := [2]f32{1.0 / f32(water_shader.tex_w), 1.0 / f32(water_shader.tex_h)}
+	t           := f32(raylib.GetTime())
+	cam         := [2]f32{cam_x, cam_y}
+	z           := zoom
 
-	raylib.SetShaderValue(water_shader.shader, water_shader.loc_texel, &texel_size, .VEC2)
+	raylib.SetShaderValue(water_shader.shader, water_shader.loc_texel, &texel_size,  .VEC2)
 	raylib.SetShaderValue(water_shader.shader, water_shader.loc_water, &water_color, .VEC4)
 	raylib.SetShaderValue(water_shader.shader, water_shader.loc_edge,  &edge_color,  .VEC4)
+	if water_shader.loc_time >= 0 { raylib.SetShaderValue(water_shader.shader, water_shader.loc_time, &t,    .FLOAT) }
+	if water_shader.loc_cam  >= 0 { raylib.SetShaderValue(water_shader.shader, water_shader.loc_cam,  &cam,  .VEC2)  }
+	if water_shader.loc_zoom >= 0 { raylib.SetShaderValue(water_shader.shader, water_shader.loc_zoom, &z,    .FLOAT) }
 
 	raylib.BeginShaderMode(water_shader.shader)
 	src := raylib.Rectangle{
@@ -2106,11 +2120,11 @@ water_render_apply :: proc() {
 }
 
 // Render de agua completo (máscara + shader). Usado en el camino normal de juego/editor.
-render_water_layer :: proc(m: ^entities.Map, cs: f32, camera_offset_x, camera_offset_y: i32, for_preview: bool = false) {
+render_water_layer :: proc(m: ^entities.Map, cs: f32, camera_offset_x, camera_offset_y: i32, zoom: f32 = 1.0, for_preview: bool = false) {
 	// En modo preview la máscara ya fue computada antes de entrar al BeginTextureMode.
 	// Solo aplicamos el shader al render target activo (la textura de preview).
 	if for_preview {
-		water_render_apply()
+		water_render_apply() // preview: sin transform de cámara
 		return
 	}
 
@@ -2127,7 +2141,7 @@ render_water_layer :: proc(m: ^entities.Map, cs: f32, camera_offset_x, camera_of
 	// Asegurar que la máscara tenga el tamaño de pantalla antes del render normal
 	water_shader_resize()
 	water_render_mask(m, cs, camera_offset_x, camera_offset_y)
-	water_render_apply()
+	water_render_apply(f32(camera_offset_x), f32(camera_offset_y), zoom)
 }
 
 // =============================================================================
