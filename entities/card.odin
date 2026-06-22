@@ -32,6 +32,7 @@ Card_Kind :: enum {
 	OVERDRIVE,       // se aplica a una torre: +10% velocidad de ataque por stack (acumulable en torre)
 	GARDENER,        // activa: mueve una torre de lugar conservando todos sus stats
 	AIRDROP,         // pasiva: airdrops más frecuentes y cartas de mayor rareza por stack
+	CRANE_KICK,      // activa: la torre seleccionada mata instantáneamente al próximo enemigo en rango (1 carga por carta)
 }
 
 // Una carta del mazo
@@ -351,6 +352,17 @@ RELIC_SPECS := []Relic_Spec{
 		},
 		toast_format = proc(stacks: i32) -> string {
 			return fmt.tprintf(constants.get_text("TOAST_AIRDROP"), i32(constants.AIRDROP_RELIC_SPEED_PER_STACK * 100 * f32(stacks)))
+		},
+	},
+	{
+		kind         = .CRANE_KICK,
+		rarity       = .RARE,
+		name_key     = "CARD_CRANE_KICK_NAME",
+		desc_key     = "TOOLTIP_CRANE_KICK_DESC",
+		icon_path    = "images/relics/karate_kid.png",
+		stat_format  = proc() -> string { return "" },
+		toast_format = proc(stacks: i32) -> string {
+			return constants.get_text("TOAST_CRANE_KICK")
 		},
 	},
 }

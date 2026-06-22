@@ -513,6 +513,23 @@ BIOME_HEIGHTMAP_STYLES := [Biome]Heightmap_Style {
 	.MOUNTAIN = {contrast_mult = 2.8, alpha_max = 0.50, contour_steps = 9.0, contour_strength = 0.275, contour_width = 1.0},
 }
 
+// Grass overlay — textura procedural de hierba (Plain y Forest).
+// alpha:       opacidad máxima del overlay [0..1]. 0 = desactivado.
+// density:     escala del ruido (1.0 ≈ 1 patch por tile).
+// grass_color: tinte RGB en espacio [0..1] (el canal A es ignorado por el shader).
+Grass_Style :: struct {
+	alpha:       f32,
+	density:     f32,
+	grass_color: [4]f32,
+}
+
+BIOME_GRASS_STYLES := [Biome]Grass_Style {
+	.PLAIN    = {alpha = 0.30, density = 1.0, grass_color = {0.38, 0.55, 0.15, 1.0}},
+	.FOREST   = {alpha = 0.45, density = 1.5, grass_color = {0.18, 0.40, 0.10, 1.0}},
+	.DESERT   = {alpha = 0.0,  density = 0.0, grass_color = {0, 0, 0, 1}},
+	.MOUNTAIN = {alpha = 0.0,  density = 0.0, grass_color = {0, 0, 0, 1}},
+}
+
 // Rarity system — probabilidades de aparición por slot de tienda (suman 1.0)
 RARITY_PROB_COMMON   :: f32(0.60)
 RARITY_PROB_UNCOMMON :: f32(0.25)

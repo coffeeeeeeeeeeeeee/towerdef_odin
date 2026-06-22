@@ -126,6 +126,70 @@ heightmap_shader_unload :: proc() {
 	raylib.UnloadShader(heightmap_shader.shader)
 }
 
+// ── Grass overlay shader (Plain & Forest biomes) ─────────────────────────────
+
+Grass_Shader :: struct {
+	shader:          raylib.Shader,
+	loc_resolution:  i32,
+	loc_cam_offset:  i32,
+	loc_zoom:        i32,
+	loc_time:        i32,
+	loc_alpha:       i32,
+	loc_density:     i32,
+	loc_grass_color: i32,
+}
+
+grass_shader: Grass_Shader
+
+grass_shader_init :: proc() {
+	s := raylib.LoadShader(nil, "assets/grass.glsl")
+	grass_shader = Grass_Shader{
+		shader          = s,
+		loc_resolution  = raylib.GetShaderLocation(s, "u_resolution"),
+		loc_cam_offset  = raylib.GetShaderLocation(s, "u_camera_offset"),
+		loc_zoom        = raylib.GetShaderLocation(s, "u_zoom"),
+		loc_time        = raylib.GetShaderLocation(s, "u_time"),
+		loc_alpha       = raylib.GetShaderLocation(s, "u_alpha"),
+		loc_density     = raylib.GetShaderLocation(s, "u_density"),
+		loc_grass_color = raylib.GetShaderLocation(s, "u_grass_color"),
+	}
+}
+
+grass_shader_unload :: proc() {
+	raylib.UnloadShader(grass_shader.shader)
+}
+
+render_grass_overlay :: proc(app: ^entities.App_State, m: ^entities.Map, cs: f32) {
+	style := constants.BIOME_GRASS_STYLES[m.biome]
+	if style.alpha <= 0 { return }
+	if grass_shader.shader.id <= 1 { return }
+
+	w    := f32(raylib.GetRenderWidth())
+	h    := f32(raylib.GetRenderHeight())
+	t    := f32(raylib.GetTime())
+	res  := [2]f32{w, h}
+	cam  := [2]f32{f32(app.camera_offset_x), f32(app.camera_offset_y)}
+	zoom := app.zoom
+
+	if grass_shader.loc_resolution  >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_resolution,  &res,              .VEC2)  }
+	if grass_shader.loc_cam_offset  >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_cam_offset,  &cam,              .VEC2)  }
+	if grass_shader.loc_zoom        >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_zoom,        &zoom,             .FLOAT) }
+	if grass_shader.loc_time        >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_time,        &t,                .FLOAT) }
+	if grass_shader.loc_alpha       >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_alpha,       &style.alpha,      .FLOAT) }
+	if grass_shader.loc_density     >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_density,     &style.density,    .FLOAT) }
+	if grass_shader.loc_grass_color >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_grass_color, &style.grass_color, .VEC4) }
+
+	raylib.BeginShaderMode(grass_shader.shader)
+	raylib.DrawRectangle(
+		app.camera_offset_x,
+		app.camera_offset_y,
+		i32(f32(m.width) * cs),
+		i32(f32(m.height) * cs),
+		raylib.WHITE,
+	)
+	raylib.EndShaderMode()
+}
+
 // ── Glow circle shader (enemy spawn / goal-reach particles) ─────────────────
 
 _glow_circle_shader: raylib.Shader
@@ -542,6 +606,9 @@ render_map :: proc(app: ^entities.App_State, m: ^entities.Map, for_preview: bool
 		i32(total_height),
 		biome_colors.bg_grid,
 	)
+
+	// Grass overlay — se dibuja ANTES del agua para que el agua la tape naturalmente.
+	if !for_preview { render_grass_overlay(app, m, cs) }
 
 	render_water_layer(m, cs, app.camera_offset_x, app.camera_offset_y, for_preview)
 	render_paths(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y)
@@ -2278,8 +2345,8 @@ render_airdrops :: proc(app: ^entities.App_State) {
 
 	for &drop in app.sim.airdrops {
 
-		// ── Estela jet (siempre visible mientras el avión voló) ───────────────
-		if drop.trail_len > 1 {
+		// ── Estela jet (solo mientras el avión está volando) ─────────────────
+		if drop.phase == .PLANE_FLYING && drop.trail_len > 1 {
 			for i in 1 ..< int(drop.trail_len) {
 				// Índices en el ring buffer: más antiguo = trail_head
 				i0 := (int(drop.trail_head) + i - 1) % len(drop.trail)
@@ -2374,31 +2441,66 @@ render_airdrops :: proc(app: ^entities.App_State) {
 			}
 
 		case .BOX_LANDED:
-			sx := drop.target_wx * app.zoom + ox
-			sy := drop.target_wy * app.zoom + oy
-			box_sz : f32 = cs * 0.55
+			sx  := drop.target_wx * app.zoom + ox
+			sy  := drop.target_wy * app.zoom + oy
+			sz  := cs * 0.66
+			bx  := sx - sz / 2
+			by_ := sy - sz / 2
 
-			raylib.DrawRectangleRec(
-				{sx - box_sz/2, sy - box_sz/2, box_sz, box_sz},
-				constants.COLOR_AIRDROP_BOX,
-			)
-			raylib.DrawRectangleLinesEx(
-				{sx - box_sz/2, sy - box_sz/2, box_sz, box_sz},
-				max(1, app.zoom), constants.COLOR_AIRDROP_BOX_DARK,
-			)
-			// Cruz en la tapa
-			pad := box_sz * 0.15
-			raylib.DrawLineEx({sx - box_sz/2 + pad, sy}, {sx + box_sz/2 - pad, sy}, max(1, app.zoom), constants.COLOR_AIRDROP_BOX_DARK)
-			raylib.DrawLineEx({sx, sy - box_sz/2 + pad}, {sx, sy + box_sz/2 - pad}, max(1, app.zoom), constants.COLOR_AIRDROP_BOX_DARK)
+			// Colores del crate (wood + metal)
+			COL_SHADOW  :: raylib.Color{18, 10, 4, 70}
+			COL_WOOD    :: raylib.Color{178, 136, 68, 255}  // tablas principales
+			COL_WOOD_LT :: raylib.Color{202, 162, 90, 255}  // tabla superior iluminada
+			COL_GAP     :: raylib.Color{138, 100, 42, 255}  // ranuras entre tablas
+			COL_METAL   :: raylib.Color{102, 82, 56, 255}   // correa + soportes de esquina
 
-			// Contorno pulsante amarillo
-			t     := f32(raylib.GetTime())
-			pulse := f32(0.5) + f32(0.5) * math.sin_f32(t * 4.0)
-			alpha := u8(100) + u8(pulse * 100)
-			raylib.DrawRectangleLinesEx(
-				{sx - box_sz/2 - 3, sy - box_sz/2 - 3, box_sz + 6, box_sz + 6},
-				4, raylib.Color{255, 220, 80, alpha},
+			soff    := max(f32(1.5), cs * 0.06)
+			rnd     := f32(0.12)
+			seg     := i32(4)
+			plank_h := sz / 3
+
+			// 1. Sombra
+			raylib.DrawRectangleRounded({bx + soff, by_ + soff, sz, sz}, rnd, seg, COL_SHADOW)
+
+			// 2. Cuerpo principal (madera)
+			raylib.DrawRectangleRounded({bx, by_, sz, sz}, rnd, seg, COL_WOOD)
+
+			// 3. Tabla superior más iluminada
+			raylib.DrawRectangleRec({bx + sz*0.06, by_, sz*0.88, plank_h}, COL_WOOD_LT)
+
+			// 4. Ranuras entre tablas (x2)
+			gap_h := max(f32(1), sz * 0.035)
+			raylib.DrawRectangleRec({bx + sz*0.06, by_ + plank_h - gap_h*0.5, sz*0.88, gap_h}, COL_GAP)
+			raylib.DrawRectangleRec({bx + sz*0.06, by_ + 2*plank_h - gap_h*0.5, sz*0.88, gap_h}, COL_GAP)
+
+			// 5. Tablas cruzadas (X) sobre la cara frontal
+			COL_BOARD :: raylib.Color{152, 112, 48, 255}
+			board_w   := max(f32(2), sz * 0.11)
+			board_l   := sz * 1.36   // ligeramente mayor que la diagonal para llegar a esquinas
+			raylib.DrawRectanglePro(
+				{sx, sy, board_l, board_w},
+				{board_l * 0.5, board_w * 0.5},
+				45,
+				COL_BOARD,
 			)
+			raylib.DrawRectanglePro(
+				{sx, sy, board_l, board_w},
+				{board_l * 0.5, board_w * 0.5},
+				-45,
+				COL_BOARD,
+			)
+
+			// 6. Correa metálica horizontal al centro
+			strap_h := max(f32(2), sz * 0.08)
+			raylib.DrawRectangleRec({bx, sy - strap_h*0.5, sz, strap_h}, COL_METAL)
+
+			// 7. Soportes de esquina (4 cuadrados en vértices)
+			bkt     := sz * 0.14
+			bkt_pad := sz * 0.02
+			raylib.DrawRectangleRec({bx + bkt_pad,          by_ + bkt_pad,          bkt, bkt}, COL_METAL)
+			raylib.DrawRectangleRec({bx + sz - bkt - bkt_pad, by_ + bkt_pad,          bkt, bkt}, COL_METAL)
+			raylib.DrawRectangleRec({bx + bkt_pad,          by_ + sz - bkt - bkt_pad, bkt, bkt}, COL_METAL)
+			raylib.DrawRectangleRec({bx + sz - bkt - bkt_pad, by_ + sz - bkt - bkt_pad, bkt, bkt}, COL_METAL)
 		}
 
 		// ── Ping convergente (siempre visible en pantalla) ─────────────────

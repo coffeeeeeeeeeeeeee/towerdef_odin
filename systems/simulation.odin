@@ -366,7 +366,7 @@ shop_perform_buy :: proc(app: ^entities.App_State, slot_idx: int) {
 
 	// Bloquear compra de relic si ya se alcanzó el límite de tipos distintos.
 	// Excepciones: cartas de acción con target (LUMBERJACK, OVERDRIVE) van a la mano, no al pool de relictos.
-	is_action_relic := card.kind == .LUMBERJACK || card.kind == .OVERDRIVE || card.kind == .GARDENER
+	is_action_relic := card.kind == .LUMBERJACK || card.kind == .OVERDRIVE || card.kind == .GARDENER || card.kind == .CRANE_KICK
 	if entities.is_relic(card.kind) && !is_action_relic {
 		if shop_relic_cap_blocks(sim, card.kind) { return }
 	}
@@ -971,6 +971,17 @@ update_towers :: proc(app: ^entities.App_State, dt: f32) {
 		// Find target
 		target_enemy := find_target(app, &tower)
 		tower.target = target_enemy
+
+		// CRANE_KICK: si hay cargas pendientes y hay objetivo, mata instantáneamente.
+		if tower.crane_kick_charges > 0 && tower.target != nil {
+			target := tower.target
+			dmg    := target.hp
+			tower.total_damage        += dmg
+			target.hp                  = 0
+			tower.crane_kick_charges  -= 1
+			spawn_damage_number(app, target.x + 0.5, target.y + 0.5, dmg, true)
+			play_sound_at(.EXPLOSION, .SFX, target.x, target.y, app)
+		}
 
 		// WARMED_UP: acumula tiempo con objetivo; reset si no hay objetivo
 		if tower.target != nil {

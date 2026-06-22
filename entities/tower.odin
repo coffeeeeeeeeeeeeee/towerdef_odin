@@ -63,6 +63,10 @@ Tower :: struct {
 	// Baked into t.cooldown via tower_recompute_stats.
 	overdrive_stacks: i32,
 
+	// CRANE_KICK relic: pending instant-kill charges on this tower.
+	// Each charge kills the next enemy in range instantly (then is consumed).
+	crane_kick_charges: i32,
+
 	// Lifetime damage statistics
 	total_damage: f32,
 }

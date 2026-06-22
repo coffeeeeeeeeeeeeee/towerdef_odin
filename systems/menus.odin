@@ -2420,7 +2420,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		is_relic := entities.is_relic(card.kind)
 		price    := shop_price_for_card(app, card)
 		relic_capped := entities.is_relic(card.kind) && card.kind != .LUMBERJACK &&
-		               card.kind != .OVERDRIVE && card.kind != .GARDENER &&
+		               card.kind != .OVERDRIVE && card.kind != .GARDENER && card.kind != .CRANE_KICK &&
 		               shop_relic_cap_blocks(sim, card.kind)
 		can_buy  := price <= sim.money && !relic_capped
 		synergy  := shop_card_has_synergy(sim, card)
@@ -2764,6 +2764,11 @@ render_card_hand :: proc(app: ^entities.App_State) {
 				if len(app.sim.towers) > 0 {
 					app.gardener_source = {-1, -1}
 					activate_pending_action(app, .GARDENER, i)
+				}
+			} else if card.kind == .CRANE_KICK {
+				// CRANE_KICK: entrar en modo selección de torre.
+				if len(app.sim.towers) > 0 {
+					activate_pending_action(app, .CRANE_KICK, i)
 				}
 			} else if entities.is_relic(card.kind) && !relic_activated {
 				relic_activated = true

@@ -745,6 +745,15 @@ STAT_AIRDROP|PORTUGUESE|+%d%% velocidade por stack · cartas mais raras com mais
 TOAST_AIRDROP|ENGLISH|Airdrops %d%% faster!
 TOAST_AIRDROP|SPANISH|¡Airdrops %d%% más rápidos!
 TOAST_AIRDROP|PORTUGUESE|Airdrops %d%% mais rápidos!
+CARD_CRANE_KICK_NAME|ENGLISH|Crane Kick
+CARD_CRANE_KICK_NAME|SPANISH|Patada Grulla
+CARD_CRANE_KICK_NAME|PORTUGUESE|Chute da Garça
+TOOLTIP_CRANE_KICK_DESC|ENGLISH|Grants the selected tower one charge: the next enemy in range dies instantly
+TOOLTIP_CRANE_KICK_DESC|SPANISH|Otorga una carga a la torre seleccionada: el próximo enemigo en rango muere al instante
+TOOLTIP_CRANE_KICK_DESC|PORTUGUESE|Concede uma carga à torre selecionada: o próximo inimigo no alcance morre instantaneamente
+TOAST_CRANE_KICK|ENGLISH|Crane Kick charged!
+TOAST_CRANE_KICK|SPANISH|¡Patada Grulla cargada!
+TOAST_CRANE_KICK|PORTUGUESE|Chute da Garça carregado!
 
 # Relic stat lines (shown in tooltip below description)
 STAT_INTEREST_BOOST|ENGLISH|+%.0f%% per stack/wave
