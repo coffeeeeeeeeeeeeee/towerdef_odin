@@ -834,7 +834,28 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 		}
 	}
 
-	// Save button
+	// Overwrite button — only shown when a source file is known
+	if len(app.editor.current_map_name) > 0 {
+		current_x -= gap
+		w_overwrite := btn_w(constants.get_text("EDITOR_BUTTON_OVERWRITE_MAP"))
+		current_x -= w_overwrite
+		if render_button(
+			constants.get_text("EDITOR_BUTTON_OVERWRITE_MAP"),
+			{f32(current_x), f32(y_pos), f32(w_overwrite), f32(constants.UI_BUTTON_HEIGHT)},
+		) {
+			target := app.editor.current_map_name
+			if entities.map_save(&app.editor.game_map, target) {
+				entities.add_toast(app, fmt.tprintf("Saved: %s", target), .SUCCESS, 2.5)
+				play_sound(.CONFIRMATION, .UI)
+			} else {
+				entities.add_toast(app, "Failed to save map", .ERROR, 3.0)
+				play_sound(.ERROR, .UI)
+			}
+			entities.map_save(&app.editor.game_map, "last_saved.map")
+		}
+	}
+
+	// Save New Map button
 	current_x -= gap
 	w_save := btn_w(constants.get_text("EDITOR_BUTTON_SAVE_MAP"))
 	current_x -= w_save
@@ -1516,16 +1537,28 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 		sy += stat_height + spacing
 	}
 
-	// --- Menu button ---
-	btn_width := i32(constants.UI_BUTTON_WIDTH) * 2
-	btn_x := i32(stats_x) + i32(stats_panel_w) / 2 - btn_width / 2
-	btn_y := i32(stats_y) + stats_total + spacing
+	// --- Buttons ---
+	btn_width   := i32(constants.UI_BUTTON_WIDTH) * 2
+	gap         := i32(10)
+	btn_y       := i32(stats_y) + stats_total + spacing
+	is_campaign := app.current_campaign_node >= 0
+	num_btns    := 2 if is_campaign else 1
+	total_w     := btn_width * i32(num_btns) + gap * i32(num_btns - 1)
+	btn_x       := i32(stats_x) + i32(stats_panel_w) / 2 - total_w / 2
+
 	if render_button(
 		constants.get_text("GAME_OVER_BUTTON_MENU"),
 		{f32(btn_x), f32(btn_y), f32(btn_width), f32(btn_height)},
 	) {
 		simulation_reset(app)
 		entities.app_set_state(app, .MENU)
+	}
+	if is_campaign && render_button(
+		constants.get_text("CAMPAIGN_MAP_BACK"),
+		{f32(btn_x + btn_width + gap), f32(btn_y), f32(btn_width), f32(btn_height)},
+	) {
+		simulation_reset(app)
+		entities.app_set_state(app, .CAMPAIGN_MAP)
 	}
 }
 
@@ -2935,16 +2968,18 @@ render_run_complete_ui :: proc(app: ^entities.App_State) {
 	gap    := i32(10)
 	btns_y := i32(acum_y) + i32(font_size) + spacing * 2
 
+	is_campaign := app.current_campaign_node >= 0
+
 	if !app.sim.is_victory {
-		// 3 botones: Reintentar | Mejoras | Menú
-		total_w_btns := btn_w * 3 + gap * 2
+		// Derrota: Reintentar | Mejoras | Menú [| Campaña]
+		num_btns     := 4 if is_campaign else 3
+		total_w_btns := btn_w * i32(num_btns) + gap * i32(num_btns - 1)
 		btn_left_x   := screen_width / 2 - total_w_btns / 2
 
 		if render_button(
 			constants.get_text("RUN_BUTTON_RETRY"),
 			{f32(btn_left_x), f32(btns_y), f32(btn_w), f32(btn_height)},
 		) {
-			// Recargar el mismo mapa y reiniciar la simulación
 			map_name := app.editor.current_map_name
 			entities.map_load(&app.editor.game_map, map_name)
 			simulation_init_from_editor(app)
@@ -2964,24 +2999,48 @@ render_run_complete_ui :: proc(app: ^entities.App_State) {
 			simulation_reset(app)
 			entities.app_set_state(app, .MENU)
 		}
+		if is_campaign && render_button(
+			constants.get_text("CAMPAIGN_MAP_BACK"),
+			{f32(btn_left_x + btn_w * 3 + gap * 3), f32(btns_y), f32(btn_w), f32(btn_height)},
+		) {
+			simulation_reset(app)
+			entities.app_set_state(app, .CAMPAIGN_MAP)
+		}
 	} else {
-		// 2 botones: Mejoras | Menú
-		total_w_btns := btn_w * 2 + gap
+		// Victoria: Reiniciar | Progreso | Menú [| Campaña]
+		num_btns     := 4 if is_campaign else 3
+		total_w_btns := btn_w * i32(num_btns) + gap * i32(num_btns - 1)
 		btn_left_x   := screen_width / 2 - total_w_btns / 2
 
 		if render_button(
-			constants.get_text("RUN_BUTTON_PROGRESSION"),
+			constants.get_text("PAUSE_RESTART"),
 			{f32(btn_left_x), f32(btns_y), f32(btn_w), f32(btn_height)},
+		) {
+			map_name := app.editor.current_map_name
+			entities.map_load(&app.editor.game_map, map_name)
+			simulation_init_from_editor(app)
+			entities.app_set_state(app, .PLAYING)
+		}
+		if render_button(
+			constants.get_text("RUN_BUTTON_PROGRESSION"),
+			{f32(btn_left_x + btn_w + gap), f32(btns_y), f32(btn_w), f32(btn_height)},
 		) {
 			simulation_reset(app)
 			entities.app_set_state(app, .PROGRESSION)
 		}
 		if render_button(
 			constants.get_text("GAME_OVER_BUTTON_MENU"),
-			{f32(btn_left_x + btn_w + gap), f32(btns_y), f32(btn_w), f32(btn_height)},
+			{f32(btn_left_x + btn_w * 2 + gap * 2), f32(btns_y), f32(btn_w), f32(btn_height)},
 		) {
 			simulation_reset(app)
 			entities.app_set_state(app, .MENU)
+		}
+		if is_campaign && render_button(
+			constants.get_text("CAMPAIGN_MAP_BACK"),
+			{f32(btn_left_x + btn_w * 3 + gap * 3), f32(btns_y), f32(btn_w), f32(btn_height)},
+		) {
+			simulation_reset(app)
+			entities.app_set_state(app, .CAMPAIGN_MAP)
 		}
 	}
 }

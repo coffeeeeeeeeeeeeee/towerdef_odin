@@ -330,7 +330,7 @@ render_game :: proc(app: ^entities.App_State) {
 	if app.state == .PLAYING || app.state == .PAUSED || app.state == .EDITOR {
 		update_bird_flock(app, app.delta_time)
 		render_bird_flock(app)
-		cloud_shader_draw(app)
+		// cloud_shader_draw(app)  // desactivado
 	}
 	render_ui(app)
 	render_tooltip_layer(app) // Always last — draws on top of everything

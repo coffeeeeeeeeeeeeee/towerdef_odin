@@ -1,5 +1,9 @@
 #version 330
 
+// Original: https://www.shadertoy.com/view/ssfBDf
+// 3D simplex noise adapted from https://www.shadertoy.com/view/Ws23RD
+// * Removed gradient normalization
+
 in vec2 fragTexCoord;
 in vec4 fragColor;
 out vec4 finalColor;
@@ -109,8 +113,10 @@ void main() {
     float w         = mix(water_caustics(pos), water_caustics(pos + 1.0), 0.5);
     float intensity = exp(w * 4.0 - 1.0);
 
-    // ── Tint caustics with waterColor, darken edges ───────────────────────────
-    vec4 causticColor = vec4(vec3(intensity), 1.0) * waterColor;
-    vec4 color        = mix(causticColor, edgeColor, edge * 0.5);
+    // ── Fondo azul base + cáusticas sutiles (30% de influencia) ─────────────
+    vec3 base         = waterColor.rgb;
+    vec3 causticTint  = vec3(intensity) * waterColor.rgb;
+    vec3 litColor     = mix(base, causticTint, 0.30);
+    vec4 color        = mix(vec4(litColor, 1.0), edgeColor, edge * 0.5);
     finalColor        = color * alpha;
 }

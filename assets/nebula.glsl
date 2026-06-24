@@ -1,5 +1,7 @@
 #version 330
 
+// Original: https://x.com/XorDev/status/1975230424982183956
+
 in vec2 fragTexCoord;
 in vec4 fragColor;
 out vec4 finalColor;

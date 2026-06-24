@@ -584,8 +584,8 @@ COLOR_OBSTACLE :: raylib.Color{160,  82,  45, 255}
 // COLOR_LASER_BEAM eliminado — usar TOWER_LASER_COLOR (mismo valor {255,68,68,255})
 
 // Water
-COLOR_WATER       :: raylib.Color{ 70, 130, 200, 220}  // Azul semitransparente
-COLOR_WATER_EDGE  :: raylib.Color{ 50, 100, 170, 255}  // Borde/sombra del agua
+COLOR_WATER       :: raylib.Color{ 49, 169, 238, 220}  // Azul cielo
+COLOR_WATER_EDGE  :: raylib.Color{ 30, 120, 195, 255}  // Borde/sombra del agua
 WATER_CORNER_RADIUS_RATIO :: f32(0.32)                  // Radio de esquinas como fracción del tile
 
 // Bridge (path over water)
