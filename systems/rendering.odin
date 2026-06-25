@@ -333,7 +333,8 @@ render_game :: proc(app: ^entities.App_State) {
 		// cloud_shader_draw(app)  // desactivado
 	}
 	render_ui(app)
-	render_tooltip_layer(app) // Always last — draws on top of everything
+	render_tooltip_layer(app) // Siempre antes de la consola
+	render_console(app)       // La consola va encima de absolutamente todo
 }
 
 // Render tower ranges (separate layer above grid)
@@ -486,7 +487,8 @@ render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
 				}
 
 			case .ACCESSORY_BLOCK:
-				render_block(x, y, cs)
+				blk_level := entities.map_get_obstacle_level(m, i32(row), i32(col))
+				render_block(x, y, cs, m.biome, blk_level, i32(row), i32(col))
 			}
 		}
 	}
@@ -1071,23 +1073,113 @@ render_tree :: proc(x, y: f32, cs: f32, biome: constants.Biome, row: i32 = 0, co
 	}
 }
 
-// Render block accessory
-render_block :: proc(x, y, cs: f32) {
-	raylib.DrawRectangleRounded(
-		raylib.Rectangle{x + cs * 0.1, y + cs * 0.1, cs * 0.8, cs * 0.8},
-		constants.UI_BUTTON_ROUNDNESS,
-		constants.TOWER_CORNER_SEGMENTS,
-		constants.COLOR_BLOCK,
-	)
+// Render block accessory — aspecto varía por bioma (vista top-down).
+// level: 1→70%, 2→80%, 3→90% de la celda.  row/col: seed de variación visual.
+render_block :: proc(x, y, cs: f32, biome: constants.Biome = constants.Biome.PLAIN, level: i32 = 1, row: i32 = 0, col: i32 = 0) {
+	lvl    := clamp(level, 1, 3)
+	scale  := 0.70 + f32(lvl - 1) * 0.10
+	margin := cs * (1.0 - scale) / 2.0
+	bx     := x + margin
+	by     := y + margin
+	bw     := cs * scale
+	bh     := cs * scale
+	cx     := bx + bw * 0.5
+	cy     := by + bh * 0.5
+	so     := f32(2)
 
-	// Highlight
-	raylib.DrawRectangle(
-		i32(x + cs * 0.25),
-		i32(y + cs * 0.25),
-		i32(cs * 0.5),
-		i32(cs * 0.5),
-		constants.UI_EDITOR_HIGHLIGHT_COLOR,
-	)
+	// Semilla de variación por celda
+	seed := u32(row * 17 + col * 31)
+
+	switch biome {
+	case .PLAIN:
+		// Casa con techo de tejas rojas (top-down)
+		raylib.DrawRectangle(i32(bx + so), i32(by + so), i32(bw), i32(bh), {0, 0, 0, 55})
+		// Techo terracota
+		raylib.DrawRectangleRec({bx, by, bw, bh}, {185, 65, 50, 255})
+		// Líneas de tejas horizontales
+		for i in 1..=5 {
+			ty := by + bh * f32(i) / 6.0
+			raylib.DrawRectangleRec({bx + bw * 0.05, ty, bw * 0.90, 1.5}, {155, 45, 32, 200})
+		}
+		// Cumbrera (más gruesa y oscura en el centro)
+		raylib.DrawRectangleRec({bx + bw * 0.04, by + bh * 0.5 - 1.5, bw * 0.92, 3}, {125, 32, 22, 255})
+		// Chimenea — posición varía según seed
+		ch_size := bw * 0.13
+		ch_x    := bx + bw * (0.15 if seed % 2 == 0 else 0.70)
+		ch_y    := by + bh * (0.12 if seed % 4 < 2 else 0.70)
+		raylib.DrawRectangleRec({ch_x, ch_y, ch_size, ch_size}, {82, 58, 52, 255})
+		raylib.DrawRectangleRec({ch_x + 2, ch_y + 2, ch_size - 4, ch_size - 4}, {45, 30, 25, 200})
+
+	case .FOREST:
+		// Cabaña de madera (top-down)
+		raylib.DrawRectangle(i32(bx + so), i32(by + so), i32(bw), i32(bh), {0, 0, 0, 60})
+		// Paredes exteriores (borde visible alrededor del techo)
+		raylib.DrawRectangleRec({bx, by, bw, bh}, {95, 65, 42, 255})
+		// Techo oscuro (inset)
+		pad := bw * 0.07
+		raylib.DrawRectangleRec({bx + pad, by + pad, bw - pad * 2, bh - pad * 2}, {52, 33, 18, 255})
+		// Vetas de madera horizontales
+		for i in 1..=6 {
+			ly := by + pad + (bh - pad * 2) * f32(i) / 7.0
+			raylib.DrawRectangleRec({bx + pad, ly, bw - pad * 2, 1}, {38, 23, 11, 180})
+		}
+		// Viga central (más gruesa)
+		raylib.DrawRectangleRec({bx + pad, by + bh * 0.5 - 1.5, bw - pad * 2, 3}, {28, 16, 7, 230})
+		// Chimenea
+		ch_size := bw * 0.11
+		ch_x    := bx + bw * (0.68 + f32(seed % 3) * 0.05)
+		ch_y    := by + pad + bh * 0.08
+		raylib.DrawRectangleRec({ch_x, ch_y, ch_size, ch_size}, {62, 44, 30, 255})
+
+	case .DESERT:
+		// Construcción baja irregular color blanco/crema (top-down)
+		raylib.DrawRectangle(i32(bx + so), i32(by + so), i32(bw), i32(bh), {0, 0, 0, 45})
+		// Bloque principal
+		raylib.DrawRectangleRec({bx, by, bw, bh}, {232, 222, 202, 255})
+		// Anexo superpuesto — forma irregular característica
+		annex_w := bw * (0.48 + f32(seed % 5) * 0.02)
+		annex_h := bh * (0.42 + f32((seed / 5) % 5) * 0.02)
+		annex_x := bx + bw * (0.44 if seed % 2 == 0 else 0.08)
+		annex_y := by + bh * (0.40 if seed % 3 < 2 else 0.08)
+		raylib.DrawRectangleRec({annex_x, annex_y, annex_w, annex_h}, {246, 238, 220, 255})
+		// Bordes de cornisa
+		detail := raylib.Color{182, 165, 140, 255}
+		raylib.DrawRectangleLinesEx({bx, by, bw, bh}, 1.5, detail)
+		raylib.DrawRectangleLinesEx({annex_x, annex_y, annex_w, annex_h}, 1.0, detail)
+		// Entrada/puerta
+		door_w := bw * 0.16
+		door_h := bh * 0.10
+		door_x := bx + (bw - door_w) * 0.5
+		door_y := by + bh - door_h - bh * 0.04
+		raylib.DrawRectangleRec({door_x, door_y, door_w, door_h}, detail)
+
+	case .MOUNTAIN:
+		// Rocas grises formadas con polígonos (top-down)
+		rock_col  := raylib.Color{132, 132, 138, 255}
+		rock_hi   := raylib.Color{165, 166, 172, 255}
+		rock_dark := raylib.Color{88, 88, 94, 255}
+
+		n_sides := i32(5 + seed % 3)
+		r1      := bw * 0.40
+		rot1    := f32(seed % 360)
+		// Sombra + contorno oscuro + roca principal + resalte
+		raylib.DrawPoly({cx + so, cy + so}, n_sides, r1, rot1, {0, 0, 0, 55})
+		raylib.DrawPoly({cx, cy}, n_sides, r1 + 2, rot1, rock_dark)
+		raylib.DrawPoly({cx, cy}, n_sides, r1, rot1, rock_col)
+		raylib.DrawPoly({cx - r1 * 0.12, cy - r1 * 0.14}, n_sides, r1 * 0.52, rot1 + 18, rock_hi)
+
+		// Roca secundaria en una esquina
+		sign_x : f32 = 1 if seed % 2 == 0 else -1
+		sign_y : f32 = 1 if (seed >> 1) % 2 == 0 else -1
+		r2_cx := cx + sign_x * bw * 0.28
+		r2_cy := cy + sign_y * bh * 0.28
+		r2    := bw * 0.20
+		rot2  := f32((seed * 13) % 360)
+		n2    := i32(4 + seed % 3)
+		raylib.DrawPoly({r2_cx + so, r2_cy + so}, n2, r2, rot2, {0, 0, 0, 40})
+		raylib.DrawPoly({r2_cx, r2_cy}, n2, r2 + 1.5, rot2, rock_dark)
+		raylib.DrawPoly({r2_cx, r2_cy}, n2, r2, rot2, rock_col)
+	}
 }
 
 // Calcula las dimensiones (bar_w, bar_h) de un obstáculo según la orientación del camino

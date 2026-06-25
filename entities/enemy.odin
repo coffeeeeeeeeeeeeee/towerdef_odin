@@ -168,8 +168,8 @@ enemy_apply_obstacle_damage :: proc(e: ^Enemy, grid_x, grid_y, obstacle_level: i
 		return 0 // Already damaged by this obstacle
 	}
 
-	// Daño exponencial: base * 2^(level-1), igual que el upgrade de torres
-	damage := constants.OBSTACLE_DAMAGE_PER_LEVEL * f32(i32(1) << uint(obstacle_level - 1))
+	// Daño lineal: base * level — escala suave y predecible
+	damage := constants.OBSTACLE_DAMAGE_PER_LEVEL * f32(obstacle_level)
 	e.hp -= damage
 	e.obstacle_damage[key] = true
 

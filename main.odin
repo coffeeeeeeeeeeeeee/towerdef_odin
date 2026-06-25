@@ -234,8 +234,8 @@ main :: proc() {
 			systems.simulation_update(&app, dt)
 		}
 
-		// Update toasts (always)
-		entities.update_toasts(&app, dt)
+		// Update console slide animation (always)
+		systems.console_update(&app, dt)
 
 		// Render
 		raylib.BeginDrawing()
@@ -315,11 +315,14 @@ app_destroy :: proc() {
 	}
 	delete(app.editor.redo_stack)
 
-	// Toasts pendientes: cada uno tiene un message clonado en el heap
+	// Toasts pendientes (legado, normalmente vacío)
 	for &t in app.toasts {
 		delete(t.message)
 	}
 	delete(app.toasts)
+
+	// Consola: liberar entradas del log
+	entities.console_destroy(&app.console)
 }
 
 // Global app instance using entities.App_State

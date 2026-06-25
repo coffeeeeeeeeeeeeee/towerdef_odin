@@ -10,7 +10,8 @@ Input_State :: struct {
 	len:        int,       // número de runes actualmente en buf
 	cursor:     int,       // índice del cursor (0..len)
 	sel_anchor: int,       // -1 = sin selección; de lo contrario, ancla de la selección
-	scroll_x:   f32,       // desplazamiento horizontal del viewport en píxeles
+	scroll_x:   f32,       // desplazamiento horizontal del viewport en píxeles (modo single-line)
+	scroll_y:   f32,       // desplazamiento vertical del viewport en píxeles (modo multiline)
 	blink:      f32,       // 0..1; cursor visible cuando < INPUT_BLINK_HALF
 	focused:    bool,
 }
@@ -31,6 +32,7 @@ input_clear :: proc(s: ^Input_State) {
 	s.cursor     = 0
 	s.sel_anchor = -1
 	s.scroll_x   = 0
+	s.scroll_y   = 0
 	s.blink      = 0
 }
 

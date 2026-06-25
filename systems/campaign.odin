@@ -497,6 +497,42 @@ campaign_pos_to_screen :: proc(pos: [2]f32, x_lef, y_top, x_rig, y_bot: f32) -> 
 	}
 }
 
+// Dibuja una conexión entre dos nodos con routing ortogonal de esquinas a 45°.
+// Geometría: segmento recto → diagonal 45° → segmento recto, con la parte recta
+// dividida simétricamente (mitad antes de la diagonal, mitad después).
+draw_campaign_connection :: proc(from, to: [2]f32, thickness: f32, color: raylib.Color) {
+	x0, y0 := from[0], from[1]
+	x1, y1 := to[0],   to[1]
+	dx := x1 - x0
+	dy := y1 - y0
+	adx := abs(dx)
+	ady := abs(dy)
+	sx := f32(1) if dx >= 0 else f32(-1)
+	sy := f32(1) if dy >= 0 else f32(-1)
+
+	p0 := raylib.Vector2{x0, y0}
+	p3 := raylib.Vector2{x1, y1}
+	p1, p2: raylib.Vector2
+
+	if adx >= ady {
+		// Eje horizontal dominante: H → diagonal → H
+		diag         := ady
+		half_straight := (adx - diag) / 2
+		p1 = {x0 + sx * half_straight, y0}
+		p2 = {x0 + sx * (half_straight + diag), y0 + sy * diag}
+	} else {
+		// Eje vertical dominante: V → diagonal → V
+		diag         := adx
+		half_straight := (ady - diag) / 2
+		p1 = {x0, y0 + sy * half_straight}
+		p2 = {x0 + sx * diag, y0 + sy * (half_straight + diag)}
+	}
+
+	raylib.DrawLineEx(p0, p1, thickness, color)
+	raylib.DrawLineEx(p1, p2, thickness, color)
+	raylib.DrawLineEx(p2, p3, thickness, color)
+}
+
 // Render del visualizador de campaña — Game_State.CAMPAIGN_MAP.
 render_campaign_map :: proc(app: ^entities.App_State) {
 	// Carga lazy de campaign.bin la primera vez que se entra.
@@ -600,7 +636,7 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 
 			unlocked := entities.campaign_is_node_unlocked(c, app.meta.campaign_completed[:], i)
 			line_col := constants.COLOR_CAMPAIGN_CONNECTION_ACTIVE if unlocked else constants.COLOR_CAMPAIGN_CONNECTION_INACTIVE
-			raylib.DrawLineEx({from[0], from[1]}, {to[0], to[1]}, 2, line_col)
+			draw_campaign_connection({from[0], from[1]}, {to[0], to[1]}, 2, line_col)
 		}
 
 		// 2ª pasada: nodos (encima de las conexiones)

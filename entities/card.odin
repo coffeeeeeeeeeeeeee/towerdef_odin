@@ -32,7 +32,7 @@ Card_Kind :: enum {
 	OVERDRIVE,       // se aplica a una torre: +10% velocidad de ataque por stack (acumulable en torre)
 	GARDENER,        // activa: mueve una torre de lugar conservando todos sus stats
 	AIRDROP,         // pasiva: airdrops más frecuentes y cartas de mayor rareza por stack
-	CRANE_KICK,      // activa: la torre seleccionada mata instantáneamente al próximo enemigo en rango (1 carga por carta)
+	CRANE_KICK,      // pasiva: cada 20s carga una torre aleatoria (no hielo/potenciador) para matar al instante a su próximo objetivo
 }
 
 // Una carta del mazo

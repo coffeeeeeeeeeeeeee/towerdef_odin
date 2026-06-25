@@ -92,6 +92,32 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 		}
 	}
 
+	// CRANE_KICK pasiva: cada X segundos carga una torre elegible al azar.
+	// Excluye hielo y potenciador. Stacks reducen el intervalo a la mitad.
+	if sim.relic_stacks[.CRANE_KICK] > 0 && sim.started {
+		sim.crane_kick_timer -= s_dt
+		if sim.crane_kick_timer <= 0 {
+			stacks := sim.relic_stacks[.CRANE_KICK]
+			sim.crane_kick_timer = constants.CRANE_KICK_BASE_INTERVAL / math.pow(f32(2), f32(stacks - 1))
+
+			// Construir lista de torres elegibles (excluir hielo y potenciador)
+			eligible: [64]int
+			n_eligible: int
+			for tower, idx in sim.towers {
+				if tower.type != .ICE && tower.type != .ENHANCE {
+					eligible[n_eligible] = idx
+					n_eligible += 1
+				}
+			}
+			if n_eligible > 0 {
+				chosen := eligible[rand.int_max(n_eligible)]
+				sim.towers[chosen].crane_kick_charges += 1
+				relic_flash(sim, .CRANE_KICK)
+				entities.add_toast(app, constants.get_text("TOAST_CRANE_KICK"), .SUCCESS)
+			}
+		}
+	}
+
 	// Airdrop: only while simulation has started and shop is not open
 	if sim.started && !sim.shop.active {
 		airdrop_update(app, dt)  // uses real dt (not s_dt) — visual effect
@@ -219,6 +245,16 @@ start_next_wave :: proc(app: ^entities.App_State) {
 	// Snapshots al inicio de oleada (usados por Dividend y Flawless al terminar)
 	sim.wave_start_money  = sim.money
 	sim.wave_start_health = sim.health
+
+	// Al arrancar la primera oleada, resetear el timer de airdrop para que
+	// el primer drop ocurra AIRDROP_SPAWN_INTERVAL segundos después del inicio
+	// de la oleada, independientemente de cuánto tiempo pasó en la pantalla previa.
+	if sim.wave_number == 0 {
+		speed_factor   := 1.0 + constants.AIRDROP_RELIC_SPEED_PER_STACK * f32(sim.relic_stacks[.AIRDROP])
+		base_interval  := constants.AIRDROP_SPAWN_INTERVAL_MIN +
+		                  rand.float32() * (constants.AIRDROP_SPAWN_INTERVAL_MAX - constants.AIRDROP_SPAWN_INTERVAL_MIN)
+		sim.airdrop_timer = base_interval / speed_factor
+	}
 
 	sim.started = true  // Mark game as started
 	sim.wave_number += 1
@@ -366,7 +402,7 @@ shop_perform_buy :: proc(app: ^entities.App_State, slot_idx: int) {
 
 	// Bloquear compra de relic si ya se alcanzó el límite de tipos distintos.
 	// Excepciones: cartas de acción con target (LUMBERJACK, OVERDRIVE) van a la mano, no al pool de relictos.
-	is_action_relic := card.kind == .LUMBERJACK || card.kind == .OVERDRIVE || card.kind == .GARDENER || card.kind == .CRANE_KICK
+	is_action_relic := card.kind == .LUMBERJACK || card.kind == .OVERDRIVE || card.kind == .GARDENER
 	if entities.is_relic(card.kind) && !is_action_relic {
 		if shop_relic_cap_blocks(sim, card.kind) { return }
 	}
@@ -1861,6 +1897,7 @@ simulation_reset :: proc(app: ^entities.App_State) {
 			purchases_this_visit = 0,
 		},
 		auto_upgrade_timer     = 0,
+		crane_kick_timer       = 0,
 		wave_start_money       = 0,
 		steal_last_wave        = 0,
 		bloodlust_mult         = 1.0,

@@ -71,8 +71,8 @@ render_ui :: proc(app: ^entities.App_State) {
 			case .RESTART_RUN:
 				map_name := app.editor.current_map_name
 				simulation_set_pause(app, false)
-				simulation_reset(app)
 				entities.map_load(&app.editor.game_map, map_name)
+				simulation_init_from_editor(app)
 				entities.app_set_state(app, .PLAYING)
 			case .EXIT_GAME:
 				app.should_quit = true
@@ -95,8 +95,8 @@ render_ui :: proc(app: ^entities.App_State) {
 		render_card_hand(app)
 	}
 
-	// Render toasts (always on top)
-	entities.render_toasts(app)
+	// (La consola se renderiza en render_game, después de render_tooltip_layer,
+	//  para que siempre quede encima de absolutamente todo.)
 
 	// FPS counter - bottom left with UI margin padding using custom font (skip in editor mode)
 	if app.settings.show_fps && app.state != .EDITOR {
@@ -662,7 +662,7 @@ render_build_toolbar :: proc(app: ^entities.App_State) {
 				// Use PLAIN biome for consistent preview, with fixed position (0,0)
 				render_tree(preview_x, preview_y, preview_size, .PLAIN, 0, 0)
 			case .ACCESSORY_BLOCK:
-				render_block(preview_x, preview_y, preview_size)
+				render_block(preview_x, preview_y, preview_size, app.editor.current_biome)
 			case .EMPTY:
 				// Draw empty cell indicator (light gray square)
 				raylib.DrawRectangleLines(
@@ -2139,8 +2139,8 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 	)
 	current_y += info_height + spacing
 
-	// Stat: Daño exponencial — base × 2^(level-1), igual que enemy_apply_obstacle_damage
-	damage_stat := i32(constants.OBSTACLE_DAMAGE_PER_LEVEL * f32(i32(1) << uint(level - 1)))
+	// Stat: Daño lineal — base × level, igual que enemy_apply_obstacle_damage
+	damage_stat := i32(constants.OBSTACLE_DAMAGE_PER_LEVEL * f32(level))
 	raylib.DrawTextEx(
 		constants.game_fonts.semibold,
 		fmt.ctprintf("Daño: %d", damage_stat),
@@ -2224,9 +2224,8 @@ render_relic_tray :: proc(app: ^entities.App_State) {
 		if icon.id != 0 {
 			src := raylib.Rectangle{0, 0, f32(icon.width), f32(icon.height)}
 			dst := raylib.Rectangle{sx, sy, ICON_SIZE, ICON_SIZE}
-			raylib.DrawTexturePro(icon, src, dst, {0, 0}, 0, raylib.WHITE)
 
-			// Flash blanco — alpha proporcional al tiempo restante
+			// Flash blanco — se dibuja primero para que el icono quede encima
 			flash_t := app.sim.relic_flash_timers[kind]
 			if flash_t > 0 {
 				alpha := u8(255.0 * (flash_t / constants.RELIC_FLASH_DURATION))
@@ -2236,6 +2235,8 @@ render_relic_tray :: proc(app: ^entities.App_State) {
 					raylib.Color{255, 255, 255, alpha},
 				)
 			}
+
+			raylib.DrawTexturePro(icon, src, dst, {0, 0}, 0, raylib.WHITE)
 		}
 
 		// Número de stacks — solo si hay más de 1, sin "x"
@@ -2453,7 +2454,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		is_relic := entities.is_relic(card.kind)
 		price    := shop_price_for_card(app, card)
 		relic_capped := entities.is_relic(card.kind) && card.kind != .LUMBERJACK &&
-		               card.kind != .OVERDRIVE && card.kind != .GARDENER && card.kind != .CRANE_KICK &&
+		               card.kind != .OVERDRIVE && card.kind != .GARDENER &&
 		               shop_relic_cap_blocks(sim, card.kind)
 		can_buy  := price <= sim.money && !relic_capped
 		synergy  := shop_card_has_synergy(sim, card)
@@ -2797,11 +2798,6 @@ render_card_hand :: proc(app: ^entities.App_State) {
 				if len(app.sim.towers) > 0 {
 					app.gardener_source = {-1, -1}
 					activate_pending_action(app, .GARDENER, i)
-				}
-			} else if card.kind == .CRANE_KICK {
-				// CRANE_KICK: entrar en modo selección de torre.
-				if len(app.sim.towers) > 0 {
-					activate_pending_action(app, .CRANE_KICK, i)
 				}
 			} else if entities.is_relic(card.kind) && !relic_activated {
 				relic_activated = true

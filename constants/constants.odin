@@ -233,6 +233,7 @@ ENHANCE_MAX_LEVEL :: i32(5)  // Maximum levels a tower can receive via ENHANCE b
 WEAKEN_HP_REDUCTION      :: f32(0.10)   // HP reduction per WEAKEN stack (e.g. 2 stacks = -20% HP)
 DIVIDEND_RATE            :: f32(0.15)   // Fraction of wave spending returned per DIVIDEND stack
 AUTO_UPGRADE_INTERVAL    :: f32(30.0)   // Seconds between auto-upgrade ticks (base; se divide a la mitad por stack adicional)
+CRANE_KICK_BASE_INTERVAL :: f32(20.0)   // Seconds between Crane Kick charges (base; halved per extra stack)
 BLOODLUST_BONUS_PER_KILL :: f32(0.001)  // Damage multiplier gained per kill per BLOODLUST stack (+0.1%)
 FLAWLESS_BONUS           :: i32(75)     // Gold reward per FLAWLESS stack for a perfect wave (no lives lost)
 FORMATION_BONUS          :: f32(0.25)   // Damage multiplier bonus per FORMATION stack for towers in a line of 3+
@@ -341,7 +342,7 @@ SPLIT_HP_RATIO   :: f32(0.30)  // Child HP = 30% of parent max_hp
 SPLIT_SPEED_MULT :: f32(1.30)  // Child speed = parent speed × 1.30
 
 // Obstacle damage
-OBSTACLE_DAMAGE_PER_LEVEL :: f32(5.0)  // Base damage; actual = OBSTACLE_DAMAGE_PER_LEVEL × 2^(level-1)
+OBSTACLE_DAMAGE_PER_LEVEL :: f32(10.0) // Base damage; actual = OBSTACLE_DAMAGE_PER_LEVEL × level (linear)
 
 // =============================================================================
 // Enemy rewards and goal damage
@@ -935,19 +936,24 @@ ease_zoom :: proc(t: f32) -> f32 {
 // Text input widget
 // =============================================================================
 
-MAX_INPUT_LEN            :: 64
+MAX_INPUT_LEN            :: 512
 INPUT_FONT_SIZE          :: f32(13)
 INPUT_PAD_H              :: f32(5)       // Horizontal padding inside the input box
+INPUT_PAD_V              :: f32(4)       // Vertical padding inside the input box (multiline)
+INPUT_LINE_SPACING       :: f32(4)       // Extra pixels between lines in multiline mode
 INPUT_BORDER_THICK       :: f32(1.0)
 INPUT_BORDER_THICK_FOCUSED :: f32(2.0)
-INPUT_BORDER_COLOR       :: raylib.Color{160, 160, 160, 255}
-INPUT_BORDER_FOCUSED     :: raylib.Color{ 80, 130, 255, 255}
-INPUT_BG_COLOR           :: raylib.Color{255, 255, 255, 255}
-INPUT_SELECT_COLOR       :: raylib.Color{ 80, 130, 255,  80}
-INPUT_PLACEHOLDER_COLOR  :: raylib.Color{160, 160, 160, 255}
-INPUT_BLINK_HALF         :: f32(0.5)     // Cursor visible when blink < this
-INPUT_CURSOR_WIDTH       :: f32(2.0)
-INPUT_CURSOR_COLOR       :: raylib.Color{ 30,  30,  30, 255}
+INPUT_BORDER_COLOR         :: raylib.Color{160, 160, 160, 255}
+INPUT_BORDER_FOCUSED       :: raylib.Color{ 80, 130, 255, 255}
+INPUT_BORDER_LOCKED_COLOR  :: raylib.Color{200, 200, 200, 255}
+INPUT_BG_COLOR             :: raylib.Color{255, 255, 255, 255}
+INPUT_BG_LOCKED_COLOR      :: raylib.Color{245, 245, 245, 255}
+INPUT_SELECT_COLOR         :: raylib.Color{ 80, 130, 255,  80}
+INPUT_PLACEHOLDER_COLOR    :: raylib.Color{160, 160, 160, 255}
+INPUT_TEXT_LOCKED_COLOR    :: raylib.Color{ 80,  80,  80, 255}
+INPUT_BLINK_HALF           :: f32(0.5)   // Cursor visible when blink < this
+INPUT_CURSOR_WIDTH         :: f32(2.0)
+INPUT_CURSOR_COLOR         :: raylib.Color{ 30,  30,  30, 255}
 
 
 // =============================================================================

@@ -1335,11 +1335,21 @@ _input_insert_str :: proc(s: ^entities.Input_State, str: string) {
 
 // Renderiza un campo de texto interactivo.
 // Devuelve true cuando el usuario presiona Enter (confirma el valor).
+// render_input — campo de texto interactivo.
+//
+// multiline: si true, Enter inserta salto de línea; Ctrl+Enter confirma.
+//            Soporta scroll vertical, navegación con flechas arriba/abajo.
+// locked:    si true, el campo es de solo lectura (se puede seleccionar pero no editar).
+//            El fondo se muestra en gris sutil. Siempre retorna false.
+//
+// Retorna true cuando el usuario confirma (Enter en single-line, Ctrl+Enter en multiline).
 render_input :: proc(
-	s:   ^entities.Input_State,
-	rect: raylib.Rectangle,
-	dt:  f32,
-	placeholder: cstring = "",
+	s:           ^entities.Input_State,
+	rect:         raylib.Rectangle,
+	dt:           f32,
+	placeholder:  cstring = "",
+	multiline:    bool    = false,
+	locked:       bool    = false,
 ) -> bool {
 	// ── Focus on click ───────────────────────────────────────────────────────
 	if raylib.IsMouseButtonPressed(.LEFT) {
@@ -1361,182 +1371,301 @@ render_input :: proc(
 
 	confirmed := false
 
-	// ── Keyboard handling (only when focused) ────────────────────────────────
+	// ── Parse líneas (se usa en multiline y para Home/End) ───────────────────
+	FS      := constants.INPUT_FONT_SIZE
+	PAD_H   := constants.INPUT_PAD_H
+	PAD_V   := constants.INPUT_PAD_V
+	LINE_H  := FS + constants.INPUT_LINE_SPACING
+	font    := constants.game_fonts.regular
+	inner_w := rect.width  - PAD_H * 2
+	inner_h := rect.height - PAD_V * 2
+
+	// line_starts[i] = índice en buf del primer rune de la línea i
+	line_starts: [constants.MAX_INPUT_LEN + 1]int
+	line_count   := 1
+	line_starts[0] = 0
+	for i in 0..<s.len {
+		if s.buf[i] == '\n' && line_count < constants.MAX_INPUT_LEN {
+			line_starts[line_count] = i + 1
+			line_count += 1
+		}
+	}
+
+	// Fila y columna del cursor
+	cursor_row := 0
+	for r in 1..<line_count {
+		if line_starts[r] <= s.cursor { cursor_row = r } else { break }
+	}
+	cursor_col := s.cursor - line_starts[cursor_row]
+
+	// ── Keyboard handling ────────────────────────────────────────────────────
 	if s.focused {
-		// Character input
-		for {
-			r := raylib.GetCharPressed()
-			if r == 0 { break }
-			// Delete selection first
-			if s.sel_anchor >= 0 {
-				lo, hi := entities.input_sel_range(s)
-				copy(s.buf[lo:], s.buf[hi:s.len])
-				s.len -= hi - lo
-				s.cursor = lo
-				s.sel_anchor = -1
+		ctrl  := raylib.IsKeyDown(.LEFT_CONTROL) || raylib.IsKeyDown(.RIGHT_CONTROL)
+		shift := raylib.IsKeyDown(.LEFT_SHIFT)   || raylib.IsKeyDown(.RIGHT_SHIFT)
+
+		// Edición — bloqueada si locked
+		if !locked {
+			// Insertar carácter
+			for {
+				r := raylib.GetCharPressed()
+				if r == 0 { break }
+				if s.sel_anchor >= 0 {
+					lo, hi := entities.input_sel_range(s)
+					copy(s.buf[lo:], s.buf[hi:s.len])
+					s.len -= hi - lo
+					s.cursor = lo
+					s.sel_anchor = -1
+				}
+				if s.len < constants.MAX_INPUT_LEN {
+					copy(s.buf[s.cursor+1:], s.buf[s.cursor:s.len])
+					s.buf[s.cursor] = rune(r)
+					s.len    += 1
+					s.cursor += 1
+				}
+				s.blink = 0
 			}
-			if s.len < constants.MAX_INPUT_LEN {
-				copy(s.buf[s.cursor+1:], s.buf[s.cursor:s.len])
-				s.buf[s.cursor] = rune(r)
-				s.len    += 1
-				s.cursor += 1
+
+			// Backspace
+			if raylib.IsKeyPressedRepeat(.BACKSPACE) || raylib.IsKeyPressed(.BACKSPACE) {
+				if s.sel_anchor >= 0 {
+					lo, hi := entities.input_sel_range(s)
+					copy(s.buf[lo:], s.buf[hi:s.len])
+					s.len -= hi - lo
+					s.cursor = lo
+					s.sel_anchor = -1
+				} else if s.cursor > 0 {
+					copy(s.buf[s.cursor-1:], s.buf[s.cursor:s.len])
+					s.len    -= 1
+					s.cursor -= 1
+				}
+				s.blink = 0
 			}
-			s.blink = 0
+
+			// Delete
+			if raylib.IsKeyPressedRepeat(.DELETE) || raylib.IsKeyPressed(.DELETE) {
+				if s.sel_anchor >= 0 {
+					lo, hi := entities.input_sel_range(s)
+					copy(s.buf[lo:], s.buf[hi:s.len])
+					s.len -= hi - lo
+					s.cursor = lo
+					s.sel_anchor = -1
+				} else if s.cursor < s.len {
+					copy(s.buf[s.cursor:], s.buf[s.cursor+1:s.len])
+					s.len -= 1
+				}
+				s.blink = 0
+			}
+
+			// Enter: en multiline inserta \n; Ctrl+Enter (o single-line) confirma
+			if raylib.IsKeyPressed(.ENTER) || raylib.IsKeyPressed(.KP_ENTER) {
+				if multiline && !ctrl {
+					if s.sel_anchor >= 0 {
+						lo, hi := entities.input_sel_range(s)
+						copy(s.buf[lo:], s.buf[hi:s.len])
+						s.len -= hi - lo
+						s.cursor = lo
+						s.sel_anchor = -1
+					}
+					if s.len < constants.MAX_INPUT_LEN {
+						copy(s.buf[s.cursor+1:], s.buf[s.cursor:s.len])
+						s.buf[s.cursor] = '\n'
+						s.len    += 1
+						s.cursor += 1
+					}
+					s.blink = 0
+				} else {
+					confirmed = true
+				}
+			}
 		}
 
-		// Backspace
-		if raylib.IsKeyPressedRepeat(.BACKSPACE) || raylib.IsKeyPressed(.BACKSPACE) {
-			if s.sel_anchor >= 0 {
-				lo, hi := entities.input_sel_range(s)
-				copy(s.buf[lo:], s.buf[hi:s.len])
-				s.len -= hi - lo
-				s.cursor = lo
-				s.sel_anchor = -1
-			} else if s.cursor > 0 {
-				copy(s.buf[s.cursor-1:], s.buf[s.cursor:s.len])
-				s.len    -= 1
-				s.cursor -= 1
-			}
-			s.blink = 0
-		}
-
-		// Delete
-		if raylib.IsKeyPressedRepeat(.DELETE) || raylib.IsKeyPressed(.DELETE) {
-			if s.sel_anchor >= 0 {
-				lo, hi := entities.input_sel_range(s)
-				copy(s.buf[lo:], s.buf[hi:s.len])
-				s.len -= hi - lo
-				s.cursor = lo
-				s.sel_anchor = -1
-			} else if s.cursor < s.len {
-				copy(s.buf[s.cursor:], s.buf[s.cursor+1:s.len])
-				s.len -= 1
-			}
-			s.blink = 0
-		}
-
-		// Arrow keys
-		shift := raylib.IsKeyDown(.LEFT_SHIFT) || raylib.IsKeyDown(.RIGHT_SHIFT)
+		// Navegación — siempre permitida (incluso en locked)
 		if raylib.IsKeyPressedRepeat(.LEFT) || raylib.IsKeyPressed(.LEFT) {
-			if shift {
-				if s.sel_anchor < 0 { s.sel_anchor = s.cursor }
-			} else {
-				s.sel_anchor = -1
-			}
+			if shift { if s.sel_anchor < 0 { s.sel_anchor = s.cursor } } else { s.sel_anchor = -1 }
 			if s.cursor > 0 { s.cursor -= 1 }
 			s.blink = 0
 		}
 		if raylib.IsKeyPressedRepeat(.RIGHT) || raylib.IsKeyPressed(.RIGHT) {
-			if shift {
-				if s.sel_anchor < 0 { s.sel_anchor = s.cursor }
-			} else {
-				s.sel_anchor = -1
-			}
+			if shift { if s.sel_anchor < 0 { s.sel_anchor = s.cursor } } else { s.sel_anchor = -1 }
 			if s.cursor < s.len { s.cursor += 1 }
 			s.blink = 0
 		}
 
-		// Home / End
+		if multiline {
+			if raylib.IsKeyPressedRepeat(.UP) || raylib.IsKeyPressed(.UP) {
+				if shift { if s.sel_anchor < 0 { s.sel_anchor = s.cursor } } else { s.sel_anchor = -1 }
+				if cursor_row > 0 {
+					prev_start := line_starts[cursor_row - 1]
+					prev_end   := line_starts[cursor_row] - 1
+					s.cursor    = prev_start + min(cursor_col, prev_end - prev_start)
+				}
+				s.blink = 0
+			}
+			if raylib.IsKeyPressedRepeat(.DOWN) || raylib.IsKeyPressed(.DOWN) {
+				if shift { if s.sel_anchor < 0 { s.sel_anchor = s.cursor } } else { s.sel_anchor = -1 }
+				if cursor_row < line_count - 1 {
+					next_start := line_starts[cursor_row + 1]
+					next_end   := (line_starts[cursor_row + 2] - 1) if cursor_row + 2 < line_count else s.len
+					s.cursor    = next_start + min(cursor_col, next_end - next_start)
+				}
+				s.blink = 0
+			}
+		}
+
+		// Home / End — va al inicio/fin de la línea en multiline, del buffer en single-line
 		if raylib.IsKeyPressed(.HOME) {
 			if shift { if s.sel_anchor < 0 { s.sel_anchor = s.cursor } } else { s.sel_anchor = -1 }
-			s.cursor = 0; s.blink = 0
+			s.cursor = line_starts[cursor_row] if multiline else 0
+			s.blink  = 0
 		}
 		if raylib.IsKeyPressed(.END) {
 			if shift { if s.sel_anchor < 0 { s.sel_anchor = s.cursor } } else { s.sel_anchor = -1 }
-			s.cursor = s.len; s.blink = 0
+			if multiline {
+				line_end := (line_starts[cursor_row + 1] - 1) if cursor_row + 1 < line_count else s.len
+				s.cursor = line_end
+			} else {
+				s.cursor = s.len
+			}
+			s.blink = 0
 		}
 
-		// Ctrl+A — select all
-		if (raylib.IsKeyDown(.LEFT_CONTROL) || raylib.IsKeyDown(.RIGHT_CONTROL)) && raylib.IsKeyPressed(.A) {
+		// Ctrl+A — seleccionar todo
+		if ctrl && raylib.IsKeyPressed(.A) {
 			s.sel_anchor = 0
 			s.cursor     = s.len
 		}
+	}
 
-		// Enter — confirm
-		if raylib.IsKeyPressed(.ENTER) || raylib.IsKeyPressed(.KP_ENTER) {
-			confirmed = true
+	// ── Scroll: actualizar tras key handling ─────────────────────────────────
+	// Recalcular cursor_row/col con buf actualizado
+	cursor_row = 0
+	line_starts[0] = 0
+	line_count = 1
+	for i in 0..<s.len {
+		if s.buf[i] == '\n' && line_count < constants.MAX_INPUT_LEN {
+			line_starts[line_count] = i + 1
+			line_count += 1
 		}
 	}
-
-	// ── Measure text for scroll ───────────────────────────────────────────────
-	FS   := constants.INPUT_FONT_SIZE
-	PAD  := constants.INPUT_PAD_H
-	font := constants.game_fonts.regular
-
-	inner_w := rect.width - PAD * 2
-
-	// Cursor X in text space
-	cursor_text := _input_runes_to_cstr(s.buf[:], s.cursor)
-	cursor_x    := raylib.MeasureTextEx(font, cursor_text, FS, 0).x
-
-	// Scroll so cursor is always visible
-	if cursor_x - s.scroll_x > inner_w - 2 {
-		s.scroll_x = cursor_x - inner_w + 2
+	for r in 1..<line_count {
+		if line_starts[r] <= s.cursor { cursor_row = r } else { break }
 	}
-	if cursor_x - s.scroll_x < 0 {
-		s.scroll_x = cursor_x
+	cursor_col = s.cursor - line_starts[cursor_row]
+
+	if multiline {
+		cursor_pix_y := f32(cursor_row) * LINE_H
+		if cursor_pix_y - s.scroll_y > inner_h - LINE_H {
+			s.scroll_y = cursor_pix_y - inner_h + LINE_H
+		}
+		if cursor_pix_y - s.scroll_y < 0 {
+			s.scroll_y = cursor_pix_y
+		}
+		s.scroll_x = 0
+	} else {
+		cursor_x := raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[:], s.cursor), FS, 0).x
+		if cursor_x - s.scroll_x > inner_w - 2 { s.scroll_x = cursor_x - inner_w + 2 }
+		if cursor_x - s.scroll_x < 0            { s.scroll_x = cursor_x }
 	}
 
-	// ── Draw background ───────────────────────────────────────────────────────
-	raylib.DrawRectangleRec(rect, constants.INPUT_BG_COLOR)
+	// ── Fondo ────────────────────────────────────────────────────────────────
+	raylib.DrawRectangleRec(rect, constants.INPUT_BG_LOCKED_COLOR if locked else constants.INPUT_BG_COLOR)
 
-	// Border
+	// Borde
 	border_thick := constants.INPUT_BORDER_THICK
-	border_color := constants.INPUT_BORDER_COLOR
-	if s.focused {
+	border_color := constants.INPUT_BORDER_LOCKED_COLOR if locked else constants.INPUT_BORDER_COLOR
+	if s.focused && !locked {
 		border_thick = constants.INPUT_BORDER_THICK_FOCUSED
 		border_color = constants.INPUT_BORDER_FOCUSED
 	}
 	raylib.DrawRectangleLinesEx(rect, border_thick, border_color)
 
-	// ── Draw selection highlight ──────────────────────────────────────────────
-	if s.focused && s.sel_anchor >= 0 {
-		lo, hi := entities.input_sel_range(s)
-		sel_x0 := raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[:], lo), FS, 0).x
-		sel_x1 := raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[:], hi), FS, 0).x
-		sel_rx := rect.x + PAD + sel_x0 - s.scroll_x
-		sel_rw := sel_x1 - sel_x0
-		sel_rect := raylib.Rectangle{sel_rx, rect.y + 2, sel_rw, rect.height - 4}
-		// Clip selection to inner box
-		if sel_rect.x < rect.x + PAD {
-			sel_rect.width -= (rect.x + PAD) - sel_rect.x
-			sel_rect.x      = rect.x + PAD
-		}
-		if sel_rect.x + sel_rect.width > rect.x + rect.width - PAD {
-			sel_rect.width = rect.x + rect.width - PAD - sel_rect.x
-		}
-		if sel_rect.width > 0 {
-			raylib.DrawRectangleRec(sel_rect, constants.INPUT_SELECT_COLOR)
-		}
-	}
+	// ── Dibujo (scissored) ───────────────────────────────────────────────────
+	raylib.BeginScissorMode(i32(rect.x + PAD_H), i32(rect.y + PAD_V), i32(inner_w), i32(inner_h))
 
-	// ── Draw text (scissored) ─────────────────────────────────────────────────
-	text_y := rect.y + (rect.height - FS) / 2
+	text_color := constants.INPUT_TEXT_LOCKED_COLOR if locked else raylib.BLACK
 
-	// Use Raylib scissor mode to clip text to inner box
-	scissor_x := i32(rect.x + PAD)
-	scissor_w := i32(inner_w)
-	raylib.BeginScissorMode(scissor_x, i32(rect.y), scissor_w, i32(rect.height))
+	if multiline {
+		// ── Selección multiline ───────────────────────────────────────────────
+		if s.focused && s.sel_anchor >= 0 {
+			sel_lo, sel_hi := entities.input_sel_range(s)
+			for r in 0..<line_count {
+				ls := line_starts[r]
+				le := (line_starts[r + 1] - 1) if r + 1 < line_count else s.len
+				if sel_hi <= ls || sel_lo > le { continue }
 
-	if s.len == 0 && placeholder != "" {
-		raylib.DrawTextEx(font, placeholder, {rect.x + PAD - s.scroll_x, text_y}, FS, 0, constants.INPUT_PLACEHOLDER_COLOR)
+				seg_lo_col := max(sel_lo, ls) - ls
+				seg_hi_col := min(sel_hi, le) - ls
+				x0 := raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[ls:], seg_lo_col), FS, 0).x
+				x1 := raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[ls:], seg_hi_col), FS, 0).x
+				// Si la selección cruza el \n de esta línea, extender visualmente
+				if sel_hi > le && r + 1 < line_count {
+					x1 = raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[ls:], le - ls), FS, 0).x + 6
+				}
+				sy := rect.y + PAD_V + f32(r) * LINE_H - s.scroll_y
+				raylib.DrawRectangleRec({rect.x + PAD_H + x0, sy, x1 - x0, LINE_H}, constants.INPUT_SELECT_COLOR)
+			}
+		}
+
+		// ── Texto multiline ───────────────────────────────────────────────────
+		if s.len == 0 && placeholder != "" {
+			raylib.DrawTextEx(font, placeholder, {rect.x + PAD_H, rect.y + PAD_V}, FS, 0, constants.INPUT_PLACEHOLDER_COLOR)
+		} else {
+			for r in 0..<line_count {
+				ls   := line_starts[r]
+				le   := (line_starts[r + 1] - 1) if r + 1 < line_count else s.len
+				py   := rect.y + PAD_V + f32(r) * LINE_H - s.scroll_y
+				if py + LINE_H < rect.y || py > rect.y + rect.height { continue }
+				raylib.DrawTextEx(font, _input_runes_to_cstr(s.buf[ls:], le - ls), {rect.x + PAD_H, py}, FS, 0, text_color)
+			}
+		}
+
+		// ── Cursor multiline ──────────────────────────────────────────────────
+		if s.focused && !locked && s.blink < constants.INPUT_BLINK_HALF {
+			cur_col_x := raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[line_starts[cursor_row]:], cursor_col), FS, 0).x
+			cur_px    := rect.x + PAD_H + cur_col_x
+			cur_py    := rect.y + PAD_V + f32(cursor_row) * LINE_H - s.scroll_y
+			raylib.DrawRectangleRec({cur_px, cur_py, constants.INPUT_CURSOR_WIDTH, LINE_H}, constants.INPUT_CURSOR_COLOR)
+		}
 	} else {
-		full_text := _input_runes_to_cstr(s.buf[:], s.len)
-		raylib.DrawTextEx(font, full_text, {rect.x + PAD - s.scroll_x, text_y}, FS, 0, raylib.BLACK)
+		// ── Selección single-line ─────────────────────────────────────────────
+		if s.focused && s.sel_anchor >= 0 {
+			lo, hi := entities.input_sel_range(s)
+			sel_x0  := raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[:], lo), FS, 0).x
+			sel_x1  := raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[:], hi), FS, 0).x
+			sel_rx  := rect.x + PAD_H + sel_x0 - s.scroll_x
+			sel_rw  := sel_x1 - sel_x0
+			sel_rect := raylib.Rectangle{sel_rx, rect.y + 2, sel_rw, rect.height - 4}
+			if sel_rect.x < rect.x + PAD_H {
+				sel_rect.width -= (rect.x + PAD_H) - sel_rect.x
+				sel_rect.x      = rect.x + PAD_H
+			}
+			if sel_rect.x + sel_rect.width > rect.x + rect.width - PAD_H {
+				sel_rect.width = rect.x + rect.width - PAD_H - sel_rect.x
+			}
+			if sel_rect.width > 0 {
+				raylib.DrawRectangleRec(sel_rect, constants.INPUT_SELECT_COLOR)
+			}
+		}
+
+		// ── Texto single-line ─────────────────────────────────────────────────
+		text_y := rect.y + (rect.height - FS) / 2
+		if s.len == 0 && placeholder != "" {
+			raylib.DrawTextEx(font, placeholder, {rect.x + PAD_H - s.scroll_x, text_y}, FS, 0, constants.INPUT_PLACEHOLDER_COLOR)
+		} else {
+			raylib.DrawTextEx(font, _input_runes_to_cstr(s.buf[:], s.len), {rect.x + PAD_H - s.scroll_x, text_y}, FS, 0, text_color)
+		}
+
+		// ── Cursor single-line ────────────────────────────────────────────────
+		if s.focused && !locked && s.blink < constants.INPUT_BLINK_HALF {
+			cursor_x := raylib.MeasureTextEx(font, _input_runes_to_cstr(s.buf[:], s.cursor), FS, 0).x
+			cx := rect.x + PAD_H + cursor_x - s.scroll_x
+			raylib.DrawRectangleRec({cx, rect.y + 3, constants.INPUT_CURSOR_WIDTH, rect.height - 6}, constants.INPUT_CURSOR_COLOR)
+		}
 	}
 
 	raylib.EndScissorMode()
 
-	// ── Draw cursor ───────────────────────────────────────────────────────────
-	if s.focused && s.blink < constants.INPUT_BLINK_HALF {
-		cx := rect.x + PAD + cursor_x - s.scroll_x
-		raylib.DrawRectangleRec(
-			{cx, rect.y + 3, constants.INPUT_CURSOR_WIDTH, rect.height - 6},
-			constants.INPUT_CURSOR_COLOR,
-		)
-	}
-
-	return confirmed
+	return confirmed && !locked
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

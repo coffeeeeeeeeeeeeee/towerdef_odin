@@ -7,6 +7,13 @@ import "core:fmt"
 
 // Handle all input
 input_handle :: proc(app: ^entities.App_State) {
+	// Tab: abrir/cerrar la consola (siempre, en cualquier estado)
+	if raylib.IsKeyPressed(.TAB) {
+		app.console.open = !app.console.open
+		// Auto-focus el campo de comandos al abrir; desfocar al cerrar
+		app.console.cmd_input.focused = app.console.open
+	}
+
 	// No mover la cámara mientras el browser de mapas está abierto en el editor
 	if !(app.state == .EDITOR && app.editor.show_map_browser) {
 		input_handle_camera(app)
@@ -155,27 +162,7 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 					play_sound(.CONFIRMATION, .UI)
 					return
 				}
-			case .CRANE_KICK:
-				is_tower_tile := tile == .TOWER_ARCHER || tile == .TOWER_CANNON ||
-				                 tile == .TOWER_SNIPER  || tile == .TOWER_MISSILE ||
-				                 tile == .TOWER_LASER   || tile == .TOWER_ICE ||
-				                 tile == .TOWER_ENHANCE || tile == .TOWER_TESLA ||
-				                 tile == .TOWER_MORTAR
-				if is_tower_tile {
-					for &t in app.sim.towers {
-						if t.r == grid_y && t.c == grid_x {
-							t.crane_kick_charges += 1
-							entities.add_toast(app, constants.get_text("TOAST_CRANE_KICK"), .SUCCESS)
-							break
-						}
-					}
-					entities.card_play(&app.sim, app.sim.cards.selected_card_idx)
-					app.sim.cards.selected_card_idx = -1
-					app.pending_tower_action = .TOWER
-					play_sound(.CONFIRMATION, .UI)
-					return
-				}
-			case .GARDENER:
+case .GARDENER:
 				is_tower_tile := tile == .TOWER_ARCHER || tile == .TOWER_CANNON ||
 				                 tile == .TOWER_SNIPER  || tile == .TOWER_MISSILE ||
 				                 tile == .TOWER_LASER   || tile == .TOWER_ICE ||

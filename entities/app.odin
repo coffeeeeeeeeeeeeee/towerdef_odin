@@ -96,6 +96,7 @@ Simulation :: struct {
 	// Se inicializa a cero automáticamente; sim.relic_stacks[.INTEREST_BOOST], etc.
 	relic_stacks:        [Card_Kind]i32,
 	auto_upgrade_timer:  f32,  // tiempo restante hasta el próximo tick de auto-upgrade
+	crane_kick_timer:    f32,  // tiempo restante hasta la próxima carga de Crane Kick
 
 	// Auxiliares por relicto (no son stacks, son estado derivado)
 	wave_start_money:   i32,  // snapshot de dinero al inicio de oleada (DIVIDEND)
@@ -264,7 +265,8 @@ App_State :: struct {
 	settings: Settings,
 	
 	// UI System
-	toasts: [dynamic]Toast,
+	toasts:  [dynamic]Toast,
+	console: Console_State,
 	
 	// Camera/View
 	camera_offset_x: i32,
