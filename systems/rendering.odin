@@ -66,6 +66,12 @@ Water_Shader :: struct {
 	mask_tex:    raylib.RenderTexture2D,
 	tex_w:       i32,
 	tex_h:       i32,
+	// Tiempo acumulado a mano (dt clampeado * velocidad), NO GetTime() de pared.
+	// GetTime() sigue corriendo aunque la ventana esté minimizada/sin foco y el
+	// loop deje de renderizar frames reales — al volver, el salto de reloj se
+	// leía como que la animación "se acelera". anim_time solo avanza con dt de
+	// frames que realmente se dibujan, y clampeado, así que no hay salto.
+	anim_time: f32,
 }
 
 water_shader: Water_Shader
@@ -2584,7 +2590,9 @@ water_render_apply :: proc(cam_x: f32 = 0, cam_y: f32 = 0, zoom: f32 = 1.0) {
 	water_color := [4]f32{f32(wc.r)/255, f32(wc.g)/255, f32(wc.b)/255, f32(wc.a)/255}
 	edge_color  := [4]f32{f32(ec.r)/255, f32(ec.g)/255, f32(ec.b)/255, f32(ec.a)/255}
 	texel_size  := [2]f32{1.0 / f32(water_shader.tex_w), 1.0 / f32(water_shader.tex_h)}
-	t           := f32(raylib.GetTime())
+	frame_dt    := min(raylib.GetFrameTime(), constants.WATER_ANIM_MAX_DT)
+	water_shader.anim_time += frame_dt * constants.WATER_ANIM_SPEED
+	t           := water_shader.anim_time
 	cam         := [2]f32{cam_x, cam_y}
 	z           := zoom
 

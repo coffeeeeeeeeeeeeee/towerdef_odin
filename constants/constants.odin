@@ -605,6 +605,11 @@ COLOR_WATER       :: raylib.Color{ 49, 169, 238, 220}  // Azul cielo
 COLOR_WATER_EDGE  :: raylib.Color{ 30, 120, 195, 255}  // Borde/sombra del agua
 WATER_CORNER_RADIUS_RATIO :: f32(0.32)                  // Radio de esquinas como fracción del tile
 
+// Animación del shader de agua (u_time) — acumulado a mano en vez de GetTime()
+// de pared, ver Water_Shader.anim_time en systems/rendering.odin.
+WATER_ANIM_SPEED  :: f32(0.4)   // Multiplicador de velocidad (1.0 = como antes)
+WATER_ANIM_MAX_DT :: f32(0.1)   // Tope de dt por frame — evita saltos tras un hitch/minimizado
+
 // Bridge (path over water)
 COLOR_BRIDGE_RAILING  :: raylib.Color{ 80,  75,  70, 255}  // Barandas de cemento oscuro
 BRIDGE_RAILING_THICK  :: f32(0.07)                          // Grosor de baranda como fracción del tile
