@@ -665,7 +665,11 @@ render_map :: proc(app: ^entities.App_State, m: ^entities.Map, for_preview: bool
 				raylib.DrawCircleLines(cx_px, cy_px, spec.range * cs, constants.TOWER_RANGE_OUTLINE)
 				// Círculo interior de AoE (solo si la torre tiene explosión)
 				if spec.aoe > 0 {
-					raylib.DrawCircleLines(cx_px, cy_px, spec.aoe * cs, raylib.Color{255, 180, 60, 180})
+					raylib.DrawCircleSectorLines(
+						{f32(cx_px), f32(cy_px)}, spec.aoe * cs, 0, 360,
+						constants.TOWER_AOE_CIRCLE_SEGMENTS,
+						raylib.Color{255, 180, 60, 180},
+					)
 				}
 			}
 		}
@@ -2419,7 +2423,7 @@ render_water_lily :: proc(x, y, cs: f32, row, col: i32) {
 		s := seed + u32(i) * 97
 		px := x + rng(&s) * cs * 0.70 + cs * 0.15
 		py := y + rng(&s) * cs * 0.70 + cs * 0.15
-		pr := cs * (0.14 + rng(&s) * 0.10)  // radius 0.14..0.24 of cs
+		pr := cs * (0.09 + rng(&s) * 0.07)  // radius 0.09..0.16 of cs
 
 		// Pad shadow
 		raylib.DrawCircle(i32(px + 1), i32(py + 1), pr, raylib.Color{0, 0, 0, 40})
@@ -2430,7 +2434,7 @@ render_water_lily :: proc(x, y, cs: f32, row, col: i32) {
 
 		// 50% chance of a small pink flower on this pad
 		if rng(&s) > 0.5 {
-			fr := cs * (0.025 + rng(&s) * 0.035)  // petal radius 0.025..0.06 of cs
+			fr := cs * (0.016 + rng(&s) * 0.023)  // petal radius 0.016..0.039 of cs
 			fc := raylib.Color{255, 150, 190, 240}  // rosa
 			yc := raylib.Color{255, 230, 80, 255}   // amarillo centro
 			// 5 petals around center

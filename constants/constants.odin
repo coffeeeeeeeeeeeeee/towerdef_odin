@@ -249,7 +249,7 @@ MAX_RELIC_STACKS         :: i32(20)     // Maximum stack count for any relic
 RECYCLER_SELL_BONUS  :: f32(0.10)  // Extra fraction of sell price per RECYCLER stack
 LUMBERJACK_TREE_GOLD :: i32(120)   // Gold earned per tree chopped with LUMBERJACK
 MAX_ACTIVE_RELICS    :: int(5)     // Max distinct relic types the player can have active
-MEMENTO_GOLD_PER_10W :: i32(1)     // Gold per stack per 10 completed waves
+MEMENTO_CRISTALES_PER_STACK :: i32(1)  // Cristales extra al final de la partida, por stack de MEMENTO
 WARMED_UP_THRESHOLD       :: f32(15.0)  // Seconds of continuous targeting before warm bonus kicks in
 WARMED_UP_BONUS           :: f32(0.03)  // Extra damage multiplier per WARMED_UP stack when active
 REBOUND_STACKS_PER_BOUNCE :: i32(2)     // Stacks needed per extra bounce
@@ -257,12 +257,6 @@ REBOUND_RANGE             :: f32(2.0)   // Max tile distance to search for a bou
 OVERDRIVE_SPEED_PER_STACK :: f32(0.10)  // +10% attack speed per OVERDRIVE stack on a tower
 
 CARD_REROLL_COST     :: i32(50)    // Gold cost to reroll the 3-card selection
-CARD_SELL_PRICE      :: i32(25)    // Gold received when selling a non-relic card from hand
-SELL_PRICE_COMMON    :: i32(20)    // Sell price for Common cards
-SELL_PRICE_UNCOMMON  :: i32(30)    // Sell price for Uncommon cards
-SELL_PRICE_RARE      :: i32(45)    // Sell price for Rare cards
-SELL_PRICE_EPIC      :: i32(55)    // Sell price for Epic cards
-SELL_PRICE_UNIQUE    :: i32(65)    // Sell price for Unique cards
 HAND_REDEAL_COST     :: i32(40)    // Gold cost to redeal the hand once the game has started (free before first wave)
 
 CRIT_BASE_CHANCE     :: f32(0.10)  // Base critical hit chance (10%) for all towers
@@ -722,6 +716,8 @@ TOWER_HATCH_RADIUS_RATIO :: f32(0.15)  // Hatch/circle size ratio
 
 TOWER_RANGE_PREVIEW :: raylib.Color{255, 255, 255,  30}  // Range fill (very faint, used for all-towers overlay)
 TOWER_RANGE_OUTLINE :: raylib.Color{255, 255, 255,  60}  // Range outline for the all-towers overlay setting
+
+TOWER_AOE_CIRCLE_SEGMENTS :: 64  // Segments used to draw the AoE preview circle outline (smoother than raylib's default)
 
 // =============================================================================
 // Tower colors
