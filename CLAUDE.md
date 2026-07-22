@@ -75,6 +75,7 @@ towerdef_odin/
 │   ├── console.odin
 │   └── ui.odin
 ├── maps/                    # Mapas guardados (.map)
+├── assets/                  # Shaders GLSL (water.glsl, path.glsl, nebula.glsl, ...)
 ├── images/, fonts/, audio/, music/  # Assets
 ├── translations.txt         # Strings de UI por idioma (clave → traducción)
 ├── docs/assets.md
@@ -129,6 +130,35 @@ Se abre automáticamente entre oleadas (`card_selection_active = true`).
 - Cartas ya compradas quedan en gris con "Comprado" (`card_selection_bought: [3]bool`).
 - Se cierra solo con el botón **Skip** (llama `hand_refresh`, resetea `card_selection_bought`).
 - El reroll genera cartas nuevas y resetea `card_selection_bought` (`generate_card_selection`).
+- Costo de reroll: `shop_next_reroll_cost` (`systems/menus.odin`), progresivo según
+  `constants.SHOP_REROLL_COSTS` (`[0, 30, 75, 150]`, index = `rerolls_this_visit`,
+  clampeado al último valor). El bioma MOUNTAIN (`BIOME_SHOP_MODS.free_reroll`)
+  da los primeros `constants.MOUNTAIN_FREE_REROLLS` (2) rerolls gratis por
+  visita; de ahí en más cobra la misma curva que cualquier otro bioma.
+
+### Venta de cartas de la mano
+
+`card_sell_price` (`entities/card.odin`) devuelve el 100% del precio de
+tienda (`card_shop_price`) — vender reintegra exactamente lo pagado. Se
+vende con **clic derecho** sobre la carta en `render_card_hand`
+(`systems/menus.odin`); no hay botón. Funciona incluso con el shop abierto
+(el hover de la mano ignora `ui_modal_blocks`, solo respeta
+`app.confirm_modal.active`).
+
+**Trampa:** si el jugador tiene una carta "armada" (torre/obstáculo
+seleccionado para colocar — `selected_build_tower != .EMPTY` — o una
+reliquia activa con objetivo pendiente — `pending_tower_action != .TOWER`),
+vender una carta **distinta** desincroniza `selected_card_idx`: `card_play`
+hace `ordered_remove` sobre la mano, corriendo el índice de todo lo que
+está después. Los sitios que consumen `selected_card_idx` más tarde
+(`systems/input.odin`, casos LUMBERJACK/OVERDRIVE/GARDENER/torre/obstáculo)
+no revalidan el índice — en el peor caso (`selected_card_idx` apuntaba a la
+última carta) es un panic por índice fuera de rango; si no, consume la
+carta equivocada. El guard en `render_card_hand` (`something_armed` +
+`can_sell`) bloquea vender cualquier carta que no sea la armada mientras
+algo esté pendiente — permite vender la carta armada misma (cancela y
+reembolsa) pero no otra. No relajar ese guard sin resolver el problema de
+raíz (usar un handle estable en vez de un índice crudo).
 
 ## Sistema de UI blocking
 
@@ -159,6 +189,61 @@ cualquier cstring de temp_allocator es válido durante todo el frame.
 campos de structs) → usar `fmt.aprintf(...)` o `strings.clone(s)` (heap,
 requieren `delete()` explícito). Ver `init_translations` como ejemplo.
 
+## Shaders de máscara + blur/threshold (agua y camino)
+
+`assets/water.glsl` y `assets/path.glsl` comparten la misma técnica en dos
+fases (ver `Water_Shader`/`Path_Shader` en `systems/rendering.odin`):
+
+1. **Máscara** (`water_render_mask` / `path_render_mask`): dibuja rectángulos
+   BLANCOS lisos (sin AA) para los tiles relevantes sobre un
+   `RenderTexture2D` dedicado (`*_shader.mask_tex`), del tamaño de la
+   pantalla (se redimensiona con `*_shader_resize` en cada resize de
+   ventana). Debe llamarse **fuera** de cualquier `BeginTextureMode` activo.
+2. **Apply** (`water_render_apply` / `path_render_apply`): dibuja esa máscara
+   a pantalla a través del shader, que hace *box blur* (radio fijo, ver
+   comentario "Phase 1" en `water.glsl`) y después `smoothstep` en el punto
+   medio (~0.5) de los valores blureados — el blur+threshold redondea los
+   bordes de la máscara binaria sin necesidad de geometría curva real.
+
+**Preview de mapas** (`render_map_preview_to_texture`): la máscara no se
+puede computar dentro del `BeginTextureMode` de la preview (raylib no
+soporta texture-mode anidado), así que se precomputa ANTES, con el
+`mask_tex` temporalmente intercambiado a la resolución 1:1 de la preview
+(guardar/restaurar `tex_w/tex_h/mask_tex` de cada shader). Si se agrega un
+shader nuevo con este patrón, replicar el mismo swap para agua Y camino.
+
+`render_path_layer` además cachea los tiles de puente (PATH sobre agua) con
+sus vecinos ya resueltos en `path_bridge_tiles` (poblado durante
+`path_render_mask`) para que `render_path_railings` los dibuje sin volver a
+recorrer la grilla ni recalcular `is_path_like`. Los railings se dibujan
+**después** de aplicar el shader, sin blur (bordes nítidos a propósito).
+
+## Fondo animado (nebula.glsl)
+
+Desactivado por ahora vía `constants.NEBULA_BACKGROUND_ENABLED :: false`
+(gatea la llamada a `nebula_draw()` en `render_game`, usado en MENU,
+RUN_COMPLETE, CAMPAIGN_MAP, PROGRESSION). La infraestructura
+(`nebula_init/unload/draw`) sigue cargada — solo hay que volver el flag a
+`true` para reactivarlo.
+
+## Nombre del juego
+
+`constants.GAME_NAME` ("First Impact") es la única fuente de verdad — usado
+en `WINDOW_TITLE` (`main.odin`) y el título del menú (`systems/menus.odin`).
+Es un nombre propio: no tiene traducción en `translations.txt`.
+
+## Tooltips multilínea (cartas y reliquias)
+
+`render_tooltip_layer` (caso `.CARD`, `systems/interface.odin`) wrappea
+automáticamente cualquier línea que exceda `constants.UI_TOOLTIP_MAX_TEXT_W`
+(220px) vía `wrap_text_lines` (greedy word-wrap, `context.temp_allocator`).
+El buffer de líneas es `[8]string` — suficiente para descripciones largas
+(Crane Kick, Cryptobro) más las líneas de stats. El nombre y el badge de
+rareza comparten la misma fila (badge alineado a la derecha vía
+`render_rarity(..., right_align = true)`); `rarity_badge_width` mide el
+badge sin dibujarlo, para poder calcular el ancho del tooltip antes de
+layoutear.
+
 ## Obstáculos en el camino
 
 - `obstacle_bar_dims(m, row, col, cs)` determina dimensiones de la barrera
@@ -177,28 +262,19 @@ requieren `delete()` explícito). Ver `init_translations` como ejemplo.
 
 ## Trampas conocidas
 
-### Card Hand: botón de vender vs. click handler (`systems/menus.odin`)
+### Card Hand: activar reliquia activa vs. vender (`systems/menus.odin`)
 
-**Síntoma:** cartas de reliquia activa (LUMBERJACK, OVERDRIVE, GARDENER, y
-cualquier futura reliquia activa) parecen no poder venderse desde la mano.
-
-**Causa raíz:** en `render_card_hand` (pasada 2), el click handler de la
-carta corre **antes** que `render_button` del botón de vender, en el mismo
-frame. Si el mouse está sobre el botón de vender, el click handler dispara
-primero y activa el modo pendiente de la carta (`pending_tower_action =
-.KIND`, `selected_card_idx = i`), y entonces `card_is_pending` da `true` y
-el botón de vender se salta. Además los 8px inferiores del botón de vender
-caen fuera del rect de hover (`card_y` a `card_y + CARD_H`).
-
-**Fix ya aplicado:** `sell_rect` se calcula antes del click handler; un
-check `mouse_on_sell` guarda todo el bloque de activación (si el mouse está
-sobre vender, se salta el click handler). Hover extendido con
-`HOVER_DETECTION_EXTRA = 8` px hacia abajo.
+`render_card_hand` (pasada 2, carta hovereada) resuelve primero el clic
+izquierdo (selecciona/activa la carta) y separado el clic derecho (vende,
+ver sección de venta más arriba). Ambos comparten el guard `card_is_pending`
+para no reactivar una carta que ya está con acción pendiente.
 
 **Regla para reliquias activas nuevas:** cualquier `Card_Kind` nuevo que
 active vía `pending_tower_action` debe agregarse al chain `else if
-card.kind == .X` dentro del guard `!mouse_on_sell`. No hace falta nada más
-para compatibilidad con el botón de vender.
+card.kind == .X` dentro del bloque de clic izquierdo.
+
+Ver también la trampa de `selected_card_idx` en la sección de venta de
+cartas más arriba — es la más importante de esta lista.
 
 ### render_tower_ranges (systems/rendering.odin)
 
