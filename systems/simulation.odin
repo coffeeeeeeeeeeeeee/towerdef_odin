@@ -61,6 +61,14 @@ simulation_update :: proc(app: ^entities.App_State, dt: f32) {
 	// Update damage numbers
 	update_damage_numbers(app, s_dt)
 
+	// Update hit particles
+	update_hit_particles(app, s_dt)
+
+	// Decay screen shake trauma
+	if app.screen_shake_trauma > 0 {
+		app.screen_shake_trauma = max(0, app.screen_shake_trauma - constants.SCREEN_SHAKE_DECAY_PER_SEC * s_dt)
+	}
+
 	// Update laser beams
 	update_laser_beams(app, s_dt)
 
@@ -862,9 +870,18 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 		// Slow effect tick
 		entities.enemy_update_slow(enemy, dt)
 
+		// Hit squash decay
+		if enemy.hit_squash > 0 {
+			enemy.hit_squash = max(0, enemy.hit_squash - constants.ENEMY_HIT_SQUASH_DECAY_PER_SEC * dt)
+		}
+
 		// Check death
 		if enemy.hp <= 0 {
 			play_sound_at(.ENEMY_DEATH, .SFX, enemy.x, enemy.y, app)
+			spawn_hit_particles(app, enemy.x + 0.5, enemy.y + 0.5, entities.enemy_get_color(enemy), constants.HIT_PARTICLE_COUNT_DEATH)
+			if .BOSS in enemy.flags {
+				add_screen_shake(app, constants.SCREEN_SHAKE_BOSS_DEATH)
+			}
 
 			// Enemy died - give reward
 			reward := constants.ENEMY_REWARD_DEFAULT
@@ -1017,6 +1034,11 @@ update_towers :: proc(app: ^entities.App_State, dt: f32) {
 			tower.timer -= dt
 		}
 
+		// Recoil decay (barril retraído al disparar, vuelve a su posición)
+		if tower.recoil > 0 {
+			tower.recoil = max(0, tower.recoil - constants.TOWER_RECOIL_DECAY_PER_SEC * dt)
+		}
+
 		// ICE tower: AoE pulse-based slow — no targeting or barrel rotation needed
 		if tower.type == .ICE {
 			update_ice_tower(app, &tower)
@@ -1116,6 +1138,7 @@ update_ice_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 			enemy.hp -= dmg
 			tower.total_damage += dmg
 			spawn_damage_number(app, enemy.x + 0.5, enemy.y + 0.5, dmg, is_crit)
+			spawn_hit_particles(app, enemy.x + 0.5, enemy.y + 0.5, entities.enemy_get_color(&enemy), constants.HIT_PARTICLE_COUNT_HIT)
 		}
 	}
 
@@ -1195,6 +1218,7 @@ update_tesla_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 		next.hp -= dmg
 		tower.total_damage += dmg
 		spawn_damage_number(app, next.x + 0.5, next.y + 0.5, dmg, is_crit)
+		spawn_hit_particles(app, next.x + 0.5, next.y + 0.5, entities.enemy_get_color(next), constants.HIT_PARTICLE_COUNT_HIT)
 
 		// Spawn lightning arc (reuse laser_beam with TESLA color and arc duration)
 		beam := entities.laser_beam_init(
@@ -1238,6 +1262,7 @@ update_mortar_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 		tower.c,
 	)
 	append(&sim.projectiles, proj)
+	tower.recoil = 1.0
 	play_sound_at(.TOWER_CANNON, .SFX, f32(tower.c), f32(tower.r), app)
 }
 
@@ -1299,6 +1324,7 @@ update_laser_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, dt:
 				display_damage,
 				is_crit,
 			)
+			spawn_hit_particles(app, tower.target.x + 0.5, tower.target.y + 0.5, entities.enemy_get_color(tower.target), constants.HIT_PARTICLE_COUNT_HIT)
 			entities.laser_reset_accumulation(tower)
 			play_sound_at(.TOWER_LASER, .SFX, f32(tower.c), f32(tower.r), app)
 		}
@@ -1364,6 +1390,7 @@ update_projectile_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower
 		)
 
 		append(&sim.projectiles, proj)
+		tower.recoil = 1.0
 
 		// SFX: play tower fire sound
 		switch tower.type {
@@ -1500,6 +1527,7 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 				proj.target.hp -= scaled_dmg
 				if source_tower != nil { source_tower.total_damage += scaled_dmg }
 				spawn_damage_number(app, proj.target.x + 0.5, proj.target.y + 0.5, scaled_dmg, is_crit)
+				spawn_hit_particles(app, proj.target.x + 0.5, proj.target.y + 0.5, entities.enemy_get_color(proj.target), constants.HIT_PARTICLE_COUNT_HIT)
 				play_sound_at(.PROJECTILE_HIT, .SFX, proj.target.x, proj.target.y, app)
 			}
 
@@ -1536,6 +1564,7 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 							aoe_damage,
 							is_crit,
 						)
+						spawn_hit_particles(app, enemy.x + 0.5, enemy.y + 0.5, entities.enemy_get_color(&enemy), constants.HIT_PARTICLE_COUNT_HIT)
 					}
 				}
 			}
@@ -1606,6 +1635,17 @@ update_damage_numbers :: proc(app: ^entities.App_State, dt: f32) {
 	for i := len(sim.damage_numbers) - 1; i >= 0; i -= 1 {
 		if entities.damage_number_update(&sim.damage_numbers[i], dt) {
 			ordered_remove(&sim.damage_numbers, i)
+		}
+	}
+}
+
+// Update hit particles (chispas de impacto/muerte)
+update_hit_particles :: proc(app: ^entities.App_State, dt: f32) {
+	sim := &app.sim
+
+	for i := len(sim.hit_particles) - 1; i >= 0; i -= 1 {
+		if entities.hit_particle_update(&sim.hit_particles[i], dt) {
+			ordered_remove(&sim.hit_particles, i)
 		}
 	}
 }
@@ -1698,6 +1738,11 @@ calc_damage :: proc(
 	if source != nil && enemy != nil {
 		enemy.last_attacker_r = source.r
 		enemy.last_attacker_c = source.c
+	}
+
+	// Hit reaction visual (squash) — decae en update_enemies
+	if enemy != nil {
+		enemy.hit_squash = 1.0
 	}
 
 	return d
@@ -1801,6 +1846,24 @@ update_laser_beams :: proc(app: ^entities.App_State, dt: f32) {
 spawn_explosion :: proc(app: ^entities.App_State, x, y, radius: f32) {
 	explosion := entities.explosion_init(x, y, radius)
 	append(&app.sim.explosions, explosion)
+	add_screen_shake(app, constants.SCREEN_SHAKE_EXPLOSION_BASE + constants.SCREEN_SHAKE_EXPLOSION_PER_R * radius)
+}
+
+// Emite `count` chispas de impacto en (x, y) con velocidades y ángulos random.
+spawn_hit_particles :: proc(app: ^entities.App_State, x, y: f32, color: raylib.Color, count: int) {
+	for _ in 0 ..< count {
+		angle := rand.float32() * math.TAU
+		speed := constants.HIT_PARTICLE_SPEED_MIN +
+			rand.float32() * (constants.HIT_PARTICLE_SPEED_MAX - constants.HIT_PARTICLE_SPEED_MIN)
+		p := entities.hit_particle_init(x, y, angle, speed, constants.HIT_PARTICLE_RADIUS, color)
+		append(&app.sim.hit_particles, p)
+	}
+}
+
+// Suma trauma al screen shake (clampeado a 1.0). El offset visual real se
+// calcula en render_game a partir de app.screen_shake_trauma.
+add_screen_shake :: proc(app: ^entities.App_State, amount: f32) {
+	app.screen_shake_trauma = min(1.0, app.screen_shake_trauma + amount)
 }
 
 // Spawn damage number
@@ -1902,6 +1965,7 @@ simulation_cleanup :: proc(app: ^entities.App_State) {
 	delete(app.sim.projectiles)
 	delete(app.sim.explosions)
 	delete(app.sim.damage_numbers)
+	delete(app.sim.hit_particles)
 	delete(app.sim.laser_beams)
 	delete(app.sim.ice_pulses)
 	for &spawn in app.sim.spawns {
@@ -1932,6 +1996,7 @@ simulation_reset :: proc(app: ^entities.App_State) {
 		projectiles      = make([dynamic]entities.Projectile),
 		explosions       = make([dynamic]entities.Explosion),
 		damage_numbers   = make([dynamic]entities.Damage_Number),
+		hit_particles    = make([dynamic]entities.Hit_Particle),
 		laser_beams      = make([dynamic]entities.Laser_Beam),
 		ice_pulses       = make([dynamic]entities.Ice_Pulse),
 		spawns           = make([dynamic]entities.Spawn_Point),
