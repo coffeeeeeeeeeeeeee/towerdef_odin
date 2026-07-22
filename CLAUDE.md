@@ -110,8 +110,10 @@ En `shop_perform_buy` (`systems/simulation.odin`), las reliquias activas se
 identifican con el flag `is_action_relic` y se rutean a la mano; las
 pasivas llaman `apply_relic_card` directamente.
 
-`RELIC_KINDS` en `rendering.odin` es el slice ordenado que itera las
-reliquias activas para el tray — agregar ahí cualquier reliquia nueva.
+El tray de reliquias pasivas (`systems/menus.odin`) itera directamente
+`entities.RELIC_SPECS` y filtra por `entities.relic_stacks(&app.sim, kind)
+> 0` — cualquier reliquia agregada a `RELIC_SPECS` (`entities/card.odin`)
+aparece automáticamente ahí sin tocar el renderer.
 
 Daño global pasa por `calc_damage(app, base, source_tower, enemy)`, que
 aplica en orden: `bloodlust_mult`, bonus de Formation (si
