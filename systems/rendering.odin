@@ -101,6 +101,93 @@ water_shader_unload :: proc() {
 	}
 }
 
+// ── Pause "glass" blur (vidrio esmerilado sobre el mundo congelado) ─────────
+//
+// capture_tex: el mundo se renderiza acá en vez de a pantalla mientras
+// app.state == .PAUSED (ver render_game). blur_tex: buffer intermedio para
+// la pasada horizontal antes de la vertical (que se dibuja directo a
+// pantalla). Se re-hace todo el trabajo cada frame en vez de cachear un
+// solo capture — el mundo está congelado (simulation_update no corre en
+// pausa) así que el resultado es idéntico frame a frame, pero cachear
+// traería complejidad de invalidación (resize de ventana, etc.) sin
+// beneficio real: redirigir el render normal a una textura + 2 blur passes
+// no es más caro que ya lo que se dibuja hoy en pantalla.
+Pause_Blur :: struct {
+	shader:        raylib.Shader,
+	loc_texel:     i32,
+	loc_direction: i32,
+	capture_tex:   raylib.RenderTexture2D,
+	blur_tex:      raylib.RenderTexture2D,
+	tex_w:         i32,
+	tex_h:         i32,
+}
+
+pause_blur: Pause_Blur
+
+pause_blur_init :: proc() {
+	s := raylib.LoadShader(nil, "assets/blur.glsl")
+	pause_blur.shader        = s
+	pause_blur.loc_texel     = raylib.GetShaderLocation(s, "texelSize")
+	pause_blur.loc_direction = raylib.GetShaderLocation(s, "direction")
+	pause_blur_resize()
+}
+
+pause_blur_resize :: proc() {
+	w := raylib.GetRenderWidth()
+	h := raylib.GetRenderHeight()
+	if pause_blur.tex_w == w && pause_blur.tex_h == h { return }
+	if pause_blur.tex_w > 0 {
+		raylib.UnloadRenderTexture(pause_blur.capture_tex)
+		raylib.UnloadRenderTexture(pause_blur.blur_tex)
+	}
+	pause_blur.capture_tex = raylib.LoadRenderTexture(w, h)
+	pause_blur.blur_tex    = raylib.LoadRenderTexture(w, h)
+	pause_blur.tex_w       = w
+	pause_blur.tex_h       = h
+}
+
+pause_blur_unload :: proc() {
+	raylib.UnloadShader(pause_blur.shader)
+	if pause_blur.tex_w > 0 {
+		raylib.UnloadRenderTexture(pause_blur.capture_tex)
+		raylib.UnloadRenderTexture(pause_blur.blur_tex)
+	}
+}
+
+// Aplica el blur de 2 pasadas (horizontal → blur_tex, vertical → target
+// activo, que en el caso de uso real es la pantalla) sobre capture_tex, y
+// encima un tinte oscuro semitransparente ("vidrio esmerilado").
+// Debe llamarse FUERA de cualquier BeginTextureMode activo (la pasada 2
+// dibuja directo al render target que esté activo en ese momento).
+pause_blur_draw :: proc() {
+	texel_size := [2]f32{
+		constants.PAUSE_BLUR_SPREAD / f32(pause_blur.tex_w),
+		constants.PAUSE_BLUR_SPREAD / f32(pause_blur.tex_h),
+	}
+	raylib.SetShaderValue(pause_blur.shader, pause_blur.loc_texel, &texel_size, .VEC2)
+
+	src := raylib.Rectangle{0, f32(pause_blur.tex_h), f32(pause_blur.tex_w), -f32(pause_blur.tex_h)}
+
+	// Pasada 1: horizontal, capture_tex → blur_tex
+	dir_h := [2]f32{1, 0}
+	raylib.SetShaderValue(pause_blur.shader, pause_blur.loc_direction, &dir_h, .VEC2)
+	raylib.BeginTextureMode(pause_blur.blur_tex)
+	raylib.BeginShaderMode(pause_blur.shader)
+	raylib.DrawTextureRec(pause_blur.capture_tex.texture, src, {0, 0}, raylib.WHITE)
+	raylib.EndShaderMode()
+	raylib.EndTextureMode()
+
+	// Pasada 2: vertical, blur_tex → target activo (pantalla)
+	dir_v := [2]f32{0, 1}
+	raylib.SetShaderValue(pause_blur.shader, pause_blur.loc_direction, &dir_v, .VEC2)
+	raylib.BeginShaderMode(pause_blur.shader)
+	raylib.DrawTextureRec(pause_blur.blur_tex.texture, src, {0, 0}, raylib.WHITE)
+	raylib.EndShaderMode()
+
+	// Tinte de vidrio — oscurece/opaca un poco encima del blur
+	raylib.DrawRectangle(0, 0, pause_blur.tex_w, pause_blur.tex_h, constants.PAUSE_GLASS_TINT)
+}
+
 // ── Path blur+threshold shader (misma técnica que el agua, Fase 1) ──────────
 
 Path_Shader :: struct {
@@ -356,14 +443,56 @@ render_game :: proc(app: ^entities.App_State) {
 		(app.state == .MENU ||
 		app.state == .RUN_COMPLETE ||
 		app.state == .CAMPAIGN_MAP ||
-		app.state == .PROGRESSION) {
+		app.state == .PROGRESSION ||
+		app.state == .LIBRARY) {
 			nebula_draw()
+	}
+
+	// Screen shake: desplaza la cámara solo durante el render del mundo (mapa,
+	// enemigos, torres, pájaros) — se restaura antes de la UI para que paneles/
+	// botones/tooltips nunca tiemblen. Offset determinístico (seno/coseno en el
+	// tiempo) en vez de random puro por frame, para que se vea suave y no "buzz".
+	saved_cam_x := app.camera_offset_x
+	saved_cam_y := app.camera_offset_y
+	if app.screen_shake_trauma > 0 {
+		t   := f32(raylib.GetTime())
+		amt := app.screen_shake_trauma * app.screen_shake_trauma * constants.SCREEN_SHAKE_MAX_OFFSET_PX
+		app.camera_offset_x += i32(math.sin(t * 37.0) * amt)
+		app.camera_offset_y += i32(math.cos(t * 43.0) * amt)
+	}
+
+	// Pausa: el mundo se redirige a una textura en vez de dibujarse directo a
+	// pantalla, para poder pasarlo por el blur de 2 pasadas + tinte ("vidrio
+	// esmerilado") antes de que se vea. Ver Pause_Blur más arriba.
+	//
+	// Trampa: water_render_mask/path_render_mask hacen su propio
+	// BeginTextureMode interno, y en raylib EndTextureMode() siempre vuelve
+	// al framebuffer por defecto (no soporta anidar) — si corrieran DENTRO
+	// de nuestro BeginTextureMode(capture_tex), todo lo dibujado después se
+	// iría directo a pantalla en vez de a la textura. Por eso se precomputan
+	// ACÁ, afuera, y se le pasa for_preview=true a render_map para que
+	// render_water_layer/render_path_layer solo apliquen la máscara ya
+	// calculada (mismo mecanismo que ya usa render_map_preview_to_texture).
+	// Efecto colateral aceptado: for_preview=true también saltea el overlay
+	// de pasto (grass) — igual queda tapado por el blur+tinte después.
+	is_paused_glass := app.state == .PAUSED
+	if is_paused_glass {
+		pause_blur_resize()
+		cs := f32(app.settings.cell_size) * app.zoom
+		m  := &app.editor.game_map
+		water_shader_resize()
+		path_shader_resize()
+		water_render_mask(m, cs, app.camera_offset_x, app.camera_offset_y)
+		path_render_mask(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y)
+
+		raylib.BeginTextureMode(pause_blur.capture_tex)
+		raylib.ClearBackground(raylib.BLACK)
 	}
 
 	// Map and gameplay are only visible while actually playing or editing.
 	// In menu/overlay states the nebula is the sole background.
 	if app.state == .PLAYING || app.state == .PAUSED || app.state == .EDITOR {
-		render_map(app, &app.editor.game_map)
+		render_map(app, &app.editor.game_map, is_paused_glass)
 		render_tower_ranges(app)
 		render_map_objects(app, &app.editor.game_map)
 		render_gameplay(app)
@@ -375,6 +504,18 @@ render_game :: proc(app: ^entities.App_State) {
 		render_bird_flock(app)
 		// cloud_shader_draw(app)  // desactivado
 	}
+
+	if is_paused_glass {
+		raylib.EndTextureMode()
+	}
+
+	app.camera_offset_x = saved_cam_x
+	app.camera_offset_y = saved_cam_y
+
+	if is_paused_glass {
+		pause_blur_draw()
+	}
+
 	render_ui(app)
 	render_tooltip_layer(app) // Siempre antes de la consola
 	render_console(app)       // La consola va encima de absolutamente todo
@@ -1527,6 +1668,9 @@ render_gameplay :: proc(app: ^entities.App_State) {
 	// Render explosions
 	render_explosions(app, cs)
 
+	// Render hit particles
+	render_hit_particles(app, cs)
+
 	// Render damage numbers
 	if app.settings.show_damage_numbers {
 		render_damage_numbers(app, cs)
@@ -1563,7 +1707,9 @@ enemy_subtype_label :: proc(f: entities.Enemy_Flag) -> string {
 	return constants.get_text("ENEMY_TYPE_NORMAL")
 }
 
-render_enemy_shape :: proc(cx, cy, size: f32, color: raylib.Color, is_flying: bool, is_boss: bool = false, shadow_offset: f32 = 0, is_armored: bool = false) {
+// squash: fracción de deformación anisotrópica al recibir un golpe (0 = sin
+// deformar). Ensancha en X y achica en Y — igual en las 3 formas de base.
+render_enemy_shape :: proc(cx, cy, size: f32, color: raylib.Color, is_flying: bool, is_boss: bool = false, shadow_offset: f32 = 0, is_armored: bool = false, squash: f32 = 0) {
 	border_color := raylib.Color{
 		u8(f32(color.r) * 0.6),
 		u8(f32(color.g) * 0.6),
@@ -1573,41 +1719,44 @@ render_enemy_shape :: proc(cx, cy, size: f32, color: raylib.Color, is_flying: bo
 	shadow_color := constants.COLOR_ENEMY_SHADOW
 	sw := f32(constants.ENEMY_BORDER_THICKNESS)
 
+	size_x := size * (1 + squash)
+	size_y := size * (1 - squash)
+
 	if is_boss {
 		// Square — border rect then inner rect
 		if shadow_offset > 0 {
 			raylib.DrawRectangle(
-				i32(cx - size + shadow_offset), i32(cy - size + shadow_offset),
-				i32(size * 2), i32(size * 2),
+				i32(cx - size_x + shadow_offset), i32(cy - size_y + shadow_offset),
+				i32(size_x * 2), i32(size_y * 2),
 				shadow_color,
 			)
 		}
-		raylib.DrawRectangle(i32(cx - size), i32(cy - size), i32(size * 2), i32(size * 2), border_color)
+		raylib.DrawRectangle(i32(cx - size_x), i32(cy - size_y), i32(size_x * 2), i32(size_y * 2), border_color)
 		raylib.DrawRectangle(
-			i32(cx - size + sw), i32(cy - size + sw),
-			i32(size * 2 - sw * 2), i32(size * 2 - sw * 2),
+			i32(cx - size_x + sw), i32(cy - size_y + sw),
+			i32(size_x * 2 - sw * 2), i32(size_y * 2 - sw * 2),
 			color,
 		)
 	} else if is_flying {
 		if shadow_offset > 0 {
-			v1s := raylib.Vector2{cx + shadow_offset, cy - size - 2 + shadow_offset}
-			v2s := raylib.Vector2{cx - size - 2 + shadow_offset, cy + size + 2 + shadow_offset}
-			v3s := raylib.Vector2{cx + size + 2 + shadow_offset, cy + size + 2 + shadow_offset}
+			v1s := raylib.Vector2{cx + shadow_offset, cy - size_y - 2 + shadow_offset}
+			v2s := raylib.Vector2{cx - size_x - 2 + shadow_offset, cy + size_y + 2 + shadow_offset}
+			v3s := raylib.Vector2{cx + size_x + 2 + shadow_offset, cy + size_y + 2 + shadow_offset}
 			raylib.DrawTriangle(v1s, v2s, v3s, shadow_color)
 		}
-		v1 := raylib.Vector2{cx, cy - size}
-		v2 := raylib.Vector2{cx - size, cy + size}
-		v3 := raylib.Vector2{cx + size, cy + size}
+		v1 := raylib.Vector2{cx, cy - size_y}
+		v2 := raylib.Vector2{cx - size_x, cy + size_y}
+		v3 := raylib.Vector2{cx + size_x, cy + size_y}
 		raylib.DrawTriangle(v1, v2, v3, color)
 		raylib.DrawLineEx(v1, v2, sw, border_color)
 		raylib.DrawLineEx(v2, v3, sw, border_color)
 		raylib.DrawLineEx(v3, v1, sw, border_color)
 	} else {
 		if shadow_offset > 0 {
-			raylib.DrawCircle(i32(cx + shadow_offset), i32(cy + shadow_offset), size, shadow_color)
+			raylib.DrawEllipse(i32(cx + shadow_offset), i32(cy + shadow_offset), size_x, size_y, shadow_color)
 		}
-		raylib.DrawCircle(i32(cx), i32(cy), size, border_color)
-		raylib.DrawCircle(i32(cx), i32(cy), size - sw, color)
+		raylib.DrawEllipse(i32(cx), i32(cy), size_x, size_y, border_color)
+		raylib.DrawEllipse(i32(cx), i32(cy), size_x - sw, size_y - sw, color)
 	}
 
 	// Plating ring — decorador aditivo (funciona sobre cualquier forma de base:
@@ -1632,7 +1781,8 @@ render_enemies :: proc(app: ^entities.App_State, cs: f32) {
 		cx    := x + cs / 2
 		cy    := y + cs / 2
 
-		render_enemy_shape(cx, cy, size, color, .FLYING in enemy.flags, .BOSS in enemy.flags, so, .ARMORED in enemy.flags)
+		squash := enemy.hit_squash * constants.ENEMY_HIT_SQUASH_AMOUNT
+		render_enemy_shape(cx, cy, size, color, .FLYING in enemy.flags, .BOSS in enemy.flags, so, .ARMORED in enemy.flags, squash)
 
 		// Slow overlay: translucent blue halo when slowed by ice tower
 		if enemy.slow_timer > 0 {
@@ -1844,6 +1994,20 @@ render_explosions :: proc(app: ^entities.App_State, cs: f32) {
 	}
 }
 
+// Render hit particles (chispas de impacto/muerte)
+render_hit_particles :: proc(app: ^entities.App_State, cs: f32) {
+	for &p in app.sim.hit_particles {
+		x := p.x * cs + f32(app.camera_offset_x)
+		y := p.y * cs + f32(app.camera_offset_y)
+
+		alpha := u8(255 * (p.life / p.max_life))
+		color := p.color
+		color.a = alpha
+
+		raylib.DrawCircle(i32(x), i32(y), p.radius * cs, color)
+	}
+}
+
 // Draw text with outline (stroke around the text)
 draw_text_with_outline :: proc(
 	text: cstring,
@@ -1907,6 +2071,7 @@ draw_tower_tile :: proc(
 	tower_type: constants.Tower_Type,
 	angle: f32 = 0,
 	is_ghost: bool = false,
+	recoil: f32 = 0,
 ) {
 	cx := x + cs / 2
 	cy := y + cs / 2
@@ -1988,17 +2153,29 @@ draw_tower_tile :: proc(
 	// Rotate for barrel orientation (pointing up by default like JS: angle + PI/2)
 	rotation := angle + math.PI / 2
 
+	// Recoil: retrae el barril un poco en la dirección opuesta al disparo.
+	// El MORTAR ignora `angle` y dispara siempre hacia arriba, así que su
+	// recoil va derecho hacia abajo en vez de usar cos/sin(angle).
+	recoil_dist := recoil * cs * constants.TOWER_RECOIL_DISTANCE_RATIO
+	rcx, rcy := cx, cy
+	if tower_type == .MORTAR {
+		rcy = cy + recoil_dist
+	} else {
+		rcx = cx - math.cos(angle) * recoil_dist
+		rcy = cy - math.sin(angle) * recoil_dist
+	}
+
 	// Draw tower components with shadows immediately after each component
 	switch tower_type {
-	case .LASER:   draw_tower_components_laser(cx, cy, cs, rotation, so, r)
-	case .CANNON:  draw_tower_components_cannon(cx, cy, cs, rotation, so, r, stroke)
-	case .SNIPER:  draw_tower_components_sniper(cx, cy, cs, rotation, so, r, stroke)
-	case .MISSILE: draw_tower_components_missile(cx, cy, rotation, so, r)
-	case .ARCHER:  draw_tower_components_archer(cx, cy, cs, rotation, so)
+	case .LASER:   draw_tower_components_laser(rcx, rcy, cs, rotation, so, r)
+	case .CANNON:  draw_tower_components_cannon(rcx, rcy, cs, rotation, so, r, stroke)
+	case .SNIPER:  draw_tower_components_sniper(rcx, rcy, cs, rotation, so, r, stroke)
+	case .MISSILE: draw_tower_components_missile(rcx, rcy, rotation, so, r)
+	case .ARCHER:  draw_tower_components_archer(rcx, rcy, cs, rotation, so, recoil)
 	case .ICE:     draw_tower_components_ice(cx, cy, cs, so, r)
 	case .ENHANCE: draw_tower_components_enhance(cx, cy, cs, so, r)
 	case .TESLA:   draw_tower_components_tesla(cx, cy, cs, so, r)
-	case .MORTAR:  draw_tower_components_mortar(cx, cy, cs, so)
+	case .MORTAR:  draw_tower_components_mortar(rcx, rcy, cs, so)
 	}
 }
 
@@ -2163,30 +2340,88 @@ draw_tower_components_missile :: proc(cx, cy, rotation, so, r: f32) {
 	)
 }
 
-draw_tower_components_archer :: proc(cx, cy, cs, rotation, so: f32) {
-	// Crossbow-style barrel - rotated using DrawRectanglePro with pivot at tower center
-	barrel_w := cs * 0.12
-	barrel_h := cs * 0.4
-
-	// Barrel shadow - positioned at tower center + offset, origin at bottom center
-	barrel_rect := raylib.Rectangle {
-		x      = f32(cx + so),
-		y      = f32(cy + so),
-		width  = f32(barrel_w),
-		height = f32(barrel_h),
+// Arco recurvo: dos brazos (spline cuadrático Bezier, control hacia adelante
+// para el "bulge" característico del recurvo) unidos por una empuñadura
+// central, más la cuerda entre las puntas. `recoil` (0..1, ver tower.recoil)
+// tensa la cuerda hacia atrás — nocked/drawn look justo después de disparar.
+// Coordenadas locales: adelante (hacia el objetivo) = -Y, igual convención
+// que el resto de los barriles ("apunta hacia arriba antes de rotar");
+// `rotation` ya viene como radianes (angle + PI/2, ver draw_tower_tile).
+// Ballesta: riel recto (el "palito" original, DrawRectanglePro) + un arco
+// perpendicular montado en la punta del riel, dibujado con
+// DrawSplineSegmentBezierQuadratic (grip → control que bulge hacia adelante
+// → punta). El arco no retrocede (eso ya lo hace el offset de recoil sobre
+// cx,cy que aplica draw_tower_tile a todo el conjunto) — en cambio se
+// "aplana": stretch anisotrópico centrado en el punto de montaje, ensancha
+// en X (tips_w) y achica la profundidad en Y (bulge) a medida que crece el
+// recoil, simulando el arco liberando tensión al disparar. Vuelve a su
+// curva de descanso a medida que decae.
+draw_tower_components_archer :: proc(cx, cy, cs, rotation, so: f32, recoil: f32 = 0) {
+	rot_pt :: proc(cx, cy, lx, ly, rotation: f32) -> raylib.Vector2 {
+		c, s := math.cos(rotation), math.sin(rotation)
+		return {cx + lx * c - ly * s, cy + lx * s + ly * c}
 	}
-	origin := raylib.Vector2{f32(barrel_w / 2), f32(barrel_h)} // Pivot at bottom of barrel (tower center)
-	archer_rotation := rotation * 180.0 / math.PI
-	raylib.DrawRectanglePro(barrel_rect, origin, archer_rotation, constants.TOWER_SHADOW)
 
-	// Barrel (main body) - positioned at tower center, origin at bottom center
-	barrel_rect = raylib.Rectangle {
-		x      = f32(cx),
-		y      = f32(cy),
-		width  = f32(barrel_w),
-		height = f32(barrel_h),
+	// Riel (palito) — mismo rect que la versión original, pivot en el centro
+	// de la torre, apunta hacia adelante (-Y local antes de rotar).
+	rail_w := cs * 0.12
+	rail_h := cs * 0.42
+	rail_rect := raylib.Rectangle{x = cx + so, y = cy + so, width = rail_w, height = rail_h}
+	rail_origin := raylib.Vector2{rail_w / 2, rail_h}
+	rail_rotation_deg := rotation * 180.0 / math.PI
+	raylib.DrawRectanglePro(rail_rect, rail_origin, rail_rotation_deg, constants.TOWER_SHADOW)
+	rail_rect.x, rail_rect.y = cx, cy
+	raylib.DrawRectanglePro(rail_rect, rail_origin, rail_rotation_deg, constants.TOWER_ARCHER_WOOD)
+
+	// Arco montado cerca de la punta del riel. Stretch: ensancha en X,
+	// aplana la profundidad del bulge en Y — todo relativo al mount point.
+	mount        := raylib.Vector2{0, -cs * 0.30}
+	stretch      := recoil * constants.TOWER_ARCHER_BOW_STRETCH
+	sx           := 1 + stretch
+	sy           := 1 - stretch
+	tip_w        := cs * 0.26 * sx
+	tip_forward  := cs * 0.04 * sy
+	bulge_w      := cs * 0.16 * sx
+	bulge_depth  := cs * 0.14 * sy
+
+	tip_l   := raylib.Vector2{mount.x - tip_w, mount.y + tip_forward}
+	tip_r   := raylib.Vector2{mount.x + tip_w, mount.y + tip_forward}
+	bulge_l := raylib.Vector2{mount.x - bulge_w, mount.y - bulge_depth}
+	bulge_r := raylib.Vector2{mount.x + bulge_w, mount.y - bulge_depth}
+
+	limb_thick := max(1.5, cs * 0.045)
+	string_thick := max(1.0, cs * 0.02)
+
+	draw_limbs :: proc(cx, cy, rotation, thick: f32, mount, tip_l, tip_r, bulge_l, bulge_r: raylib.Vector2, color: raylib.Color, rot_pt: proc(f32, f32, f32, f32, f32) -> raylib.Vector2) {
+		raylib.DrawSplineSegmentBezierQuadratic(
+			rot_pt(cx, cy, mount.x, mount.y, rotation),
+			rot_pt(cx, cy, bulge_l.x, bulge_l.y, rotation),
+			rot_pt(cx, cy, tip_l.x, tip_l.y, rotation),
+			thick, color,
+		)
+		raylib.DrawSplineSegmentBezierQuadratic(
+			rot_pt(cx, cy, mount.x, mount.y, rotation),
+			rot_pt(cx, cy, bulge_r.x, bulge_r.y, rotation),
+			rot_pt(cx, cy, tip_r.x, tip_r.y, rotation),
+			thick, color,
+		)
 	}
-	raylib.DrawRectanglePro(barrel_rect, origin, archer_rotation, constants.TOWER_ARCHER_WOOD)
+
+	// Sombra
+	draw_limbs(cx + so, cy + so, rotation, limb_thick, mount, tip_l, tip_r, bulge_l, bulge_r, constants.TOWER_SHADOW, rot_pt)
+
+	// Brazos del arco
+	draw_limbs(cx, cy, rotation, limb_thick, mount, tip_l, tip_r, bulge_l, bulge_r, constants.TOWER_ARCHER_WOOD, rot_pt)
+
+	// Cuerda — punta a punta, pasando por el mount point.
+	// Color opaco propio: TOWER_SHADOW es casi transparente (alpha=30), pensado
+	// para sombras, no serviría para una cuerda que tiene que verse tensa.
+	string_color :: raylib.Color{230, 225, 210, 255}
+	tip_l_w   := rot_pt(cx, cy, tip_l.x, tip_l.y, rotation)
+	tip_r_w   := rot_pt(cx, cy, tip_r.x, tip_r.y, rotation)
+	mount_w   := rot_pt(cx, cy, mount.x, mount.y, rotation)
+	raylib.DrawLineEx(tip_l_w, mount_w, string_thick, string_color)
+	raylib.DrawLineEx(mount_w, tip_r_w, string_thick, string_color)
 }
 
 draw_tower_components_ice :: proc(cx, cy, cs, so, r: f32) {
@@ -2291,7 +2526,7 @@ draw_tower_components_mortar :: proc(cx, cy, cs, so: f32) {
 
 // Render tower for simulation (calls unified function with rotation)
 render_tower :: proc(tower: ^entities.Tower, x, y, cs: f32) {
-	draw_tower_tile(x, y, cs, tower.type, tower.angle, false)
+	draw_tower_tile(x, y, cs, tower.type, tower.angle, false, tower.recoil)
 }
 
 // Render reticle for selected cell (corner brackets style like JS)

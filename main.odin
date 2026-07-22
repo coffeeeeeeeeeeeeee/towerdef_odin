@@ -92,6 +92,10 @@ main :: proc() {
 	systems.path_shader_init()
 	defer systems.path_shader_unload()
 
+	// Load pause screen "glass" blur shader
+	systems.pause_blur_init()
+	defer systems.pause_blur_unload()
+
 	// Load cloud layer shader
 	systems.cloud_shader_init()
 	defer systems.cloud_shader_unload()
@@ -146,6 +150,7 @@ main :: proc() {
 
 			systems.water_shader_resize()
 			systems.path_shader_resize()
+			systems.pause_blur_resize()
 		}
 
 		// Handle window maximization state changes

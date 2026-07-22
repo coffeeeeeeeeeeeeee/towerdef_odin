@@ -15,6 +15,10 @@ NEBULA_BACKGROUND_ENABLED :: false
 
 import "vendor:raylib"
 
+// Vidrio esmerilado de la pantalla de Pausa (ver Pause_Blur, systems/rendering.odin).
+PAUSE_BLUR_SPREAD :: f32(3.0)  // multiplica el texel step — separa las muestras para que el blur se note
+PAUSE_GLASS_TINT  :: raylib.Color{20, 24, 34, 130}  // tinte oscuro-azulado semitransparente sobre el blur
+
 // =============================================================================
 // Enums
 // =============================================================================
@@ -737,6 +741,31 @@ TOWER_RANGE_PREVIEW :: raylib.Color{255, 255, 255,  30}  // Range fill (very fai
 TOWER_RANGE_OUTLINE :: raylib.Color{255, 255, 255,  60}  // Range outline for the all-towers overlay setting
 
 TOWER_AOE_CIRCLE_SEGMENTS :: 64  // Segments used to draw the AoE preview circle outline (smoother than raylib's default)
+
+TOWER_RECOIL_DISTANCE_RATIO :: f32(0.14)  // Max barrel kickback on fire, as a fraction of cs
+TOWER_RECOIL_DECAY_PER_SEC  :: f32(6.0)   // Linear decay rate of tower.recoil back to 0
+TOWER_ARCHER_BOW_STRETCH    :: f32(0.45)  // Max anisotropic squash of the crossbow's bow on fire (0 = no stretch)
+
+// =============================================================================
+// Visual juice — partículas de impacto, screen shake, squash de enemigos
+// =============================================================================
+
+HIT_PARTICLE_LIFETIME     :: f32(0.25)  // Segundos que vive una chispa de impacto
+HIT_PARTICLE_DRAG         :: f32(6.0)   // Deceleración exponencial por segundo
+HIT_PARTICLE_RADIUS       :: f32(0.035) // Radio de la chispa, en unidades de grilla
+HIT_PARTICLE_SPEED_MIN    :: f32(1.0)   // Velocidad inicial mínima, unidades de grilla/seg
+HIT_PARTICLE_SPEED_MAX    :: f32(2.5)
+HIT_PARTICLE_COUNT_HIT    :: 2   // Chispas por instancia de daño
+HIT_PARTICLE_COUNT_DEATH  :: 9   // Chispas al morir un enemigo (ráfaga más grande)
+
+SCREEN_SHAKE_DECAY_PER_SEC   :: f32(2.2)   // Decaimiento lineal del trauma [0,1] por segundo
+SCREEN_SHAKE_MAX_OFFSET_PX   :: f32(14.0)  // Desplazamiento máximo de cámara en pixeles (trauma=1)
+SCREEN_SHAKE_BOSS_DEATH      :: f32(0.7)   // Trauma agregado al morir un boss
+SCREEN_SHAKE_EXPLOSION_BASE  :: f32(0.12)  // Trauma base por explosión AoE
+SCREEN_SHAKE_EXPLOSION_PER_R :: f32(0.06)  // Trauma extra por unidad de radio de la explosión
+
+ENEMY_HIT_SQUASH_DECAY_PER_SEC :: f32(9.0)  // Decaimiento lineal de enemy.hit_squash a 0
+ENEMY_HIT_SQUASH_AMOUNT         :: f32(0.35) // Deformación máxima (fracción) al impactar de lleno
 
 // =============================================================================
 // Tower colors

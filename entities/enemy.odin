@@ -44,6 +44,9 @@ Enemy :: struct {
 	last_attacker_r: i32,
 	last_attacker_c: i32,
 
+	// Hit reaction: 1.0 al recibir daño (ver calc_damage en simulation.odin),
+	// decae a 0 — usado en render_enemy_shape para un pulso de "squash" visual.
+	hit_squash: f32,
 }
 
 // Path node for enemy movement

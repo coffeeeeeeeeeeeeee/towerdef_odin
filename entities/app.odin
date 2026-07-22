@@ -56,6 +56,7 @@ Simulation :: struct {
 	projectiles: [dynamic]Projectile,
 	explosions: [dynamic]Explosion,
 	damage_numbers: [dynamic]Damage_Number,
+	hit_particles: [dynamic]Hit_Particle,
 	laser_beams: [dynamic]Laser_Beam,
 	ice_pulses:  [dynamic]Ice_Pulse,
 
@@ -282,6 +283,11 @@ App_State :: struct {
 	target_camera_offset_y: i32,  // For smooth zoom interpolation
 	zoom: f32,
 	target_zoom: f32,  // For smooth zoom interpolation
+
+	// Screen shake — "trauma" en [0,1], decae con el tiempo. El offset visual
+	// se calcula en render_game a partir de esto y se aplica solo por el
+	// tiempo del frame (no persiste en camera_offset_x/y).
+	screen_shake_trauma: f32,
 	
 	// Input state
 	mouse_x: i32,

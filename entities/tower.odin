@@ -34,6 +34,9 @@ Tower :: struct {
 	// Visual
 	angle: f32,
 	turn_speed: f32,
+	// Recoil: 1.0 al disparar (proyectiles/mortero), decae a 0 — retrae el
+	// barril un poco en render_tower (ver constants.TOWER_RECOIL_*).
+	recoil: f32,
 
 	// Upgrade level (empieza en 1, se incrementa con cada upgrade)
 	level: i32,

@@ -88,6 +88,41 @@ damage_number_update :: proc(dn: ^Damage_Number, dt: f32) -> bool {
 	return dn.life <= 0
 }
 
+// Hit particle — small spark that flies outward from an impact/death point
+// and decelerates to a stop while fading out. Grid-unit coordinates/speeds,
+// same convention as the rest of the entities in this file.
+Hit_Particle :: struct {
+	x, y:   f32,
+	vx, vy: f32,
+	life:     f32,
+	max_life: f32,
+	color:    raylib.Color,
+	radius:   f32,
+}
+
+hit_particle_init :: proc(x, y, angle, speed, radius: f32, color: raylib.Color) -> Hit_Particle {
+	return Hit_Particle{
+		x = x, y = y,
+		vx = math.cos(angle) * speed,
+		vy = math.sin(angle) * speed,
+		life     = constants.HIT_PARTICLE_LIFETIME,
+		max_life = constants.HIT_PARTICLE_LIFETIME,
+		color    = color,
+		radius   = radius,
+	}
+}
+
+// Advances position (with drag) and lifetime. Returns true when expired.
+hit_particle_update :: proc(p: ^Hit_Particle, dt: f32) -> bool {
+	p.x += p.vx * dt
+	p.y += p.vy * dt
+	drag := 1.0 - min(1.0, constants.HIT_PARTICLE_DRAG * dt)
+	p.vx *= drag
+	p.vy *= drag
+	p.life -= dt
+	return p.life <= 0
+}
+
 // Ice pulse — expanding ring emitted when the ice tower pulses
 Ice_Pulse :: struct {
 	// Center in grid units (tower center)
