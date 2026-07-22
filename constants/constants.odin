@@ -9,6 +9,10 @@ DEVELOPER :: true
 // Nombre del juego. Es un nombre propio — no se traduce.
 GAME_NAME :: "First Impact"
 
+// Fondo animado (nebula.glsl) de menú/overlays — desactivado por ahora.
+// Reactivar cambiando esto a true.
+NEBULA_BACKGROUND_ENABLED :: false
+
 import "vendor:raylib"
 
 // =============================================================================

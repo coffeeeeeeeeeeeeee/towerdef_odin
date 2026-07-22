@@ -352,10 +352,11 @@ render_game :: proc(app: ^entities.App_State) {
 	ui_blocks_clear()
 	raylib.ClearBackground(raylib.BLACK)		
 
-	if app.state == .MENU ||
+	if constants.NEBULA_BACKGROUND_ENABLED &&
+		(app.state == .MENU ||
 		app.state == .RUN_COMPLETE ||
 		app.state == .CAMPAIGN_MAP ||
-		app.state == .PROGRESSION {
+		app.state == .PROGRESSION) {
 			nebula_draw()
 	}
 
