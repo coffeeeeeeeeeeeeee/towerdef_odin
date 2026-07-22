@@ -509,10 +509,10 @@ Heightmap_Style :: struct {
 // Por bioma. Calibrado para "más contraste" — MOUNTAIN claramente relievado,
 // PLAIN apenas visible pero presente. Líneas de contorno: 1 pixel de grosor.
 BIOME_HEIGHTMAP_STYLES := [Biome]Heightmap_Style {
-	.PLAIN    = {contrast_mult = 1.6, alpha_max = 0.14, contour_steps = 5.0, contour_strength = 0.090, contour_width = 1.0},
-	.FOREST   = {contrast_mult = 2.0, alpha_max = 0.28, contour_steps = 7.0, contour_strength = 0.160, contour_width = 1.0},
-	.DESERT   = {contrast_mult = 1.9, alpha_max = 0.24, contour_steps = 6.0, contour_strength = 0.140, contour_width = 1.0},
-	.MOUNTAIN = {contrast_mult = 2.8, alpha_max = 0.50, contour_steps = 9.0, contour_strength = 0.275, contour_width = 1.0},
+	.PLAIN    = {contrast_mult = 1.6, alpha_max = 0.14, contour_steps =  8.0, contour_strength = 0.090, contour_width = 1.0},
+	.FOREST   = {contrast_mult = 2.0, alpha_max = 0.28, contour_steps = 11.0, contour_strength = 0.160, contour_width = 1.0},
+	.DESERT   = {contrast_mult = 1.9, alpha_max = 0.24, contour_steps = 10.0, contour_strength = 0.140, contour_width = 1.0},
+	.MOUNTAIN = {contrast_mult = 2.8, alpha_max = 0.50, contour_steps = 14.0, contour_strength = 0.275, contour_width = 1.0},
 }
 
 // Grass overlay — textura procedural de hierba (Plain y Forest).
