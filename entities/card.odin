@@ -201,7 +201,7 @@ RELIC_SPECS := []Relic_Spec{
 	},
 	{
 		kind         = .LOOT,
-		rarity       = .UNCOMMON,
+		rarity       = .UNIQUE,
 		name_key     = "CARD_LOOT_NAME",
 		desc_key     = "TOOLTIP_LOOT_DESC",
 		icon_path    = "images/relics/loot.png",
@@ -356,7 +356,7 @@ RELIC_SPECS := []Relic_Spec{
 	},
 	{
 		kind         = .CRANE_KICK,
-		rarity       = .RARE,
+		rarity       = .UNIQUE,
 		name_key     = "CARD_CRANE_KICK_NAME",
 		desc_key     = "TOOLTIP_CRANE_KICK_DESC",
 		icon_path    = "images/relics/karate_kid.png",
