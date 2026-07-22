@@ -354,7 +354,7 @@ save_settings :: proc(settings: entities.Settings) {
 		settings = settings,
 	}
 	data := mem.ptr_to_bytes(&file)
-	os.write_entire_file(SETTINGS_BIN_PATH, data)
+	_ = os.write_entire_file(SETTINGS_BIN_PATH, data)
 }
 
 // Carga settings con fallback chain: bin → json → defaults.
@@ -379,7 +379,7 @@ load_settings :: proc() -> entities.Settings {
 	}
 
 	// 1. Try binary
-	if data, ok := os.read_entire_file_from_filename(SETTINGS_BIN_PATH); ok {
+	if data, read_err := os.read_entire_file_from_path(SETTINGS_BIN_PATH, context.allocator); read_err == nil {
 		defer delete(data)
 		if len(data) == size_of(Settings_File) {
 			file := (cast(^Settings_File)raw_data(data))^
@@ -396,7 +396,7 @@ load_settings :: proc() -> entities.Settings {
 
 	// 2. Fall back to JSON for migration
 	settings := defaults
-	if data, ok := os.read_entire_file_from_filename(SETTINGS_JSON_PATH); ok {
+	if data, read_err := os.read_entire_file_from_path(SETTINGS_JSON_PATH, context.allocator); read_err == nil {
 		defer delete(data)
 		if json.unmarshal(data, &settings) == nil {
 			fmt.println("[load_settings] migrado desde settings.json — se guardará como .bin en el próximo save")

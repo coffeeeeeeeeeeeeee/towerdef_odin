@@ -1220,7 +1220,7 @@ draw_obstacle_preview :: proc(x, y, cs: f32, m: ^entities.Map = nil, row: i32 = 
 	shadow := raylib.Rectangle{bar_x + constants.OBSTACLE_BARRIER_SHADOW_OFFSET, bar_y + constants.OBSTACLE_BARRIER_SHADOW_OFFSET, bar_w, bar_h}
 	raylib.DrawRectangleRounded(shadow, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.COLOR_OBSTACLE_SHADOW)
 	raylib.DrawRectangleRounded(rect,   constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.COLOR_OBSTACLE_FILL)
-	raylib.DrawRectangleRoundedLines(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.OBSTACLE_BARRIER_BORDER_THICK, constants.COLOR_OBSTACLE_BORDER)
+	raylib.DrawRectangleRoundedLinesEx(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.OBSTACLE_BARRIER_BORDER_THICK, constants.COLOR_OBSTACLE_BORDER)
 }
 
 // Preview de obstáculo inválido (esquina/unión): tinte rojo semitransparente
@@ -1236,7 +1236,7 @@ draw_obstacle_preview_invalid :: proc(x, y, cs: f32, m: ^entities.Map = nil, row
 	bar_y := y + cs/2 - bar_h/2
 	rect  := raylib.Rectangle{bar_x, bar_y, bar_w, bar_h}
 	raylib.DrawRectangleRounded(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, raylib.Color{220, 50, 50, 160})
-	raylib.DrawRectangleRoundedLines(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.OBSTACLE_BARRIER_BORDER_THICK, raylib.Color{255, 80, 80, 220})
+	raylib.DrawRectangleRoundedLinesEx(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.OBSTACLE_BARRIER_BORDER_THICK, raylib.Color{255, 80, 80, 220})
 	// Cruz para indicar que no es válido
 	cx := x + cs/2
 	cy := y + cs/2
@@ -1319,7 +1319,7 @@ render_obstacles :: proc(
 					}
 					raylib.DrawRectangleRounded(shadow, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.COLOR_OBSTACLE_SHADOW)
 					raylib.DrawRectangleRounded(rect,   constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.COLOR_OBSTACLE_FILL)
-					raylib.DrawRectangleRoundedLines(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.OBSTACLE_BARRIER_BORDER_THICK, constants.COLOR_OBSTACLE_BORDER)
+					raylib.DrawRectangleRoundedLinesEx(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.OBSTACLE_BARRIER_BORDER_THICK, constants.COLOR_OBSTACLE_BORDER)
 				}
 
 				level := entities.map_get_obstacle_level(m, row, col)
@@ -1823,7 +1823,7 @@ draw_tower_tile :: proc(
 	)
 
 	// Draw stroke
-	raylib.DrawRectangleRoundedLines(
+	raylib.DrawRectangleRoundedLinesEx(
 		raylib.Rectangle{f32(bx), f32(by), f32(base_w), f32(base_h)},
 		constants.TOWER_ROUNDED_CORNER,
 		constants.TOWER_CORNER_SEGMENTS,

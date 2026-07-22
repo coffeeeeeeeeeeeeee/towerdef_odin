@@ -66,7 +66,7 @@ Campaign_File :: struct {
 campaign_save :: proc(c: ^Campaign_File) -> bool {
 	c.version = CAMPAIGN_SAVE_VERSION
 	data := mem.ptr_to_bytes(c)
-	return os.write_entire_file(CAMPAIGN_SAVE_PATH, data)
+	return os.write_entire_file(CAMPAIGN_SAVE_PATH, data) == nil
 }
 
 // Devuelve el mtime del archivo de campaña como i64 (nanosegundos desde el
@@ -75,7 +75,7 @@ campaign_file_mtime :: proc() -> i64 {
 	fd, err := os.open(CAMPAIGN_SAVE_PATH)
 	if err != os.ERROR_NONE { return 0 }
 	defer os.close(fd)
-	fi, fstat_err := os.fstat(fd)
+	fi, fstat_err := os.fstat(fd, context.allocator)
 	if fstat_err != os.ERROR_NONE { return 0 }
 	defer delete(fi.fullpath)
 	return time.time_to_unix_nano(fi.modification_time)
@@ -86,8 +86,8 @@ campaign_file_mtime :: proc() -> i64 {
 // En cualquier error devuelve una Campaign_File vacía y ok=false.
 campaign_load :: proc() -> (Campaign_File, bool) {
 	c := Campaign_File{}
-	data, read_ok := os.read_entire_file_from_filename(CAMPAIGN_SAVE_PATH)
-	if !read_ok { return c, false }
+	data, read_err := os.read_entire_file_from_path(CAMPAIGN_SAVE_PATH, context.allocator)
+	if read_err != nil { return c, false }
 	defer delete(data)
 
 	if len(data) != size_of(Campaign_File) { return c, false }

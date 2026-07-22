@@ -170,7 +170,7 @@ meta_record_campaign_result :: proc(
 meta_save :: proc(meta: ^Meta_State) {
 	meta.version = META_SAVE_VERSION
 	data := mem.ptr_to_bytes(meta)
-	os.write_entire_file(meta_save_path(), data)
+	_ = os.write_entire_file(meta_save_path(), data)
 }
 
 // Load meta state desde el archivo de guardado de la plataforma.
@@ -182,8 +182,8 @@ meta_save :: proc(meta: ^Meta_State) {
 meta_load :: proc() -> Meta_State {
 	path := meta_save_path()
 	meta := Meta_State{}
-	data, ok := os.read_entire_file_from_filename(path)
-	if !ok { return meta }
+	data, read_err := os.read_entire_file_from_path(path, context.allocator)
+	if read_err != nil { return meta }
 	defer delete(data)
 
 	if len(data) != size_of(Meta_State) {

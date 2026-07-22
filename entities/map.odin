@@ -538,8 +538,8 @@ _map_save_text_legacy :: proc(m: ^Map, filename: string) -> bool {
 	full_path := fmt.tprintf("maps/%s", filename)
 	content := strings.to_string(builder)
 	result := os.write_entire_file(full_path, transmute([]u8)content)
-	
-	return result
+
+	return result == nil
 }
 
 // Helper to parse integer from string
@@ -561,14 +561,14 @@ map_list_saved :: proc() -> [dynamic]string {
 	}
 	defer os.close(fd)
 
-	fis, read_err := os.read_dir(fd, -1)
+	fis, read_err := os.read_dir(fd, -1, context.allocator)
 	if read_err != os.ERROR_NONE {
 		return files
 	}
-	defer os.file_info_slice_delete(fis)
+	defer os.file_info_slice_delete(fis, context.allocator)
 
 	for fi in fis {
-		if !fi.is_dir && strings.has_suffix(fi.name, ".map") {
+		if fi.type != .Directory && strings.has_suffix(fi.name, ".map") {
 			append(&files, strings.clone(fi.name))
 		}
 	}
@@ -590,12 +590,12 @@ map_list_saved_entries :: proc() -> [dynamic]Map_File_Entry {
 	if err != os.ERROR_NONE { return entries }
 	defer os.close(fd)
 
-	fis, read_err := os.read_dir(fd, -1)
+	fis, read_err := os.read_dir(fd, -1, context.allocator)
 	if read_err != os.ERROR_NONE { return entries }
-	defer os.file_info_slice_delete(fis)
+	defer os.file_info_slice_delete(fis, context.allocator)
 
 	for fi in fis {
-		if !fi.is_dir && strings.has_suffix(fi.name, ".map") {
+		if fi.type != .Directory && strings.has_suffix(fi.name, ".map") {
 			year, month, day := time.date(fi.modification_time)
 			date_str := fmt.tprintf("%04d-%02d-%02d", year, int(month), day)
 			append(&entries, Map_File_Entry{
@@ -773,7 +773,7 @@ map_save_bin :: proc(m: ^Map, filename: string) -> bool {
 	}
 
 	data := mem.ptr_to_bytes(&file)
-	return os.write_entire_file(full_path, data)
+	return os.write_entire_file(full_path, data) == nil
 }
 
 // Carga un mapa binario. Devuelve false si el archivo está corrupto.
@@ -824,8 +824,8 @@ _parse_tile_data_key :: proc(k: string) -> (row, col: i32, ok: bool) {
 // Load map from file
 map_load :: proc(m: ^Map, filename: string) -> bool {
 	full_path := fmt.tprintf("maps/%s", filename)
-	data, ok := os.read_entire_file(full_path)
-	if !ok {
+	data, read_err := os.read_entire_file(full_path, context.allocator)
+	if read_err != nil {
 		return false
 	}
 	defer delete(data)

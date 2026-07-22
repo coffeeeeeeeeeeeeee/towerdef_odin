@@ -352,17 +352,17 @@ music_init :: proc() {
 	}
 	defer os.close(fd)
 
-	infos, read_err := os.read_dir(fd, -1)
+	infos, read_err := os.read_dir(fd, -1, context.allocator)
 	if read_err != os.ERROR_NONE {
 		fmt.printfln("[music_init] error leyendo '%s': %v", MUSIC_DIR, read_err)
 		return
 	}
-	defer os.file_info_slice_delete(infos)
+	defer os.file_info_slice_delete(infos, context.allocator)
 
 	// Collect matching file names, sort alphabetically for consistent order
 	names := make([dynamic]string, context.temp_allocator)
 	for info in infos {
-		if info.is_dir { continue }
+		if info.type == .Directory { continue }
 		for ext in AUDIO_EXTS {
 			if strings.has_suffix(info.name, ext) {
 				append(&names, info.name)

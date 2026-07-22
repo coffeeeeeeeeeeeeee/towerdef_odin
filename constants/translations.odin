@@ -85,8 +85,8 @@ init_translations :: proc() {
 	TRANSLATIONS = make(map[string]string)
 	
 	// Read translations.txt file
-	data, read_ok := os.read_entire_file("translations.txt")
-	if !read_ok {
+	data, read_err := os.read_entire_file("translations.txt", context.allocator)
+	if read_err != nil {
 		fmt.println("WARNING: Could not read translations.txt")
 		return
 	}
