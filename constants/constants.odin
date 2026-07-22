@@ -394,6 +394,10 @@ MAX_SHOP_SLOTS     :: 5  // Tope físico de slots (limita arrays en Simulation)
 // Más allá del último índice, se usa el último valor (150).
 SHOP_REROLL_COSTS := [4]i32{0, 30, 75, 150}
 
+// Bioma MOUNTAIN (free_reroll en BIOME_SHOP_MODS): cuántos rerolls por visita
+// son gratis antes de empezar a cobrar según SHOP_REROLL_COSTS.
+MOUNTAIN_FREE_REROLLS :: i32(2)
+
 // Skip sin comprar nada → +N oro por skip consecutivo, capeado.
 // Reset al comprar cualquier cosa.
 SHOP_SKIP_BONUS_PER_SKIP :: i32(15)

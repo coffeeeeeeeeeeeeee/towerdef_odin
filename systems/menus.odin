@@ -2383,8 +2383,10 @@ shop_price_for_card :: proc(app: ^entities.App_State, card: entities.Card) -> i3
 // Costo del próximo reroll según el bioma y rerolls_this_shop.
 shop_next_reroll_cost :: proc(app: ^entities.App_State) -> i32 {
 	biome_mod := constants.BIOME_SHOP_MODS[app.editor.game_map.biome]
-	if biome_mod.free_reroll { return 0 }
 	idx := int(app.sim.shop.rerolls_this_visit)
+	if biome_mod.free_reroll && idx < int(constants.MOUNTAIN_FREE_REROLLS) {
+		return 0
+	}
 	if idx >= len(constants.SHOP_REROLL_COSTS) {
 		idx = len(constants.SHOP_REROLL_COSTS) - 1
 	}
@@ -2573,12 +2575,11 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		shop_perform_skip(app)
 	}
 
-	// Reroll: costo progresivo. Si el bioma da free_reroll, label distinto.
+	// Reroll: costo progresivo (0 = gratis, ya sea el 1° reroll de cualquier
+	// bioma o uno de los MOUNTAIN_FREE_REROLLS gratis de MOUNTAIN).
 	reroll_label: string
-	if biome_mod.free_reroll {
+	if reroll_cost == 0 {
 		reroll_label = fmt.tprintf("%s (gratis)", constants.get_text("DECK_REROLL_BUTTON"))
-	} else if reroll_cost == 0 {
-		reroll_label = fmt.tprintf("%s (1° gratis)", constants.get_text("DECK_REROLL_BUTTON"))
 	} else {
 		reroll_label = fmt.tprintf("%s $%d", constants.get_text("DECK_REROLL_BUTTON"), reroll_cost)
 	}
