@@ -48,6 +48,8 @@ render_ui :: proc(app: ^entities.App_State) {
 		render_progression_ui(app)
 	case .CAMPAIGN_MAP:
 		render_campaign_map(app)
+	case .LIBRARY:
+		render_card_library_ui(app)
 	}
 
 	// Shop — capa superior: siempre encima del resto de la UI de juego
@@ -236,6 +238,16 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 		w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(txt, context.temp_allocator), button_font_size, 0).x)
 		if render_button(txt, {f32(screen_width / 2 - w / 2), f32(current_y), f32(w), f32(menu_button_height)}) {
 			entities.app_set_state(app, .PROGRESSION)
+		}
+		current_y += menu_button_height + gap
+	}
+
+	// Library (biblioteca de cartas)
+	{
+		txt := constants.get_text("MENU_BUTTON_LIBRARY")
+		w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(txt, context.temp_allocator), button_font_size, 0).x)
+		if render_button(txt, {f32(screen_width / 2 - w / 2), f32(current_y), f32(w), f32(menu_button_height)}) {
+			entities.app_set_state(app, .LIBRARY)
 		}
 		current_y += menu_button_height + gap
 	}
@@ -3285,5 +3297,190 @@ render_progression_ui :: proc(app: ^entities.App_State) {
 	) {
 		progression_scroll = 0
 		entities.app_set_state(app, app.previous_state)
+	}
+}
+
+// ─── CARD LIBRARY (biblioteca de cartas) ───────────────────────────────────
+
+library_scroll: f32 = 0  // píxeles desplazados hacia abajo
+
+// Junta todas las torres + reliquias de una rareza dada en un array fijo
+// (orden: torres primero, después reliquias, cada grupo en su orden de
+// declaración). 16 es más que suficiente — la fila más grande hoy (UNCOMMON)
+// tiene 10 cartas.
+library_row_cards :: proc(rarity: constants.Card_Rarity) -> ([16]entities.Card, int) {
+	cards: [16]entities.Card
+	n := 0
+
+	// Obstáculo: siempre Common (ver entities.card_rarity), aparece junto al
+	// resto de las cartas Common (ARCHER/CANNON incluidas).
+	if rarity == .COMMON && n < len(cards) {
+		cards[n] = entities.Card{kind = .OBSTACLE}
+		n += 1
+	}
+
+	ALL_TOWERS :: [9]constants.Tower_Type{.ARCHER, .CANNON, .SNIPER, .MISSILE, .LASER, .ICE, .ENHANCE, .TESLA, .MORTAR}
+	for t in ALL_TOWERS {
+		c := entities.Card{kind = .TOWER, tower_type = t}
+		if entities.card_rarity(c) == rarity && n < len(cards) {
+			cards[n] = c
+			n += 1
+		}
+	}
+
+	for spec in entities.RELIC_SPECS {
+		if spec.rarity == rarity && n < len(cards) {
+			cards[n] = entities.Card{kind = spec.kind}
+			n += 1
+		}
+	}
+
+	return cards, n
+}
+
+// Devuelve si el jugador ya tiene esta carta (torre/reliquia) desbloqueada.
+library_card_unlocked :: proc(app: ^entities.App_State, card: entities.Card) -> bool {
+	// Obstáculo no tiene mecanismo de desbloqueo — se agrega directo al pool
+	// del shop igual que ARCHER/CANNON/SNIPER (ver shop_generate_pool),
+	// siempre disponible desde el arranque.
+	if card.kind == .OBSTACLE {
+		return true
+	}
+	if card.kind == .TOWER {
+		return entities.meta_is_tower_unlocked(&app.meta, card.tower_type)
+	}
+	return entities.meta_is_relic_unlocked(&app.meta, card.kind)
+}
+
+// Biblioteca de cartas: catálogo de todas las torres y reliquias del juego,
+// agrupadas por rareza (una fila por rareza) y desplegadas en abanico —
+// mismo mecanismo de overlap + "levantar la carta hovereada" que usa
+// render_card_hand para la mano de juego. Las no desbloqueadas se ven en
+// escala de grises (reusa el parámetro can_afford de render_card).
+render_card_library_ui :: proc(app: ^entities.App_State) {
+	screen_width  := raylib.GetScreenWidth()
+	screen_height := raylib.GetScreenHeight()
+	sw            := f32(screen_width)
+
+	render_background()
+
+	font_size  := f32(constants.UI_BUTTON_FONT_SIZE)
+	btn_height := i32(constants.UI_BUTTON_HEIGHT)
+	spacing    := i32(constants.UI_PANEL_MARGIN)
+
+	// Título (fijo — no scrollea)
+	title      := constants.get_text("LIBRARY_TITLE")
+	title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
+	title_size := f32(30)
+	title_w    := raylib.MeasureTextEx(constants.game_fonts.bold, title_cstr, title_size, 0).x
+	raylib.DrawTextEx(
+		constants.game_fonts.bold,
+		title_cstr,
+		{sw / 2 - title_w / 2, f32(spacing) * 2},
+		title_size, 0, raylib.WHITE,
+	)
+
+	// Scroll con rueda del ratón
+	wheel := raylib.GetMouseWheelMove()
+	if wheel != 0 {
+		library_scroll -= wheel * 40
+		if library_scroll < 0 { library_scroll = 0 }
+	}
+
+	content_top := f32(spacing) * 2 + title_size + f32(spacing) * 3
+
+	RARITIES :: [5]constants.Card_Rarity{.COMMON, .UNCOMMON, .RARE, .EPIC, .UNIQUE}
+
+	label_h    := f32(20)  // alto del badge de rareza (render_rarity, BADGE_H)
+	row_gap    := f32(28)
+	hover_lift := f32(20)
+	row_h      := label_h + 6 + CARD_H + hover_lift + row_gap
+
+	mouse := raylib.GetMousePosition()
+	content_bottom := content_top
+
+	for rarity, ri in RARITIES {
+		row_top := content_top + f32(ri) * row_h - library_scroll
+
+		// Etiqueta de rareza — mismo badge (rect de puntas redondeadas + texto
+		// blanco) que usan las cartas y los tooltips, no texto plano suelto.
+		if row_top + row_h >= 0 && row_top <= f32(screen_height) {
+			bw := rarity_badge_width(rarity)
+			render_rarity(rarity, f32(spacing) * 2, row_top, bw)
+		}
+
+		card_y := row_top + label_h + 6 + hover_lift
+
+		cards, n := library_row_cards(rarity)
+		if n == 0 { continue }
+
+		// Mismo cálculo de paso/overlap que render_card_hand, pero usando casi
+		// todo el ancho de pantalla (no hace falta dejarle sitio a paneles).
+		max_w   := sw * 0.92
+		step    := min(CARD_W * 0.75, (max_w - CARD_W) / max(f32(n - 1), 1))
+		total_w := CARD_W + step * f32(n - 1)
+		start_x := sw / 2 - total_w / 2
+		overlap := CARD_W - step
+
+		// Solo detectar hover si la fila está visible y no hay modal encima.
+		row_visible := row_top + row_h >= 0 && row_top <= f32(screen_height)
+		hovered_idx := -1
+		if row_visible && !app.confirm_modal.active {
+			for i in 0 ..< n {
+				cx := start_x + f32(i) * step
+				if raylib.CheckCollisionPointRec(mouse, raylib.Rectangle{cx, card_y, CARD_W, CARD_H}) {
+					hovered_idx = i
+				}
+			}
+		}
+
+		card_draw_x := proc(i, hovered: int, sx, stp, ovlp: f32) -> f32 {
+			base := sx + f32(i) * stp
+			if hovered < 0 || i == hovered { return base }
+			if i < hovered { return base - ovlp }
+			return base + ovlp
+		}
+
+		if row_visible {
+			// Pasada 1: todas menos la hovereada
+			for i in 0 ..< n {
+				if i == hovered_idx { continue }
+				cx := card_draw_x(i, hovered_idx, start_x, step, overlap)
+				unlocked := library_card_unlocked(app, cards[i])
+				render_card(app, cards[i], cx, card_y, false, unlocked)
+			}
+			// Pasada 2: la hovereada, levantada y encima de todo
+			if hovered_idx >= 0 {
+				cx := card_draw_x(hovered_idx, hovered_idx, start_x, step, overlap)
+				cy := card_y - hover_lift
+				unlocked := library_card_unlocked(app, cards[hovered_idx])
+				render_card(app, cards[hovered_idx], cx, cy, false, unlocked)
+				if !unlocked {
+					hint_rect := raylib.Rectangle{cx, cy, CARD_W, CARD_H}
+					render_label_tooltip(app, constants.get_text("LIBRARY_LOCKED_HINT"), hint_rect)
+				}
+			}
+		}
+
+		row_bottom := row_top + row_h
+		if row_bottom > content_bottom { content_bottom = row_bottom }
+	}
+
+	// Clampear scroll: no pasar del contenido
+	back_area  := f32(btn_height) + f32(spacing) * 4
+	max_scroll := content_bottom + library_scroll - f32(screen_height) + back_area
+	if max_scroll < 0 { max_scroll = 0 }
+	if library_scroll > max_scroll { library_scroll = max_scroll }
+
+	// Botonera de vuelta, al pie de la pantalla
+	back_w := i32(constants.UI_BUTTON_WIDTH) * 2
+	back_x := sw / 2 - f32(back_w) / 2
+	back_y := f32(screen_height) - f32(btn_height) - f32(spacing) * 2
+	if render_button(
+		constants.get_text("PROGRESSION_BACK"),
+		{back_x, back_y, f32(back_w), f32(btn_height)},
+	) {
+		library_scroll = 0
+		entities.app_set_state(app, .MENU)
 	}
 }

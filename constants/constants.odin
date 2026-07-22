@@ -33,6 +33,7 @@ Game_State :: enum {
 	RUN_COMPLETE,
 	PROGRESSION,
 	CAMPAIGN_MAP,   // visualizador de la campaña (constelación de nodos)
+	LIBRARY,        // biblioteca de cartas: catálogo de torres/reliquias por rareza
 }
 
 // Rareza de carta — afecta probabilidad de aparición en tienda y precio

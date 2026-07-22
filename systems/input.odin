@@ -42,6 +42,11 @@ input_handle :: proc(app: ^entities.App_State) {
 		if raylib.IsKeyPressed(.ESCAPE) {
 			entities.app_set_state(app, .MENU)
 		}
+	case .LIBRARY:
+		// Input handled via render_button in render_card_library_ui
+		if raylib.IsKeyPressed(.ESCAPE) {
+			entities.app_set_state(app, .MENU)
+		}
 	}
 }
 
