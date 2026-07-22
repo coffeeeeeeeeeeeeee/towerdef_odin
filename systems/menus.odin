@@ -147,7 +147,7 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	render_background()
 
 	// Title (using bold font)
-	title_text := constants.get_text("MENU_TITLE")
+	title_text := constants.GAME_NAME
 	title_size := f32(screen_height) * 0.08
 	title_width := f32(
 		raylib.MeasureTextEx(constants.game_fonts.bold, strings.clone_to_cstring(title_text, context.temp_allocator), title_size, 0).x,

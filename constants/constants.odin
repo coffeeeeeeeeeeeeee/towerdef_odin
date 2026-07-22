@@ -6,6 +6,9 @@ package constants
 // ─────────────────────────────────────────────────────────────────────────────
 DEVELOPER :: true
 
+// Nombre del juego. Es un nombre propio — no se traduce.
+GAME_NAME :: "First Impact"
+
 import "vendor:raylib"
 
 // =============================================================================

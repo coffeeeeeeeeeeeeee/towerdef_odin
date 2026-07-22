@@ -15,7 +15,7 @@ import "systems"
 // Window settings
 WINDOW_WIDTH :: 800
 WINDOW_HEIGHT :: 600
-WINDOW_TITLE :: "First Impact"
+WINDOW_TITLE :: constants.GAME_NAME
 
 main :: proc() {
 	// Load settings first
