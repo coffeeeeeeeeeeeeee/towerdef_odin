@@ -34,6 +34,7 @@ GLSL 330 core. Cada shader corresponde a una capa visual:
 | `nebula.glsl` | Fondo animado de menú y juego | `Nebula_Shader` en `rendering.odin` |
 | `clouds.glsl` | Capa de nubes con parallax sobre el mapa | `Cloud_Shader` |
 | `water.glsl` | Blur + threshold para charcos de agua | `Water_Shader` |
+| `path.glsl` | Blur + threshold para suavizar el trazo del camino | `Path_Shader` |
 | `heightmap.glsl` | Tinte continuo del terreno por altura | `Heightmap_Shader` |
 
 ### Agregar un nuevo shader

@@ -101,6 +101,48 @@ water_shader_unload :: proc() {
 	}
 }
 
+// ── Path blur+threshold shader (misma técnica que el agua, Fase 1) ──────────
+
+Path_Shader :: struct {
+	shader:     raylib.Shader,
+	loc_texel:  i32,
+	loc_path:   i32,
+	loc_edge:   i32,
+	mask_tex:   raylib.RenderTexture2D,
+	tex_w:      i32,
+	tex_h:      i32,
+}
+
+path_shader: Path_Shader
+
+path_shader_init :: proc() {
+	s := raylib.LoadShader(nil, "assets/path.glsl")
+	path_shader.shader    = s
+	path_shader.loc_texel = raylib.GetShaderLocation(s, "texelSize")
+	path_shader.loc_path  = raylib.GetShaderLocation(s, "pathColor")
+	path_shader.loc_edge  = raylib.GetShaderLocation(s, "edgeColor")
+	path_shader_resize()
+}
+
+path_shader_resize :: proc() {
+	w := raylib.GetRenderWidth()
+	h := raylib.GetRenderHeight()
+	if path_shader.tex_w == w && path_shader.tex_h == h { return }
+	if path_shader.tex_w > 0 {
+		raylib.UnloadRenderTexture(path_shader.mask_tex)
+	}
+	path_shader.mask_tex = raylib.LoadRenderTexture(w, h)
+	path_shader.tex_w    = w
+	path_shader.tex_h    = h
+}
+
+path_shader_unload :: proc() {
+	raylib.UnloadShader(path_shader.shader)
+	if path_shader.tex_w > 0 {
+		raylib.UnloadRenderTexture(path_shader.mask_tex)
+	}
+}
+
 // ── Heightmap overlay shader ─────────────────────────────────────────────────
 
 Heightmap_Shader :: struct {
@@ -631,7 +673,7 @@ render_map :: proc(app: ^entities.App_State, m: ^entities.Map, for_preview: bool
 	render_heightmap_overlay(app, m, cs)
 
 	render_water_layer(m, cs, app.camera_offset_x, app.camera_offset_y, app.zoom, for_preview)
-	render_paths(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y)
+	render_path_layer(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y, for_preview)
 
 	// Grid lines
 	if app.settings.show_grid {
@@ -714,7 +756,7 @@ render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 	// de pantalla para el render normal.
 	cs_preview := f32(app.settings.cell_size)  // zoom=1 en la preview
 
-	// Swap mask to preview size
+	// Swap mask to preview size (agua + camino)
 	saved_mask_w := water_shader.tex_w
 	saved_mask_h := water_shader.tex_h
 	saved_mask   := water_shader.mask_tex
@@ -722,7 +764,15 @@ render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 	water_shader.tex_w    = tex_w
 	water_shader.tex_h    = tex_h
 
+	saved_path_mask_w := path_shader.tex_w
+	saved_path_mask_h := path_shader.tex_h
+	saved_path_mask   := path_shader.mask_tex
+	path_shader.mask_tex = raylib.LoadRenderTexture(tex_w, tex_h)
+	path_shader.tex_w    = tex_w
+	path_shader.tex_h    = tex_h
+
 	water_render_mask(m, cs_preview, 0, 0)
+	path_render_mask(m, cs_preview, m.width, m.height, 0, 0)
 
 	raylib.BeginTextureMode(app.editor.browser.preview_tex)
 		render_map(app, m, true)
@@ -734,6 +784,11 @@ render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 	water_shader.mask_tex = saved_mask
 	water_shader.tex_w    = saved_mask_w
 	water_shader.tex_h    = saved_mask_h
+
+	raylib.UnloadRenderTexture(path_shader.mask_tex)
+	path_shader.mask_tex = saved_path_mask
+	path_shader.tex_w    = saved_path_mask_w
+	path_shader.tex_h    = saved_path_mask_h
 
 	// Restore
 	app.camera_offset_x     = saved_offset_x
@@ -747,17 +802,24 @@ render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 }
 
 // Render paths
-render_paths :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset_x, camera_offset_y: i32) {
-	path_width := cs * constants.PATH_WIDTH_RATIO
-	path_color := constants.BIOME_COLORS[m.biome].path
-
-	is_path_like :: proc(m: ^entities.Map, row, col, map_w, map_h: i32) -> bool {
-		if row < 0 || row >= map_h || col < 0 || col >= map_w {
-			return false
-		}
-		tile := m.grid[row][col]
-		return tile == .PATH || tile == .SPAWN || tile == .GOAL
+is_path_like :: proc(m: ^entities.Map, row, col, map_w, map_h: i32) -> bool {
+	if row < 0 || row >= map_h || col < 0 || col >= map_w {
+		return false
 	}
+	tile := m.grid[row][col]
+	return tile == .PATH || tile == .SPAWN || tile == .GOAL
+}
+
+// Fase 1: renderiza la geometría del camino (centro, conectores, esquinas
+// redondeadas) en BLANCO sobre path_shader.mask_tex. La forma es la misma
+// que antes se dibujaba directo a pantalla; ahora sirve de máscara binaria
+// para el blur+threshold del shader.
+// Debe llamarse FUERA de cualquier BeginTextureMode activo.
+path_render_mask :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset_x, camera_offset_y: i32) {
+	path_width := cs * constants.PATH_WIDTH_RATIO
+
+	raylib.BeginTextureMode(path_shader.mask_tex)
+	raylib.ClearBackground(raylib.Color{0, 0, 0, 0})
 
 	for row in 0 ..< map_h {
 		for col in 0 ..< map_w {
@@ -779,68 +841,110 @@ render_paths :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset
 			// Draw center
 			is_spawn_or_goal := tile == .SPAWN || tile == .GOAL
 			if is_spawn_or_goal {
-				raylib.DrawCircleV({cx, cy}, cs / 2, path_color)
+				raylib.DrawCircleV({cx, cy}, cs / 2, raylib.WHITE)
 			} else {
 				raylib.DrawRectangleRec(
 					{cx - path_width / 2, cy - path_width / 2, path_width, path_width},
-					path_color,
+					raylib.WHITE,
 				)
 			}
 
 			// Draw connections
 			if top {
-				raylib.DrawRectangleRec(
-					{cx - path_width / 2, y, path_width, cs / 2},
-					path_color,
-				)
+				raylib.DrawRectangleRec({cx - path_width / 2, y, path_width, cs / 2}, raylib.WHITE)
 			}
 			if right {
-				raylib.DrawRectangleRec(
-					{cx, cy - path_width / 2, cs / 2, path_width},
-					path_color,
-				)
+				raylib.DrawRectangleRec({cx, cy - path_width / 2, cs / 2, path_width}, raylib.WHITE)
 			}
 			if bottom {
-				raylib.DrawRectangleRec(
-					{cx - path_width / 2, cy, path_width, cs / 2},
-					path_color,
-				)
+				raylib.DrawRectangleRec({cx - path_width / 2, cy, path_width, cs / 2}, raylib.WHITE)
 			}
 			if left {
-				raylib.DrawRectangleRec(
-					{x, cy - path_width / 2, cs / 2, path_width},
-					path_color,
-				)
+				raylib.DrawRectangleRec({x, cy - path_width / 2, cs / 2, path_width}, raylib.WHITE)
 			}
 
 			// Draw rounded corners for smooth path turns
 			corner_radius := path_width / 2
 			if top && right {
-				// Smooth the outer corner between top and right
-				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, path_color)
+				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, raylib.WHITE)
 			}
 			if right && bottom {
-				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, path_color)
+				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, raylib.WHITE)
 			}
 			if bottom && left {
-				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, path_color)
+				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, raylib.WHITE)
 			}
 			if left && top {
-				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, path_color)
+				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, raylib.WHITE)
 			}
+		}
+	}
 
-			// Bridge railings — solo en PATH con agua debajo
-			if tile == .PATH && m.water_grid[row][col] {
-				pw := path_width
-				rt := cs * constants.BRIDGE_RAILING_THICK
-				rc := constants.COLOR_BRIDGE_RAILING
-				sg := constants.BRIDGE_RAILING_SEGS
+	raylib.EndTextureMode()
+}
 
-				if !top    { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      pw, rt}, 1, sg, rc) }
-				if !bottom { raylib.DrawRectangleRounded({cx - pw/2,      cy + pw/2 - rt, pw, rt}, 1, sg, rc) }
-				if !left   { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      rt, pw}, 1, sg, rc) }
-				if !right  { raylib.DrawRectangleRounded({cx + pw/2 - rt, cy - pw/2,      rt, pw}, 1, sg, rc) }
-			}
+// Fase 2: aplica el shader de blur+threshold sobre la máscara pre-computada.
+// Dibuja al render target activo (pantalla o una RenderTexture2D de preview).
+path_render_apply :: proc(m: ^entities.Map) {
+	pc := constants.BIOME_COLORS[m.biome].path
+	path_color := [4]f32{f32(pc.r)/255, f32(pc.g)/255, f32(pc.b)/255, f32(pc.a)/255}
+	edge_color := [4]f32{path_color.r * 0.75, path_color.g * 0.75, path_color.b * 0.75, path_color.a}
+	texel_size := [2]f32{1.0 / f32(path_shader.tex_w), 1.0 / f32(path_shader.tex_h)}
+
+	raylib.SetShaderValue(path_shader.shader, path_shader.loc_texel, &texel_size, .VEC2)
+	raylib.SetShaderValue(path_shader.shader, path_shader.loc_path,  &path_color, .VEC4)
+	raylib.SetShaderValue(path_shader.shader, path_shader.loc_edge,  &edge_color, .VEC4)
+
+	raylib.BeginShaderMode(path_shader.shader)
+	src := raylib.Rectangle{
+		0, f32(path_shader.tex_h),
+		f32(path_shader.tex_w), -f32(path_shader.tex_h),
+	}
+	raylib.DrawTextureRec(path_shader.mask_tex.texture, src, {0, 0}, raylib.WHITE)
+	raylib.EndShaderMode()
+}
+
+// Render de camino completo (máscara + shader) + railings de puentes encima
+// (geometría nítida, sin blur). Usado en el camino normal de juego/editor.
+render_path_layer :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset_x, camera_offset_y: i32, for_preview: bool = false) {
+	if for_preview {
+		path_render_apply(m) // preview: la máscara ya fue precomputada al tamaño del preview
+	} else {
+		path_shader_resize()
+		path_render_mask(m, cs, map_w, map_h, camera_offset_x, camera_offset_y)
+		path_render_apply(m)
+	}
+	render_path_railings(m, cs, map_w, map_h, camera_offset_x, camera_offset_y)
+}
+
+// Railings de puentes — se dibujan encima del camino suavizado, con bordes
+// nítidos (no forman parte de la máscara blureada).
+render_path_railings :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset_x, camera_offset_y: i32) {
+	path_width := cs * constants.PATH_WIDTH_RATIO
+
+	for row in 0 ..< map_h {
+		for col in 0 ..< map_w {
+			if m.grid[row][col] != .PATH || !m.water_grid[row][col] { continue }
+
+			x := f32(col) * cs + f32(camera_offset_x)
+			y := f32(row) * cs + f32(camera_offset_y)
+			cx := x + cs / 2
+			cy := y + cs / 2
+
+			top := is_path_like(m, row - 1, col, map_w, map_h)
+			right := is_path_like(m, row, col + 1, map_w, map_h)
+			bottom := is_path_like(m, row + 1, col, map_w, map_h)
+			left := is_path_like(m, row, col - 1, map_w, map_h)
+
+			pw := path_width
+			rt := cs * constants.BRIDGE_RAILING_THICK
+			rc := constants.COLOR_BRIDGE_RAILING
+			sg := constants.BRIDGE_RAILING_SEGS
+
+			if !top    { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      pw, rt}, 1, sg, rc) }
+			if !bottom { raylib.DrawRectangleRounded({cx - pw/2,      cy + pw/2 - rt, pw, rt}, 1, sg, rc) }
+			if !left   { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      rt, pw}, 1, sg, rc) }
+			if !right  { raylib.DrawRectangleRounded({cx + pw/2 - rt, cy - pw/2,      rt, pw}, 1, sg, rc) }
 		}
 	}
 }

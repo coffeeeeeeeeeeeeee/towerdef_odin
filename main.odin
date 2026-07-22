@@ -88,6 +88,10 @@ main :: proc() {
 	systems.water_shader_init()
 	defer systems.water_shader_unload()
 
+	// Load path blur+threshold shader
+	systems.path_shader_init()
+	defer systems.path_shader_unload()
+
 	// Load cloud layer shader
 	systems.cloud_shader_init()
 	defer systems.cloud_shader_unload()
@@ -141,6 +145,7 @@ main :: proc() {
 			app.camera_offset_y = app.target_camera_offset_y
 
 			systems.water_shader_resize()
+			systems.path_shader_resize()
 		}
 
 		// Handle window maximization state changes
