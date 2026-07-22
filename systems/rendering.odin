@@ -1536,7 +1536,34 @@ render_gameplay :: proc(app: ^entities.App_State) {
 // Draw a single enemy shape at screen position (cx, cy).
 // size is the radius/half-size in pixels. shadow_offset > 0 draws a drop shadow.
 // Bosses are always drawn as squares; flying non-bosses as triangles; others as circles.
-render_enemy_shape :: proc(cx, cy, size: f32, color: raylib.Color, is_flying: bool, is_boss: bool = false, shadow_offset: f32 = 0) {
+// Color/nombre de un sub-tipo de enemigo — usado por el panel de próximas
+// oleadas (SCOUT, systems/menus.odin) para no depender de la fórmula de
+// wave_number (el sub-tipo real ahora sale de sim.lookahead_subtype).
+enemy_subtype_color :: proc(f: entities.Enemy_Flag) -> raylib.Color {
+	#partial switch f {
+	case .GREEN:      return constants.COLOR_ENEMY_GREEN
+	case .FLYING:     return constants.COLOR_ENEMY_FLYING
+	case .BLUE:       return constants.COLOR_ENEMY_BLUE
+	case .SPLIT:      return constants.COLOR_ENEMY_SPLIT
+	case .ARMORED:    return constants.COLOR_ENEMY_ARMORED
+	case .INVISIBLE:  return constants.COLOR_ENEMY_INVISIBLE
+	}
+	return constants.COLOR_ENEMY
+}
+
+enemy_subtype_label :: proc(f: entities.Enemy_Flag) -> string {
+	#partial switch f {
+	case .GREEN:      return constants.get_text("ENEMY_TYPE_FAST")
+	case .FLYING:     return constants.get_text("ENEMY_TYPE_FLYING")
+	case .BLUE:       return constants.get_text("ENEMY_TYPE_HEALER")
+	case .SPLIT:      return constants.get_text("ENEMY_TYPE_SPLITTER")
+	case .ARMORED:    return constants.get_text("ENEMY_TYPE_ARMORED")
+	case .INVISIBLE:  return constants.get_text("ENEMY_TYPE_INVISIBLE")
+	}
+	return constants.get_text("ENEMY_TYPE_NORMAL")
+}
+
+render_enemy_shape :: proc(cx, cy, size: f32, color: raylib.Color, is_flying: bool, is_boss: bool = false, shadow_offset: f32 = 0, is_armored: bool = false) {
 	border_color := raylib.Color{
 		u8(f32(color.r) * 0.6),
 		u8(f32(color.g) * 0.6),
@@ -1582,6 +1609,12 @@ render_enemy_shape :: proc(cx, cy, size: f32, color: raylib.Color, is_flying: bo
 		raylib.DrawCircle(i32(cx), i32(cy), size, border_color)
 		raylib.DrawCircle(i32(cx), i32(cy), size - sw, color)
 	}
+
+	// Plating ring — decorador aditivo (funciona sobre cualquier forma de base:
+	// círculo, cuadrado de boss, triángulo de flying).
+	if is_armored {
+		raylib.DrawCircleLines(i32(cx), i32(cy), size + sw, constants.COLOR_ENEMY_ARMORED)
+	}
 }
 
 // Render all enemies in the simulation
@@ -1592,11 +1625,14 @@ render_enemies :: proc(app: ^entities.App_State, cs: f32) {
 
 		size  := entities.enemy_get_size(&enemy) * cs
 		color := entities.enemy_get_color(&enemy)
+		if .INVISIBLE in enemy.flags {
+			color.a = u8(f32(color.a) * constants.ENEMY_INVISIBLE_ALPHA)
+		}
 		so    := max(f32(2), cs * 0.08)
 		cx    := x + cs / 2
 		cy    := y + cs / 2
 
-		render_enemy_shape(cx, cy, size, color, .FLYING in enemy.flags, .BOSS in enemy.flags, so)
+		render_enemy_shape(cx, cy, size, color, .FLYING in enemy.flags, .BOSS in enemy.flags, so, .ARMORED in enemy.flags)
 
 		// Slow overlay: translucent blue halo when slowed by ice tower
 		if enemy.slow_timer > 0 {

@@ -88,6 +88,13 @@ Simulation :: struct {
 	// Shifts forward each time start_next_wave is called.
 	lookahead_bonus: [3]bool,
 
+	// Pre-rolled sub-type flags (GREEN/FLYING/BLUE/SPLIT/ARMORED/INVISIBLE) for
+	// the next 3 upcoming waves — mismo esquema de índices que lookahead_bonus.
+	// Necesario para que la reliquia SCOUT pueda mostrar el tipo real de las
+	// próximas oleadas ahora que el sub-tipo se sortea con RNG (antes era
+	// puramente determinístico por wave_number, así que no hacía falta).
+	lookahead_subtype: [3]Enemy_Flags,
+
 	// Subsistemas (cohesión por concern)
 	cards: Card_State,
 	shop:  Shop_State,

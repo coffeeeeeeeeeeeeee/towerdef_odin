@@ -303,32 +303,39 @@ AOE_DAMAGE_MULTIPLIER :: f32(0.5)  // Splash damage is this fraction of the dire
 ENEMY_BASE_HP             :: f32(10.0)
 ENEMY_GROWTH_RATE         :: f32(1.07)    // HP multiplier per wave (exponential scaling)
 ENEMY_SPEED_GROWTH_RATE   :: f32(1.012)   // Speed multiplier per wave (~+1.2% per wave)
-ENEMY_GLOBAL_HP_MULTIPLIER    :: f32(0.85) // Global scalar applied to all enemy HP
+ENEMY_GLOBAL_HP_MULTIPLIER    :: f32(1.15) // Global scalar applied to all enemy HP
 ENEMY_GLOBAL_SPEED_MULTIPLIER :: f32(0.32) // Global scalar applied to all enemy speeds
 
 // Enemy speed (cells per second, further scaled by ENEMY_GLOBAL_SPEED_MULTIPLIER)
-ENEMY_SPEED_DEFAULT :: f32(1.0)  // Normal enemies
-ENEMY_SPEED_BOSS    :: f32(0.4)  // Boss enemies (slow)
-ENEMY_SPEED_GREEN   :: f32(1.8)  // Green (fast) enemies
-ENEMY_SPEED_BLUE    :: f32(1.1)  // Blue (healer) enemies
-ENEMY_SPEED_FLYING  :: f32(1.3)  // Flying enemies
-ENEMY_SPEED_BONUS   :: f32(1.5)  // Bonus enemies (fast, but below green)
+ENEMY_SPEED_DEFAULT  :: f32(1.0)  // Normal enemies
+ENEMY_SPEED_BOSS     :: f32(0.4)  // Boss enemies (slow)
+ENEMY_SPEED_GREEN    :: f32(1.8)  // Green (fast) enemies
+ENEMY_SPEED_BLUE     :: f32(1.1)  // Blue (healer) enemies
+ENEMY_SPEED_FLYING   :: f32(1.3)  // Flying enemies
+ENEMY_SPEED_BONUS    :: f32(1.5)  // Bonus enemies (fast, but below green)
+ENEMY_SPEED_ARMORED  :: f32(0.8)  // Armored enemies (slow, tanky)
 
 // Enemy size (radius as a fraction of cell size)
-ENEMY_SIZE_DEFAULT :: f32(0.24)
-ENEMY_SIZE_BOSS    :: f32(0.32)  // Large
-ENEMY_SIZE_GREEN   :: f32(0.16)  // Tiny
-ENEMY_SIZE_BLUE    :: f32(0.24)  // Same as default
-ENEMY_SIZE_FLYING  :: f32(0.20)  // Small
-ENEMY_SIZE_BONUS   :: f32(0.28)  // Slightly bigger than default
+ENEMY_SIZE_DEFAULT  :: f32(0.24)
+ENEMY_SIZE_BOSS     :: f32(0.32)  // Large
+ENEMY_SIZE_GREEN    :: f32(0.16)  // Tiny
+ENEMY_SIZE_BLUE     :: f32(0.24)  // Same as default
+ENEMY_SIZE_FLYING   :: f32(0.20)  // Small
+ENEMY_SIZE_BONUS    :: f32(0.28)  // Slightly bigger than default
+ENEMY_SIZE_ARMORED  :: f32(0.27)  // Slightly bigger — reads as "bulky"
 
 // Enemy HP multiplier relative to ENEMY_BASE_HP (scaled by wave growth)
-ENEMY_HEALTH_DEFAULT :: f32(0.9)
-ENEMY_HEALTH_BOSS    :: f32(10.0) // Very tanky
-ENEMY_HEALTH_GREEN   :: f32(0.5)  // Fragile
-ENEMY_HEALTH_BLUE    :: f32(1.2)  // Slightly tougher
-ENEMY_HEALTH_FLYING  :: f32(0.6)  // Fragile
-ENEMY_HEALTH_BONUS   :: f32(1.4)  // Tough (carries all sub-type abilities)
+ENEMY_HEALTH_DEFAULT   :: f32(0.9)
+ENEMY_HEALTH_BOSS      :: f32(14.0) // Very tanky
+ENEMY_HEALTH_GREEN     :: f32(0.5)  // Fragile
+ENEMY_HEALTH_BLUE      :: f32(1.2)  // Slightly tougher
+ENEMY_HEALTH_FLYING    :: f32(0.6)  // Fragile
+ENEMY_HEALTH_BONUS     :: f32(1.4)  // Tough (carries all sub-type abilities)
+ENEMY_HEALTH_ARMORED   :: f32(1.3)  // Tougher baseline — plus most towers deal reduced damage
+ENEMY_HEALTH_INVISIBLE :: f32(0.9)  // Same as default — danger comes from being untargetable, not HP
+
+// ARMORED: fracción del daño que recibe de torres SIN armor-piercing (ver ARMORED_AP_TOWERS)
+ARMORED_DAMAGE_MULT :: f32(0.35)
 
 // =============================================================================
 // Enemy behavior
@@ -625,8 +632,12 @@ COLOR_ENEMY_BLUE    :: raylib.Color{ 60, 100, 220, 255}  // Healer blue enemy
 COLOR_ENEMY_BOSS    :: raylib.Color{220, 200,  60, 255}  // Boss (gold)
 COLOR_ENEMY_FLYING  :: raylib.Color{255, 220,  60, 255}  // Flying (yellow)
 COLOR_ENEMY_SPLIT   :: raylib.Color{180,  60, 210, 255}  // Splitter (purple)
-COLOR_ENEMY_BONUS   :: raylib.Color{255, 140,   0, 255}  // Bonus (orange)
-COLOR_ENEMY_SHADOW  :: raylib.Color{  0,   0,   0,  20}  // Drop shadow under enemies
+COLOR_ENEMY_BONUS     :: raylib.Color{255, 140,   0, 255}  // Bonus (orange)
+COLOR_ENEMY_ARMORED   :: raylib.Color{120, 120, 130, 255}  // Armored (gunmetal gray)
+COLOR_ENEMY_INVISIBLE :: raylib.Color{180, 180, 200, 255}  // Invisible (pale — drawn translucent, see ENEMY_INVISIBLE_ALPHA)
+COLOR_ENEMY_SHADOW    :: raylib.Color{  0,   0,   0,  20}  // Drop shadow under enemies
+
+ENEMY_INVISIBLE_ALPHA :: f32(0.35)  // Multiplicador de alpha al dibujar enemigos INVISIBLE
 
 // Enemy body fill colors — used when drawing enemies on the map.
 // More saturated than the HUD colors above; kept separate because the values differ.

@@ -5,7 +5,9 @@ import "vendor:raylib"
 import "../constants"
 
 // Enemy behaviour flags — combinable via bit_set (e.g. mixed waves have two flags set).
-Enemy_Flag :: enum u8 { BOSS, GREEN, BLUE, FLYING, SPLIT, BONUS }
+// ARMORED: solo SNIPER/CANNON/MORTAR le hacen daño completo (ver calc_damage).
+// INVISIBLE: solo ARCHER/LASER/SNIPER pueden detectarlo/apuntarle (ver find_target).
+Enemy_Flag :: enum u8 { BOSS, GREEN, BLUE, FLYING, SPLIT, BONUS, ARMORED, INVISIBLE }
 Enemy_Flags :: bit_set[Enemy_Flag; u8]
 
 // Enemy structure
@@ -179,12 +181,14 @@ enemy_apply_obstacle_damage :: proc(e: ^Enemy, grid_x, grid_y, obstacle_level: i
 // Get enemy color — bonus overrides all sub-types; bosses inherit sub-type color
 enemy_get_color :: proc(e: ^Enemy) -> raylib.Color {
 	switch {
-	case .BONUS  in e.flags: return constants.COLOR_ENEMY_BONUS
-	case .GREEN  in e.flags: return constants.ENEMY_GREEN
-	case .BLUE   in e.flags: return constants.ENEMY_BLUE
-	case .FLYING in e.flags: return constants.COLOR_ENEMY_FLYING
-	case .SPLIT  in e.flags: return constants.COLOR_ENEMY_SPLIT
-	case:                    return constants.COLOR_ENEMY
+	case .BONUS    in e.flags: return constants.COLOR_ENEMY_BONUS
+	case .GREEN    in e.flags: return constants.ENEMY_GREEN
+	case .BLUE     in e.flags: return constants.ENEMY_BLUE
+	case .FLYING   in e.flags: return constants.COLOR_ENEMY_FLYING
+	case .SPLIT    in e.flags: return constants.COLOR_ENEMY_SPLIT
+	case .ARMORED  in e.flags: return constants.COLOR_ENEMY_ARMORED
+	case .INVISIBLE in e.flags: return constants.COLOR_ENEMY_INVISIBLE
+	case:                      return constants.COLOR_ENEMY
 	}
 }
 
@@ -226,10 +230,11 @@ enemy_get_size :: proc(e: ^Enemy) -> f32 {
 	}
 	base: f32
 	switch {
-	case .FLYING in e.flags: base = constants.ENEMY_SIZE_FLYING
-	case .BLUE   in e.flags: base = constants.ENEMY_SIZE_BLUE
-	case .GREEN  in e.flags: base = constants.ENEMY_SIZE_GREEN
-	case:                    base = constants.ENEMY_SIZE_DEFAULT
+	case .FLYING    in e.flags: base = constants.ENEMY_SIZE_FLYING
+	case .BLUE      in e.flags: base = constants.ENEMY_SIZE_BLUE
+	case .GREEN     in e.flags: base = constants.ENEMY_SIZE_GREEN
+	case .ARMORED   in e.flags: base = constants.ENEMY_SIZE_ARMORED
+	case:                       base = constants.ENEMY_SIZE_DEFAULT
 	}
 	if .BOSS in e.flags { return base * boss_mult }
 	return base

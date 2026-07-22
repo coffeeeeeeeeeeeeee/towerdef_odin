@@ -158,6 +158,12 @@ ENEMY_TYPE_SPLITTER|PORTUGUESE|Divisor
 ENEMY_TYPE_BONUS|ENGLISH|Bonus
 ENEMY_TYPE_BONUS|SPANISH|Bonus
 ENEMY_TYPE_BONUS|PORTUGUESE|Bonus
+ENEMY_TYPE_ARMORED|ENGLISH|Armored
+ENEMY_TYPE_ARMORED|SPANISH|Blindado
+ENEMY_TYPE_ARMORED|PORTUGUESE|Blindado
+ENEMY_TYPE_INVISIBLE|ENGLISH|Invisible
+ENEMY_TYPE_INVISIBLE|SPANISH|Invisible
+ENEMY_TYPE_INVISIBLE|PORTUGUESE|Invisível
 
 # Tooltip
 TOOLTIP_UPGRADES|ENGLISH|Upgrades
@@ -545,21 +551,21 @@ CARD_LOOT_NAME|SPANISH|Saqueador
 CARD_LOOT_NAME|PORTUGUESE|Saqueador
 
 # Shop card tooltips — short descriptions
-TOOLTIP_ARCHER_DESC|ENGLISH|Fast single-target shots
-TOOLTIP_ARCHER_DESC|SPANISH|Disparos rapidos a un objetivo
-TOOLTIP_ARCHER_DESC|PORTUGUESE|Tiros rapidos em alvo unico
-TOOLTIP_CANNON_DESC|ENGLISH|Explosive AoE projectiles
-TOOLTIP_CANNON_DESC|SPANISH|Proyectiles explosivos en area
-TOOLTIP_CANNON_DESC|PORTUGUESE|Projeteis explosivos em area
-TOOLTIP_SNIPER_DESC|ENGLISH|High damage, long range
-TOOLTIP_SNIPER_DESC|SPANISH|Alto dano, largo alcance
-TOOLTIP_SNIPER_DESC|PORTUGUESE|Alto dano, longo alcance
+TOOLTIP_ARCHER_DESC|ENGLISH|Fast single-target shots. Detects invisible enemies
+TOOLTIP_ARCHER_DESC|SPANISH|Disparos rapidos a un objetivo. Detecta enemigos invisibles
+TOOLTIP_ARCHER_DESC|PORTUGUESE|Tiros rapidos em alvo unico. Detecta inimigos invisiveis
+TOOLTIP_CANNON_DESC|ENGLISH|Explosive AoE projectiles. Full damage to armored enemies
+TOOLTIP_CANNON_DESC|SPANISH|Proyectiles explosivos en area. Dano completo a blindados
+TOOLTIP_CANNON_DESC|PORTUGUESE|Projeteis explosivos em area. Dano completo a blindados
+TOOLTIP_SNIPER_DESC|ENGLISH|High damage, long range. Full damage to armored, detects invisible enemies
+TOOLTIP_SNIPER_DESC|SPANISH|Alto dano, largo alcance. Dano completo a blindados, detecta invisibles
+TOOLTIP_SNIPER_DESC|PORTUGUESE|Alto dano, longo alcance. Dano completo a blindados, detecta invisiveis
 TOOLTIP_MISSILE_DESC|ENGLISH|Wide AoE rockets
 TOOLTIP_MISSILE_DESC|SPANISH|Cohetes de amplia area
 TOOLTIP_MISSILE_DESC|PORTUGUESE|Foguetes de ampla area
-TOOLTIP_LASER_DESC|ENGLISH|Continuous beam, no cooldown gap
-TOOLTIP_LASER_DESC|SPANISH|Rayo continuo, sin pausa
-TOOLTIP_LASER_DESC|PORTUGUESE|Raio continuo, sem pausa
+TOOLTIP_LASER_DESC|ENGLISH|Continuous beam, no cooldown gap. Detects invisible enemies
+TOOLTIP_LASER_DESC|SPANISH|Rayo continuo, sin pausa. Detecta enemigos invisibles
+TOOLTIP_LASER_DESC|PORTUGUESE|Raio continuo, sem pausa. Detecta inimigos invisiveis
 TOOLTIP_ICE_DESC|ENGLISH|Slows all nearby enemies
 TOOLTIP_ICE_DESC|SPANISH|Ralentiza enemigos cercanos
 TOOLTIP_ICE_DESC|PORTUGUESE|Desacelera inimigos proximos
@@ -569,9 +575,9 @@ TOOLTIP_ENHANCE_DESC|PORTUGUESE|Aumenta nivel de torres adjacentes
 TOOLTIP_TESLA_DESC|ENGLISH|Chain lightning, bounces between enemies
 TOOLTIP_TESLA_DESC|SPANISH|Rayo en cadena, rebota entre enemigos
 TOOLTIP_TESLA_DESC|PORTUGUESE|Raio em cadeia, quica entre inimigos
-TOOLTIP_MORTAR_DESC|ENGLISH|Slow AoE shell, ignores line of sight
-TOOLTIP_MORTAR_DESC|SPANISH|Obús lento con area, ignora vision
-TOOLTIP_MORTAR_DESC|PORTUGUESE|Obús lento em area, ignora visao
+TOOLTIP_MORTAR_DESC|ENGLISH|Slow AoE shell, ignores line of sight. Full damage to armored enemies
+TOOLTIP_MORTAR_DESC|SPANISH|Obús lento con area, ignora vision. Dano completo a blindados
+TOOLTIP_MORTAR_DESC|PORTUGUESE|Obús lento em area, ignora visao. Dano completo a blindados
 TOOLTIP_OBSTACLE_DESC|ENGLISH|Forces enemies to detour
 TOOLTIP_OBSTACLE_DESC|SPANISH|Obliga a los enemigos a rodear
 TOOLTIP_OBSTACLE_DESC|PORTUGUESE|Forca inimigos a desviar

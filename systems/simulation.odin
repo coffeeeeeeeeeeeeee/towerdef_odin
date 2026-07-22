@@ -183,6 +183,54 @@ update_wave :: proc(app: ^entities.App_State, dt: f32) {
 	}
 }
 
+// Sub-tipos de oleada disponibles para sorteo (boss y oleadas normales/mixtas
+// eligen de este pool). No incluye BOSS/BONUS: esos son flags de "clase de
+// oleada", no sub-tipos de comportamiento.
+ENEMY_SUBTYPE_POOL := [6]entities.Enemy_Flag{.GREEN, .FLYING, .BLUE, .SPLIT, .ARMORED, .INVISIBLE}
+
+// Elige un sub-tipo al azar del pool, evitando (si es posible) los flags
+// presentes en `exclude` — usado para que una oleada no repita el/los
+// sub-tipo(s) de la oleada inmediatamente anterior. Si `exclude` cubre todo
+// el pool (no debería pasar con 1-2 flags excluidos), cae al pool completo.
+pick_random_subtype_excluding :: proc(exclude: entities.Enemy_Flags) -> entities.Enemy_Flag {
+	candidates: [6]entities.Enemy_Flag
+	n := 0
+	for f in ENEMY_SUBTYPE_POOL {
+		if f not_in exclude {
+			candidates[n] = f
+			n += 1
+		}
+	}
+	if n == 0 {
+		candidates = ENEMY_SUBTYPE_POOL
+		n = 6
+	}
+	return candidates[rand.int_max(n)]
+}
+
+// Sortea los flags de sub-tipo para una oleada futura, dado si es boss/bonus/mixta
+// y el/los sub-tipo(s) de la oleada inmediatamente anterior (para no repetir).
+// Bonus: todos los sub-tipos a la vez (igual que antes). Boss: un sub-tipo al azar
+// (jefes con variante: volador, veloz, blindado, invisible, etc). Normal: un
+// sub-tipo primario, más un secundario si la oleada ya es "mixta".
+roll_wave_subtype :: proc(is_boss, is_bonus, is_mixed: bool, prev: entities.Enemy_Flags) -> entities.Enemy_Flags {
+	if is_bonus {
+		result: entities.Enemy_Flags
+		for f in ENEMY_SUBTYPE_POOL { result |= {f} }
+		return result
+	}
+	if is_boss {
+		return {pick_random_subtype_excluding(prev)}
+	}
+	primary := pick_random_subtype_excluding(prev)
+	result  := entities.Enemy_Flags{primary}
+	if is_mixed {
+		secondary := pick_random_subtype_excluding(prev + result)
+		result |= {secondary}
+	}
+	return result
+}
+
 start_next_wave :: proc(app: ^entities.App_State) {
 	sim := &app.sim
 
@@ -261,7 +309,8 @@ start_next_wave :: proc(app: ^entities.App_State) {
 	sim.lookahead_bonus[0] = sim.lookahead_bonus[1]
 	sim.lookahead_bonus[1] = sim.lookahead_bonus[2]
 	next_preview_wave := sim.wave_number + 3
-	sim.lookahead_bonus[2] = (next_preview_wave % constants.BOSS_WAVE_INTERVAL != 0) && next_preview_wave >= constants.BONUS_WAVE_MIN_WAVE && rand.float32() < constants.BONUS_WAVE_CHANCE
+	next_is_boss      := next_preview_wave % constants.BOSS_WAVE_INTERVAL == 0
+	sim.lookahead_bonus[2] = !next_is_boss && next_preview_wave >= constants.BONUS_WAVE_MIN_WAVE && rand.float32() < constants.BONUS_WAVE_CHANCE
 	if is_bonus { sim.wave_flags |= {.BONUS} }
 
 	// SCOUT: el panel de próximas oleadas se muestra en el HUD (menus.odin).
@@ -269,29 +318,21 @@ start_next_wave :: proc(app: ^entities.App_State) {
 		relic_flash(sim, .SCOUT)
 	}
 
-	// Sub-types: on bonus waves all flags are active; on normal waves rotate by wave number.
-	if is_bonus {
-		sim.wave_flags |= {.GREEN, .FLYING, .BLUE, .SPLIT}
-	} else if !is_boss {
-		// Sub-tipo primario: rotación de 4 tipos
-		primary := sim.wave_number % 4
-		if primary == 1 { sim.wave_flags |= {.GREEN} }
-		if primary == 2 { sim.wave_flags |= {.FLYING} }
-		if primary == 3 { sim.wave_flags |= {.BLUE} }
-		if primary == 0 { sim.wave_flags |= {.SPLIT} }
+	// Sub-tipos (GREEN/FLYING/BLUE/SPLIT/ARMORED/INVISIBLE): sorteados con el RNG
+	// de la run (sim.seed, ver simulation_init) en vez de una rotación fija por
+	// wave_number — cada run tiene una secuencia de oleadas distinta. Se
+	// pre-rollean de a 3 oleadas por adelantado (mismo esquema que
+	// lookahead_bonus) para que SCOUT pueda previsualizar el tipo real de las
+	// próximas oleadas; roll_wave_subtype ya decide internamente si la oleada
+	// es boss (1 flag), bonus (los 6 flags) o normal/mixta (1 o 2 flags).
+	wave_subtype            := sim.lookahead_subtype[0]
+	prev_for_next_roll      := sim.lookahead_subtype[2]
+	sim.lookahead_subtype[0] = sim.lookahead_subtype[1]
+	sim.lookahead_subtype[1] = sim.lookahead_subtype[2]
+	next_is_mixed            := next_preview_wave > constants.MIXED_WAVE_MIN_WAVE
+	sim.lookahead_subtype[2]  = roll_wave_subtype(next_is_boss, sim.lookahead_bonus[2], next_is_mixed, prev_for_next_roll)
 
-		// Oleadas mixtas (>= ola MIXED_WAVE_MIN_WAVE): añadir un segundo sub-tipo.
-		// El secundario está desfasado 2 posiciones para que nunca coincida con el primario
-		// ni con el tipo de la oleada anterior/siguiente.
-		// Combos: green+blue, flying+split, blue+green, split+flying
-		if sim.wave_number > constants.MIXED_WAVE_MIN_WAVE {
-			secondary := (sim.wave_number + 2) % 4
-			if secondary == 1 { sim.wave_flags |= {.GREEN} }
-			if secondary == 2 { sim.wave_flags |= {.FLYING} }
-			if secondary == 3 { sim.wave_flags |= {.BLUE} }
-			if secondary == 0 { sim.wave_flags |= {.SPLIT} }
-		}
-	}
+	sim.wave_flags |= wave_subtype
 
 	// Record wave marker for graph
 	append(
@@ -700,12 +741,14 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			// Calculate HP multiplier
 			multiplier: f32
 			switch {
-			case is_boss:                    multiplier = constants.ENEMY_HEALTH_BOSS
-			case .BONUS  in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_BONUS
-			case .GREEN  in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_GREEN
-			case .FLYING in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_FLYING
-			case .BLUE   in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_BLUE
-			case:                            multiplier = constants.ENEMY_HEALTH_DEFAULT
+			case is_boss:                       multiplier = constants.ENEMY_HEALTH_BOSS
+			case .BONUS     in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_BONUS
+			case .GREEN     in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_GREEN
+			case .FLYING    in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_FLYING
+			case .BLUE      in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_BLUE
+			case .ARMORED   in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_ARMORED
+			case .INVISIBLE in sim.wave_flags:  multiplier = constants.ENEMY_HEALTH_INVISIBLE
+			case:                               multiplier = constants.ENEMY_HEALTH_DEFAULT
 			}
 
 			weaken := max(0.1, 1.0 - constants.WEAKEN_HP_REDUCTION * f32(sim.relic_stacks[.WEAKEN]))
@@ -721,11 +764,12 @@ spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			// Speed — bonus enemies use their own speed constant
 			speed: f32
 			switch {
-			case .BONUS  in sim.wave_flags: speed = constants.ENEMY_SPEED_BONUS
-			case .GREEN  in sim.wave_flags: speed = constants.ENEMY_SPEED_GREEN
-			case .BLUE   in sim.wave_flags: speed = constants.ENEMY_SPEED_BLUE
-			case .FLYING in sim.wave_flags: speed = constants.ENEMY_SPEED_FLYING
-			case:                           speed = constants.ENEMY_SPEED_DEFAULT
+			case .BONUS   in sim.wave_flags: speed = constants.ENEMY_SPEED_BONUS
+			case .GREEN   in sim.wave_flags: speed = constants.ENEMY_SPEED_GREEN
+			case .BLUE    in sim.wave_flags: speed = constants.ENEMY_SPEED_BLUE
+			case .FLYING  in sim.wave_flags: speed = constants.ENEMY_SPEED_FLYING
+			case .ARMORED in sim.wave_flags: speed = constants.ENEMY_SPEED_ARMORED
+			case:                            speed = constants.ENEMY_SPEED_DEFAULT
 			}
 
 			speed *= constants.ENEMY_GLOBAL_SPEED_MULTIPLIER
@@ -927,9 +971,12 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 				}
 			}
 
-			// Split: parent has .SPLIT flag; children don't inherit SPLIT, BOSS, or BONUS.
-			// Children keep sub-type flags (FLYING, GREEN, BLUE) so mixed-wave behavior is preserved.
-			if (.SPLIT in enemy.flags) && !(.BOSS in enemy.flags) {
+			// Split: parent has .SPLIT flag. Children don't inherit SPLIT, BOSS, or BONUS —
+			// un jefe con sub-tipo SPLIT también se divide, pero sus hijos son tanques
+			// grandes normales, no mini-jefes (evita un jefe que se multiplica sin fin).
+			// Children keep sub-type flags (FLYING, GREEN, BLUE, ARMORED, INVISIBLE) so
+			// mixed-wave behavior is preserved.
+			if .SPLIT in enemy.flags {
 				for _ in 0 ..< 2 {
 					child_hp    := enemy.max_hp * constants.SPLIT_HP_RATIO
 					child_flags := enemy.flags - {.SPLIT, .BOSS, .BONUS}
@@ -1047,8 +1094,12 @@ update_ice_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 	}
 	tower.timer = entities.tower_get_effective_cooldown(tower)
 
-	// Slow + damage all enemies in range (ground + flying)
+	// Slow + damage all enemies in range (ground + flying). ICE no puede
+	// detectar enemigos INVISIBLE (no está en can_target_invisible_tower).
 	for &enemy in app.sim.enemies {
+		if .INVISIBLE in enemy.flags && !can_target_invisible_tower(tower.type) {
+			continue
+		}
 		dx := (enemy.x + 0.5) - (f32(tower.c) + 0.5)
 		dy := (enemy.y + 0.5) - (f32(tower.r) + 0.5)
 		dist := math.sqrt_f32(dx * dx + dy * dy)
@@ -1061,7 +1112,7 @@ update_ice_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 			if is_crit {
 				dmg *= constants.CRIT_DAMAGE_MULTIPLIER
 			}
-			dmg = calc_damage(app, dmg, tower, &enemy)
+			dmg = calc_damage(app, dmg, tower, tower.type, &enemy)
 			enemy.hp -= dmg
 			tower.total_damage += dmg
 			spawn_damage_number(app, enemy.x + 0.5, enemy.y + 0.5, dmg, is_crit)
@@ -1116,7 +1167,8 @@ update_tesla_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 					if hit_idx[j] == i { already = true; break }
 				}
 				if already { continue }
-				e  := &sim.enemies[i]
+				e := &sim.enemies[i]
+				if .INVISIBLE in e.flags { continue } // TESLA no ve invisibles
 				dx := (e.x + 0.5) - cur_x
 				dy := (e.y + 0.5) - cur_y
 				d  := math.sqrt_f32(dx*dx + dy*dy)
@@ -1139,7 +1191,7 @@ update_tesla_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 		is_crit := rand.float32() < entities.tower_get_critical_chance(tower)
 		dmg := cur_dmg
 		if is_crit { dmg *= constants.CRIT_DAMAGE_MULTIPLIER }
-		dmg = calc_damage(app, dmg, tower, next)
+		dmg = calc_damage(app, dmg, tower, tower.type, next)
 		next.hp -= dmg
 		tower.total_damage += dmg
 		spawn_damage_number(app, next.x + 0.5, next.y + 0.5, dmg, is_crit)
@@ -1226,7 +1278,7 @@ update_laser_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, dt:
 	damage, beam_active := entities.laser_tower_update(tower, dt)
 
 	if damage > 0 && tower.target != nil {
-		scaled := calc_damage(app, damage, tower, tower.target)
+		scaled := calc_damage(app, damage, tower, tower.type, tower.target)
 		tower.target.hp -= scaled
 		tower.total_damage += scaled
 
@@ -1236,7 +1288,7 @@ update_laser_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower, dt:
 			if is_crit {
 				// Apply bonus critical damage
 				bonus := display_damage * (constants.CRIT_DAMAGE_MULTIPLIER - 1.0)
-				bonus  = calc_damage(app, bonus, tower, tower.target)
+				bonus  = calc_damage(app, bonus, tower, tower.type, tower.target)
 				tower.target.hp -= bonus
 				tower.total_damage += bonus
 			}
@@ -1346,7 +1398,12 @@ find_target :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> ^entiti
 			can_target_flying :=
 				tower.type == .ARCHER || tower.type == .MISSILE ||
 				tower.type == .LASER  || tower.type == .TESLA
-			if !(.FLYING in enemy.flags) || can_target_flying {
+			flying_ok := !(.FLYING in enemy.flags) || can_target_flying
+
+			// INVISIBLE: solo ARCHER, LASER, SNIPER pueden detectarlo
+			invisible_ok := !(.INVISIBLE in enemy.flags) || can_target_invisible_tower(tower.type)
+
+			if flying_ok && invisible_ok {
 				if n < MAX_ELIGIBLE {
 					eligible[n] = enemy
 					n += 1
@@ -1439,7 +1496,7 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 
 			if proj.target != nil {
 				// Objetivo vivo: aplica daño directo
-				scaled_dmg := calc_damage(app, damage, source_tower, proj.target)
+				scaled_dmg := calc_damage(app, damage, source_tower, proj.type, proj.target)
 				proj.target.hp -= scaled_dmg
 				if source_tower != nil { source_tower.total_damage += scaled_dmg }
 				spawn_damage_number(app, proj.target.x + 0.5, proj.target.y + 0.5, scaled_dmg, is_crit)
@@ -1456,6 +1513,9 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 					if proj.target != nil && &enemy == proj.target {
 						continue // El objetivo principal ya recibió daño directo
 					}
+					if .INVISIBLE in enemy.flags && !can_target_invisible_tower(proj.type) {
+						continue // Esta torre no puede detectar enemigos invisibles
+					}
 
 					dx := enemy.x - proj.x
 					dy := enemy.y - proj.y
@@ -1466,7 +1526,7 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 						if is_crit {
 							aoe_damage *= constants.CRIT_DAMAGE_MULTIPLIER
 						}
-						aoe_damage = calc_damage(app, aoe_damage, source_tower, &enemy)
+						aoe_damage = calc_damage(app, aoe_damage, source_tower, proj.type, &enemy)
 						enemy.hp -= aoe_damage
 						if source_tower != nil { source_tower.total_damage += aoe_damage }
 						spawn_damage_number(
@@ -1592,11 +1652,27 @@ update_formation_cache :: proc(app: ^entities.App_State) {
 
 // Aplica los modificadores globales de daño: Bloodlust, Formation, Frozen Amp.
 // source puede ser nil (p.ej. obstáculos). enemy puede ser nil (p.ej. AoE sin objetivo).
+// is_armor_piercing_tower devuelve si `t` le hace daño completo a enemigos ARMORED.
+is_armor_piercing_tower :: proc(t: constants.Tower_Type) -> bool {
+	return t == .SNIPER || t == .CANNON || t == .MORTAR
+}
+
+// can_target_invisible devuelve si `t` puede detectar/dañar enemigos INVISIBLE.
+can_target_invisible_tower :: proc(t: constants.Tower_Type) -> bool {
+	return t == .ARCHER || t == .LASER || t == .SNIPER
+}
+
+// source_type se pasa aparte de `source` porque en el splash de daño AoE la
+// torre origen puede haber sido vendida/destruida antes de que el proyectil
+// impacte (source == nil), pero el tipo de torre que la disparó sigue
+// determinando si le hace daño completo a un enemigo ARMORED (viene de
+// proj.type, que siempre sobrevive al proyectil).
 calc_damage :: proc(
-	app:    ^entities.App_State,
-	base:   f32,
-	source: ^entities.Tower,
-	enemy:  ^entities.Enemy,
+	app:         ^entities.App_State,
+	base:        f32,
+	source:      ^entities.Tower,
+	source_type: constants.Tower_Type,
+	enemy:       ^entities.Enemy,
 ) -> f32 {
 	d := base * app.sim.bloodlust_mult
 
@@ -1606,6 +1682,11 @@ calc_damage :: proc(
 
 	if enemy != nil && enemy.slow_timer > 0 && app.sim.relic_stacks[.FROZEN_AMP] > 0 {
 		d *= 1.0 + constants.FROZEN_AMP_BONUS * f32(app.sim.relic_stacks[.FROZEN_AMP])
+	}
+
+	// ARMORED: daño reducido de cualquier torre que no sea SNIPER/CANNON/MORTAR.
+	if enemy != nil && .ARMORED in enemy.flags && !is_armor_piercing_tower(source_type) {
+		d *= constants.ARMORED_DAMAGE_MULT
 	}
 
 	// WARMED_UP: bonus de daño si la torre lleva WARMED_UP_THRESHOLD segundos con objetivo
@@ -1913,11 +1994,18 @@ simulation_reset :: proc(app: ^entities.App_State) {
 	// (build_starter_deck puebla sim.cards.hand directamente con la composición garantizada)
 	entities.build_starter_deck(&app.sim, &app.meta)
 
-	// Pre-roll bonus status for the first 3 upcoming waves (waves 1, 2, 3).
+	// Pre-roll bonus status + sub-type for the first 3 upcoming waves (waves 1, 2, 3).
+	prev_subtype: entities.Enemy_Flags
 	for i in 0 ..< 3 {
-		wave_n := i32(i + 1)
+		wave_n  := i32(i + 1)
 		is_boss := wave_n % constants.BOSS_WAVE_INTERVAL == 0
-		app.sim.lookahead_bonus[i] = !is_boss && wave_n >= constants.BONUS_WAVE_MIN_WAVE && rand.float32() < constants.BONUS_WAVE_CHANCE
+		is_bonus := !is_boss && wave_n >= constants.BONUS_WAVE_MIN_WAVE && rand.float32() < constants.BONUS_WAVE_CHANCE
+		app.sim.lookahead_bonus[i] = is_bonus
+
+		is_mixed := wave_n > constants.MIXED_WAVE_MIN_WAVE
+		subtype  := roll_wave_subtype(is_boss, is_bonus, is_mixed, prev_subtype)
+		app.sim.lookahead_subtype[i] = subtype
+		prev_subtype = subtype
 	}
 }
 

@@ -160,6 +160,87 @@ algo esté pendiente — permite vender la carta armada misma (cancela y
 reembolsa) pero no otra. No relajar ese guard sin resolver el problema de
 raíz (usar un handle estable en vez de un índice crudo).
 
+## Sistema de oleadas y enemigos
+
+`Enemy_Flag` (`entities/enemy.odin`) es un `bit_set` de 8 miembros (exacto
+para el `u8` que lo respalda — no queda lugar para un noveno flag sin
+cambiar el tipo base): `BOSS, GREEN, BLUE, FLYING, SPLIT, BONUS, ARMORED,
+INVISIBLE`. Un enemigo puede combinar varios (oleadas mixtas, jefes con
+variante, oleadas bonus con los 6 sub-tipos a la vez).
+
+### Sub-tipos sorteados por seed (no determinísticos)
+
+Antes, el sub-tipo de cada oleada salía de `wave_number % 4` — la secuencia
+de oleadas era idéntica en todas las runs. Ahora `roll_wave_subtype`
+(`systems/simulation.odin`) sortea con `core:math/rand`, que ya está
+re-seedeado por run (`app.sim.seed = rand.uint64(); rand.reset(...)` en
+`simulation_init`) — cada run tiene su propia secuencia, reproducible para
+ese seed.
+
+- **Pool de sub-tipos**: `ENEMY_SUBTYPE_POOL` = `{GREEN, FLYING, BLUE,
+  SPLIT, ARMORED, INVISIBLE}` (6 flags). Bonus usa los 6 a la vez; boss
+  sortea 1 (su "variante"); normal/mixta sortea 1 primario y, desde
+  `MIXED_WAVE_MIN_WAVE`, un secundario.
+- `pick_random_subtype_excluding(prev)` evita repetir el/los flag(s) de la
+  oleada inmediatamente anterior (fallback al pool completo si `prev` lo
+  cubre todo, no debería pasar con 1-2 excluidos).
+- **Lookahead pre-rolleado**: igual que ya hacía `sim.lookahead_bonus[3]`
+  para la reliquia SCOUT, ahora `sim.lookahead_subtype: [3]Enemy_Flags`
+  guarda el sub-tipo de las próximas 3 oleadas, roleado con 3 de
+  anticipación en `start_next_wave` (slot 0 = próxima oleada, shift al
+  consumir). **Necesario** porque SCOUT necesita mostrar el tipo real de
+  oleadas futuras antes de que existan — ya no se puede recalcular a partir
+  de `wave_number` solo. `simulation_init` pre-rollea las primeras 3 al
+  arrancar la run (las oleadas 1-3 nunca son boss/bonus/mixtas, así que ese
+  pre-roll es más simple).
+- El panel de próximas oleadas de SCOUT (`systems/menus.odin`,
+  `render_game_ui`) lee `sim.lookahead_subtype[i]` directo — **no**
+  recalcula con una fórmula. `enemy_subtype_color`/`enemy_subtype_label`
+  (`systems/rendering.odin`) centralizan color/nombre por flag.
+
+**Trampa:** si se agrega un sub-tipo nuevo, sumarlo a `ENEMY_SUBTYPE_POOL`
+alcanza para que entre al sorteo — pero también hay que agregarle color
+(`enemy_get_color`, `entities/enemy.odin`), tamaño si aplica
+(`enemy_get_size`), entrada en `enemy_subtype_color`/`enemy_subtype_label`,
+y decidir si necesita multiplicador de HP/velocidad propio en
+`spawn_enemies` (`systems/simulation.odin`) — son switches por prioridad
+(el primer caso que matchea gana), no se combinan aditivamente.
+
+### Jefes con variante (BOSS + sub-tipo)
+
+Antes, todo boss era `.BOSS` solo (sin combinar con GREEN/FLYING/BLUE/
+SPLIT) — ahora `roll_wave_subtype` siempre les asigna una variante del
+mismo pool de 6. Ejemplos: jefe volador (solo antiaéreo lo alcanza), jefe
+que se divide al morir, jefe blindado, jefe invisible.
+
+**Trampa ya resuelta:** el código de split-on-death excluía explícitamente
+a los bosses (`!(.BOSS in enemy.flags)`), asumiendo que un boss nunca
+tendría `.SPLIT`. Con jefes con variante eso ya no vale — se sacó esa
+exclusión. Los hijos de un boss+SPLIT no heredan `BOSS`/`SPLIT`/`BONUS`
+(quedan como tanques grandes normales, no mini-jefes que se multiplican).
+
+### ARMORED e INVISIBLE
+
+- **ARMORED**: solo `SNIPER`, `CANNON`, `MORTAR` (`is_armor_piercing_tower`,
+  `systems/simulation.odin`) le hacen daño completo — el resto de las
+  torres multiplican su daño por `constants.ARMORED_DAMAGE_MULT` (0.35).
+  Esto vive en `calc_damage`, que ahora recibe un parámetro extra
+  `source_type: constants.Tower_Type` **separado** del puntero `source:
+  ^Tower` — en el splash de daño AoE la torre origen puede haber sido
+  vendida antes de que el proyectil impacte (`source == nil`), pero
+  `proj.type` (guardado en el proyectil, no en la torre) sigue siendo
+  confiable. Los 6 call-sites de `calc_damage` pasan `tower.type` o
+  `proj.type` según corresponda.
+- **INVISIBLE**: solo `ARCHER`, `LASER`, `SNIPER`
+  (`can_target_invisible_tower`) pueden detectarlo/dañarlo. Filtrado en
+  **todos** los sitios que seleccionan o dañan enemigos, no solo
+  `find_target`: `update_ice_tower` (pulso AoE), el chain-hop de
+  `update_tesla_tower` (no pasa por `find_target` para los eslabones 2+),
+  y el loop de splash de proyectiles con `proj.aoe > 0`. Si se agrega un
+  nuevo lugar que itere `sim.enemies` para aplicar daño/efectos, hay que
+  repetir el chequeo `.INVISIBLE in enemy.flags && !can_target_invisible_tower(...)`.
+  Visualmente se dibuja con alpha reducido (`constants.ENEMY_INVISIBLE_ALPHA`).
+
 ## Sistema de UI blocking
 
 `ui_blocks_clear()` se llama al inicio de cada frame desde `render_game`.

@@ -318,80 +318,71 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		slot_w    := c.width / f32(scout_slots)
 		cy        := c.y + c.height / 2
 
-		// Helper: nombre del sub-tipo para el tooltip del panel de próximas oleadas
-		wave_type_label := proc(green, flying, blue, split, boss, bonus: bool) -> string {
-			switch {
-			case boss:   return constants.get_text("ENEMY_TYPE_BOSS")
-			case bonus:  return constants.get_text("ENEMY_TYPE_BONUS")
-			case green:  return constants.get_text("ENEMY_TYPE_FAST")
-			case flying: return constants.get_text("ENEMY_TYPE_FLYING")
-			case blue:   return constants.get_text("ENEMY_TYPE_HEALER")
-			case split:  return constants.get_text("ENEMY_TYPE_SPLITTER")
-			case:        return constants.get_text("ENEMY_TYPE_NORMAL")
-			}
-		}
-
 		for i in 0 ..< scout_slots {
-			wave_n    := base_wave + 1 + i32(i)
-			cx        := c.x + (f32(i) + 0.5) * slot_w
+			wave_n := base_wave + 1 + i32(i)
+			cx     := c.x + (f32(i) + 0.5) * slot_w
 
-			is_boss   := wave_n % constants.BOSS_WAVE_INTERVAL == 0
-			is_bonus  := !is_boss && app.sim.lookahead_bonus[i]
-			primary   := wave_n % 4
-			is_green  := !is_boss && !is_bonus && primary == 1
-			is_flying := !is_boss && !is_bonus && primary == 2
-			is_blue   := !is_boss && !is_bonus && primary == 3
-			is_split  := !is_boss && !is_bonus && primary == 0
-
-			// Oleada mixta: secundario desfasado 2 (mismo cálculo que start_next_wave)
+			is_boss  := wave_n % constants.BOSS_WAVE_INTERVAL == 0
+			is_bonus := !is_boss && app.sim.lookahead_bonus[i]
 			is_mixed := !is_boss && !is_bonus && wave_n > constants.MIXED_WAVE_MIN_WAVE
-			sec_green, sec_flying, sec_blue, sec_split := false, false, false, false
-			if is_mixed {
-				secondary  := (wave_n + 2) % 4
-				sec_green   = secondary == 1
-				sec_flying  = secondary == 2
-				sec_blue    = secondary == 3
-				sec_split   = secondary == 0
+
+			// Sub-tipo(s) pre-rolleados para esta oleada (ver roll_wave_subtype en
+			// simulation.odin) — para boss es un único flag ("variante" del jefe);
+			// para oleadas normales/mixtas, hasta 2 (primario + secundario); para
+			// bonus, lookahead_subtype tiene los 6 pero acá se ignora (se muestra
+			// como categoría "Bonus" propia, no como composición de sub-tipos).
+			subtype := app.sim.lookahead_subtype[i]
+			flags_in_order: [6]entities.Enemy_Flag
+			nflags := 0
+			for f in ENEMY_SUBTYPE_POOL {
+				if f in subtype {
+					flags_in_order[nflags] = f
+					nflags += 1
+				}
 			}
 
-			// Color primario
-			wave_color: raylib.Color
+			wave_color    := constants.COLOR_ENEMY
+			sub_dot_color : raylib.Color
+			has_sub_dot   := false
+			primary_name  := constants.get_text("ENEMY_TYPE_NORMAL")
+
 			switch {
-			case is_boss:   wave_color = constants.COLOR_ENEMY_BOSS
-			case is_bonus:  wave_color = constants.COLOR_ENEMY_BONUS
-			case is_green:  wave_color = constants.COLOR_ENEMY_GREEN
-			case is_flying: wave_color = constants.COLOR_ENEMY_FLYING
-			case is_blue:   wave_color = constants.COLOR_ENEMY_BLUE
-			case is_split:  wave_color = constants.COLOR_ENEMY_SPLIT
-			case:           wave_color = constants.COLOR_ENEMY
+			case is_boss:
+				wave_color   = constants.COLOR_ENEMY_BOSS
+				primary_name = constants.get_text("ENEMY_TYPE_BOSS")
+				if nflags > 0 {
+					sub_dot_color = enemy_subtype_color(flags_in_order[0])
+					has_sub_dot   = true
+				}
+			case is_bonus:
+				wave_color   = constants.COLOR_ENEMY_BONUS
+				primary_name = constants.get_text("ENEMY_TYPE_BONUS")
+			case nflags > 0:
+				wave_color   = enemy_subtype_color(flags_in_order[0])
+				primary_name = enemy_subtype_label(flags_in_order[0])
+				if is_mixed && nflags > 1 {
+					sub_dot_color = enemy_subtype_color(flags_in_order[1])
+					has_sub_dot   = true
+				}
 			}
 
-			// Color secundario (solo en oleadas mixtas)
-			sec_color: raylib.Color
-			switch {
-			case sec_green:  sec_color = constants.COLOR_ENEMY_GREEN
-			case sec_flying: sec_color = constants.COLOR_ENEMY_FLYING
-			case sec_blue:   sec_color = constants.COLOR_ENEMY_BLUE
-			case sec_split:  sec_color = constants.COLOR_ENEMY_SPLIT
+			// Tooltip: nombre primario (+ secundario/variante si hay punto secundario)
+			tooltip := primary_name
+			if has_sub_dot {
+				sub_idx  := 0 if is_boss else 1
+				sub_name := enemy_subtype_label(flags_in_order[sub_idx])
+				tooltip   = fmt.tprintf("%s + %s", primary_name, sub_name)
 			}
 
-			// Tooltip: nombre del tipo primario (y secundario si es oleada mixta)
-			primary_name := wave_type_label(is_green, is_flying, is_blue, is_split, is_boss, is_bonus)
-			tooltip: string
-			if is_mixed {
-				sec_name := wave_type_label(sec_green, sec_flying, sec_blue, sec_split, false, false)
-				tooltip = fmt.tprintf("%s + %s", primary_name, sec_name)
-			} else {
-				tooltip = primary_name
-			}
-
-			// Ícono principal
-			render_enemy_shape(cx, cy, icon_r, wave_color, is_flying, is_boss)
+			// Ícono principal — la forma "flying" solo aplica si es el sub-tipo
+			// primario de una oleada normal (para boss/bonus la forma es fija).
+			is_flying_shape := !is_boss && !is_bonus && nflags > 0 && flags_in_order[0] == .FLYING
+			render_enemy_shape(cx, cy, icon_r, wave_color, is_flying_shape, is_boss)
 
 			// Punto secundario (esquina inferior-derecha del ícono principal)
-			if is_mixed {
+			if has_sub_dot {
 				sec_r : f32 = 4
-				raylib.DrawCircle(i32(cx + icon_r - 1), i32(cy + icon_r - 1), sec_r, sec_color)
+				raylib.DrawCircle(i32(cx + icon_r - 1), i32(cy + icon_r - 1), sec_r, sub_dot_color)
 				raylib.DrawCircleLines(i32(cx + icon_r - 1), i32(cy + icon_r - 1), sec_r, raylib.ColorAlpha(raylib.BLACK, 0.4))
 			}
 
@@ -1443,11 +1434,13 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 			// Pick color
 			color: raylib.Color
 			switch {
-			case .BOSS   in wm.flags: color = constants.COLOR_ENEMY_BOSS
-			case .GREEN  in wm.flags: color = constants.ENEMY_GREEN
-			case .BLUE   in wm.flags: color = constants.ENEMY_BLUE
-			case .FLYING in wm.flags: color = constants.COLOR_ENEMY_FLYING
-			case:                     color = constants.COLOR_ENEMY
+			case .BOSS      in wm.flags: color = constants.COLOR_ENEMY_BOSS
+			case .GREEN     in wm.flags: color = constants.ENEMY_GREEN
+			case .BLUE      in wm.flags: color = constants.ENEMY_BLUE
+			case .FLYING    in wm.flags: color = constants.COLOR_ENEMY_FLYING
+			case .ARMORED   in wm.flags: color = constants.COLOR_ENEMY_ARMORED
+			case .INVISIBLE in wm.flags: color = constants.COLOR_ENEMY_INVISIBLE
+			case:                        color = constants.COLOR_ENEMY
 			}
 
 			// Vertical tick on graph
