@@ -81,6 +81,9 @@ render_ui :: proc(app: ^entities.App_State) {
 				app.meta_dirty = true
 				app.campaign_loaded = false  // forzar reload de campaign.bin
 				entities.add_toast(app, "[DEV] Meta reseteada", .INFO, 2.0)
+			case .PAUSE_TO_MENU:
+				simulation_set_pause(app, false)
+				entities.app_set_state(app, .MENU)
 			case .NONE:
 			}
 		case .CANCELLED:
@@ -1297,8 +1300,11 @@ render_pause_menu :: proc(app: ^entities.App_State) {
 		menu_txt,
 		{f32(screen_width / 2 - menu_w / 2), f32(menu_y), f32(menu_w), f32(btn_h)},
 	) {
-		simulation_set_pause(app, false)
-		entities.app_set_state(app, .MENU)
+		app.confirm_modal = entities.Confirm_Modal{
+			active = true,
+			text   = "¿Volver al menú principal?\nPerderás el progreso de este mapa.",
+			action = .PAUSE_TO_MENU,
+		}
 	}
 }
 

@@ -250,7 +250,8 @@ Modal_Action :: enum {
 	NEW_GAME,
 	RESTART_RUN,
 	EXIT_GAME,
-	RESET_META,  // Wipe progresión (cristales + unlocks + campaign), keep current state
+	RESET_META,   // Wipe progresión (cristales + unlocks + campaign), keep current state
+	PAUSE_TO_MENU, // Salir al menú principal desde pausa — pierde el progreso del mapa actual
 }
 
 Confirm_Modal :: struct {
