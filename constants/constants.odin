@@ -808,6 +808,7 @@ UI_TOOLTIP_OFFSET     :: i32(8)    // Distance above the trigger area
 UI_TOOLTIP_SEGMENTS   :: f32(8)
 UI_TOOLTIP_ROUNDNESS  :: f32(0.12)
 UI_TOOLTIP_SHADOW_OFF :: f32(4)
+UI_TOOLTIP_MAX_TEXT_W :: f32(220)  // Ancho máximo de línea antes de wrappear a multilínea
 
 UI_TOAST_FONT_SIZE     :: i32(16)
 UI_TOAST_PADDING       :: i32(12)

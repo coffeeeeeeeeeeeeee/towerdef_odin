@@ -65,6 +65,27 @@ render_label_tooltip :: proc(app: ^entities.App_State, label: string, trigger_re
 	}
 }
 
+// Parte `text` en líneas que no superen `max_width` al medirse con `font`/`font_size`,
+// partiendo por espacios (greedy word-wrap). Usa context.temp_allocator: las líneas
+// resultantes solo son válidas durante el frame actual.
+wrap_text_lines :: proc(font: raylib.Font, text: string, font_size: f32, max_width: f32) -> []string {
+	words := strings.split(text, " ", context.temp_allocator)
+	lines := make([dynamic]string, context.temp_allocator)
+	line_start := 0
+	for i in 1 ..= len(words) {
+		candidate := strings.join(words[line_start:i], " ", context.temp_allocator)
+		w := raylib.MeasureTextEx(font, strings.clone_to_cstring(candidate, context.temp_allocator), font_size, 0).x
+		if w > max_width && i - 1 > line_start {
+			append(&lines, strings.join(words[line_start:i-1], " ", context.temp_allocator))
+			line_start = i - 1
+		}
+	}
+	if line_start < len(words) {
+		append(&lines, strings.join(words[line_start:], " ", context.temp_allocator))
+	}
+	return lines[:]
+}
+
 // Encola un tooltip de carta para que se dibuje al final del frame.
 render_card_tooltip :: proc(app: ^entities.App_State, card: entities.Card, trigger_rect: raylib.Rectangle) {
 	if app.pending_tooltip.kind != .NONE { return }
@@ -110,13 +131,17 @@ render_tooltip_layer :: proc(app: ^entities.App_State) {
 		LINE_H    : f32 = FONT_SIZE + 4
 
 		// ── Collect tooltip content ─────────────────────────────────────────
+		// push() wrappea `text` a multilínea si excede UI_TOOLTIP_MAX_TEXT_W
+		// (descripciones largas de torres/reliquias, p. ej. CRANE_KICK, CRYPTOBRO).
 		name   := entities.card_name(card)
-		lines  : [4]string
+		lines  : [8]string
 		n      := 0
-		push :: proc(lines: ^[4]string, n: ^int, text: string) {
-			if n^ >= 4 { return }
-			lines[n^] = text
-			n^ += 1
+		push :: proc(lines: ^[8]string, n: ^int, text: string) {
+			for line in wrap_text_lines(constants.game_fonts.regular, text, f32(constants.UI_TOOLTIP_FONT_SIZE), constants.UI_TOOLTIP_MAX_TEXT_W) {
+				if n^ >= 8 { return }
+				lines[n^] = line
+				n^ += 1
+			}
 		}
 
 		#partial switch card.kind {
@@ -159,18 +184,19 @@ render_tooltip_layer :: proc(app: ^entities.App_State) {
 			}
 		}
 
-		// ── Layout: name + rarity badge + separator + content lines ─────────
+		// ── Layout: name + rarity badge (misma fila, badge a la derecha) ─────
 		NAME_SIZE  : f32 = FONT_SIZE + 5
 		BEDGE_H    : f32 = 20   // altura del badge de rareza (mismo que render_rarity)
-		SEP_H      : f32 = 8    // espacio entre badge y primera línea de contenido
+		TITLE_ROW_H: f32 = max(NAME_SIZE, BEDGE_H)
+		SEP_H      : f32 = 8    // espacio entre la fila de título y la primera línea de contenido
 		rarity     := entities.card_rarity(card)
 		rarity_col := rarity_border_color(rarity)
 		name_cstr  := strings.clone_to_cstring(name, context.temp_allocator)
 		name_w     := raylib.MeasureTextEx(constants.game_fonts.bold, name_cstr, NAME_SIZE, 0).x
+		badge_w    := rarity_badge_width(rarity)
 
-		// Ancho mínimo para que el badge de rareza quepa cómodo
-		MIN_BADGE_W : f32 = 80
-		max_w : f32 = max(name_w, MIN_BADGE_W)
+		TITLE_GAP : f32 = 10  // separación mínima entre nombre y badge
+		max_w : f32 = name_w + TITLE_GAP + badge_w
 		for i in 0 ..< n {
 			w := raylib.MeasureTextEx(constants.game_fonts.regular,
 				strings.clone_to_cstring(lines[i], context.temp_allocator), FONT_SIZE, 0).x
@@ -178,24 +204,25 @@ render_tooltip_layer :: proc(app: ^entities.App_State) {
 		}
 
 		tip_w  := max_w + PAD * 2
-		tip_h  := NAME_SIZE + 4 + BEDGE_H + SEP_H + f32(n) * LINE_H + PAD * 2
+		tip_h  := TITLE_ROW_H + SEP_H + f32(n) * LINE_H + PAD * 2
 		tip_x  := tip.trigger.x + tip.trigger.width/2 - tip_w/2
 		tip_y  := tip.trigger.y - tip_h - f32(constants.UI_TOOLTIP_OFFSET)
 		r      := render_tooltip({tip_x, tip_y, tip_w, tip_h})
 
-		// Nombre (bold, color de rareza)
+		// Nombre (bold, color de rareza) — alineado verticalmente con el badge
+		name_y := r.y + PAD + (TITLE_ROW_H - NAME_SIZE) / 2
 		raylib.DrawTextEx(
 			constants.game_fonts.bold, name_cstr,
-			{r.x + PAD, r.y + PAD},
+			{r.x + PAD, name_y},
 			NAME_SIZE, 0, rarity_col,
 		)
 
-		// Badge de rareza (alineado a la derecha bajo el nombre)
-		badge_y := r.y + PAD + NAME_SIZE + 4
-		render_rarity(rarity, r.x, badge_y, r.width)
+		// Badge de rareza — misma fila que el nombre, alineado a la derecha
+		badge_y := r.y + PAD + (TITLE_ROW_H - BEDGE_H) / 2
+		render_rarity(rarity, r.x + PAD, badge_y, r.width - PAD * 2, true)
 
 		// Separador
-		sep_y := badge_y + BEDGE_H + SEP_H * 0.4
+		sep_y := r.y + PAD + TITLE_ROW_H + SEP_H * 0.4
 		raylib.DrawLineEx({r.x + PAD, sep_y}, {r.x + r.width - PAD, sep_y}, 1, raylib.Color{180, 180, 180, 160})
 
 		// Líneas de contenido (desc + stats)
@@ -1277,19 +1304,34 @@ rarity_card_bg :: proc(rarity: constants.Card_Rarity) -> raylib.Color {
 
 // Renderiza una etiqueta de rareza al pie de una carta.
 // badge_y: coordenada Y de la parte superior del badge.
-render_rarity :: proc(rarity: constants.Card_Rarity, card_x, badge_y, card_w: f32, right_align: bool = false) {
+rarity_label_text :: proc(rarity: constants.Card_Rarity) -> string {
+	switch rarity {
+	case .COMMON:   return constants.get_text("RARITY_COMMON")
+	case .UNCOMMON: return constants.get_text("RARITY_UNCOMMON")
+	case .RARE:     return constants.get_text("RARITY_RARE")
+	case .EPIC:     return constants.get_text("RARITY_EPIC")
+	case .UNIQUE:   return constants.get_text("RARITY_UNIQUE")
+	}
+	return ""
+}
+
+// Ancho del badge de rareza tal como lo dibuja render_rarity — permite medir
+// antes de layoutear sin duplicar el cálculo.
+rarity_badge_width :: proc(rarity: constants.Card_Rarity) -> f32 {
+	PAD     : f32 = 8
+	FONT_SZ : f32 = 11
+	label   := rarity_label_text(rarity)
+	text_w  := raylib.MeasureTextEx(constants.game_fonts.semibold,
+		strings.clone_to_cstring(label, context.temp_allocator), FONT_SZ, 0).x
+	return text_w + PAD * 2
+}
+
+render_rarity :: proc(rarity: constants.Card_Rarity, card_x, badge_y, card_w: f32, right_align: bool = false) -> f32 {
 	BADGE_H  : f32 = 20
 	PAD      : f32 = 8
 	FONT_SZ  : f32 = 11
 
-	label : string
-	switch rarity {
-	case .COMMON:   label = constants.get_text("RARITY_COMMON")
-	case .UNCOMMON: label = constants.get_text("RARITY_UNCOMMON")
-	case .RARE:     label = constants.get_text("RARITY_RARE")
-	case .EPIC:     label = constants.get_text("RARITY_EPIC")
-	case .UNIQUE:   label = constants.get_text("RARITY_UNIQUE")
-	}
+	label := rarity_label_text(rarity)
 
 	text_w := raylib.MeasureTextEx(constants.game_fonts.semibold,
 		strings.clone_to_cstring(label, context.temp_allocator), FONT_SZ, 0).x
@@ -1307,6 +1349,7 @@ render_rarity :: proc(rarity: constants.Card_Rarity, card_x, badge_y, card_w: f3
 		{badge_x + PAD, badge_y + (BADGE_H - FONT_SZ) / 2},
 		FONT_SZ, 0, raylib.WHITE,
 	)
+	return badge_w
 }
 
 // =============================================================================
