@@ -160,6 +160,32 @@ algo esté pendiente — permite vender la carta armada misma (cancela y
 reembolsa) pero no otra. No relajar ese guard sin resolver el problema de
 raíz (usar un handle estable en vez de un índice crudo).
 
+## Biblioteca de cartas (`Game_State.LIBRARY`)
+
+`render_card_library_ui` (`systems/menus.odin`), accesible desde el botón
+"Biblioteca de Cartas" del menú principal. Catálogo de **todas** las torres
+(`ALL_TOWERS`, 9) y reliquias (`entities.RELIC_SPECS`) del juego — no
+incluye obstáculos. `library_row_cards(rarity)` arma cada fila (torres
+primero, después reliquias, en su orden de declaración) en un array fijo
+`[16]Card` — 16 alcanza de sobra (la fila más grande hoy, UNCOMMON, tiene
+10). Una fila por rareza (`COMMON..UNIQUE`), con scroll vertical (mismo
+patrón que `render_progression_ui`: `library_scroll`, clamp contra
+`content_bottom`).
+
+Cada fila reusa **el mismo mecanismo de abanico** que `render_card_hand`
+(overlap por `step`/`card_draw_x`, dos pasadas — todas menos la hovereada,
+después la hovereada levantada `hover_lift` px y sin overlap) en vez de
+inventar un layout nuevo. Diferencia con la mano: usa casi todo el ancho de
+pantalla (`max_w := sw * 0.92`, la mano usa 60% para dejarle sitio a otros
+paneles del HUD que acá no existen).
+
+`library_card_unlocked(app, card)` decide gris/color pasando el booleano de
+"desbloqueado" al parámetro `can_afford` de `render_card` — ese parámetro
+originalmente significa "¿el jugador puede pagarlo?" (uso en el shop), pero
+la lógica de grayscale que dispara (`!can_afford → escala de grises`) es
+exactamente la que hace falta acá, así que se reusa tal cual en vez de
+tocar `render_card`.
+
 ## Sistema de oleadas y enemigos
 
 `Enemy_Flag` (`entities/enemy.odin`) es un `bit_set` de 8 miembros (exacto
@@ -299,6 +325,53 @@ sus vecinos ya resueltos en `path_bridge_tiles` (poblado durante
 recorrer la grilla ni recalcular `is_path_like`. Los railings se dibujan
 **después** de aplicar el shader, sin blur (bordes nítidos a propósito).
 
+### ⚠️ Trampa: `BeginTextureMode` no anida en raylib
+
+`EndTextureMode()` siempre vuelve al framebuffer por defecto (pantalla), **no**
+a un "anterior" en una pila — no existe tal pila. Si envolvés una secuencia de
+render con `BeginTextureMode(mi_textura)` y en el medio se llama a algo que
+internamente hace su propio `BeginTextureMode(...)/EndTextureMode()` (como
+`water_render_mask` o `path_render_mask`), todo lo que se dibuje **después**
+de ese `EndTextureMode()` interno se va derecho a pantalla en vez de a
+`mi_textura` — la captura queda cortada a la mitad, sin error ni warning.
+
+**Fix estándar** (ya usado dos veces: `render_map_preview_to_texture` y
+`Pause_Blur`, ver más abajo): precomputar `water_render_mask`/
+`path_render_mask` **antes** de entrar al `BeginTextureMode` propio, y
+llamar a `render_map(app, m, for_preview = true)` para que
+`render_water_layer`/`render_path_layer` solo apliquen la máscara ya
+calculada en vez de recomputarla (evitando el `BeginTextureMode` interno).
+Efecto colateral de `for_preview = true`: también saltea el overlay de
+pasto (`render_grass_overlay`) — aceptable si lo que se está capturando va
+a quedar blureado/tintado igual (como el vidrio de pausa), no si necesita
+verse nítido.
+
+## Vidrio esmerilado de la pantalla de Pausa (`Pause_Blur`)
+
+`assets/blur.glsl`: blur separable de 1D (tent filter, radio fijo `R=6` en
+el shader) en 2 pasadas — horizontal y vertical — controladas por el
+uniform `direction`. `constants.PAUSE_BLUR_SPREAD` (3.0) multiplica el
+texel step para separar las muestras y que el blur se note a simple vista
+(6 texels de radio en una pantalla de 1920px sería casi imperceptible).
+
+Flujo en `render_game` (`systems/rendering.odin`) cuando
+`app.state == .PAUSED`:
+1. Precomputar máscaras de agua/camino (ver trampa de arriba).
+2. `BeginTextureMode(pause_blur.capture_tex)` → el mundo se renderiza ahí
+   en vez de a pantalla, llamando a `render_map(..., for_preview = true)`.
+3. `EndTextureMode()`, restaurar `camera_offset_x/y` (post screen-shake).
+4. `pause_blur_draw()`: pasada horizontal `capture_tex → blur_tex`, pasada
+   vertical `blur_tex → pantalla`, y encima un rect semitransparente
+   (`constants.PAUSE_GLASS_TINT`) — el efecto "vidrio esmerilado".
+5. `render_ui` (el menú de pausa) se dibuja después, sin blur.
+
+Se recalcula todo esto **cada frame** mientras está pausado, no se cachea
+un solo capture — el mundo está congelado (`simulation_update` no corre en
+pausa) así que el resultado es idéntico frame a frame, pero cachear traería
+complejidad de invalidación (resize de ventana, etc.) sin beneficio real:
+redirigir el render normal a una textura + 2 pasadas de blur no es más caro
+que lo que ya se dibuja hoy en pantalla.
+
 ## Fondo animado (nebula.glsl)
 
 Desactivado por ahora vía `constants.NEBULA_BACKGROUND_ENABLED :: false`
@@ -325,6 +398,69 @@ rareza comparten la misma fila (badge alineado a la derecha vía
 badge sin dibujarlo, para poder calcular el ancho del tooltip antes de
 layoutear.
 
+## Visual juice (partículas, screen shake, recoil, squash, ballesta)
+
+Todo 100% procedural/código — el juego no importa sprites. Las primeras
+cuatro piezas comparten la misma forma: un campo de estado que decae con
+el tiempo + un hook en el momento del evento que lo dispara.
+
+- **Chispas de impacto/muerte** (`entities/explosion.odin`: `Hit_Particle`,
+  `hit_particle_init/update`; spawn vía `spawn_hit_particles`, `systems/simulation.odin`):
+  burst de círculos que salen disparados y frenan por drag exponencial.
+  Se llama en cada instancia de daño "discreta" (pulso de ICE, eslabón de
+  TESLA, impacto directo de proyectil, cada víctima del splash de AoE, y el
+  bloque `should_show` throttled del LASER) — **no** en el tick continuo
+  crudo del LASER (`calc_damage` corre ahí cada frame; spawnear ahí
+  saturaría de partículas). Ráfaga más grande (`HIT_PARTICLE_COUNT_DEATH`)
+  al morir un enemigo.
+- **Screen shake** (`app.screen_shake_trauma`, `[0,1]`, decae en
+  `simulation_update`; sumado vía `add_screen_shake`): se dispara solo en
+  `spawn_explosion` (todas las AoE de CANNON/MISSILE/MORTAR, escalado por
+  radio) y en la muerte de un boss. El offset visual es determinístico
+  (`sin`/`cos` del tiempo, no random puro por frame — se ve suave, no
+  "buzz") y se aplica temporalmente a `app.camera_offset_x/y` **solo**
+  durante el bloque de render del mundo en `render_game`, restaurado antes
+  de `render_ui` — la UI nunca tiembla.
+- **Recoil de torres** (`tower.recoil`, `[0,1]`, decae en `update_towers`):
+  se pone en `1.0` al disparar (proyectiles y MORTAR, no LASER/TESLA/ICE/
+  ENHANCE que no tienen ese momento discreto). `draw_tower_tile` retrae
+  solo el barril (no la base) a lo largo de `-cos(angle),-sin(angle)` — el
+  MORTAR ignora `angle` (dispara siempre hacia arriba) así que su recoil va
+  derecho hacia abajo.
+- **Ballesta de ARCHER** (`draw_tower_components_archer`,
+  `systems/rendering.odin`): antes era una barra rectangular genérica sin
+  terminar. Ahora es riel + arco: el riel ("palito") es el mismo
+  `DrawRectanglePro` original, apuntando hacia adelante desde el centro de
+  la torre. El arco va montado cerca de la punta del riel (`mount`, a
+  `cs*0.30` de distancia), dibujado con dos
+  `raylib.DrawSplineSegmentBezierQuadratic` (mount → control que bulge
+  hacia adelante → punta) más una cuerda de dos segmentos punta→mount→punta.
+  El `recoil` de la torre (mismo campo que el punto anterior, ya retrae
+  todo el conjunto vía el offset de `draw_tower_tile`) además aplica un
+  **stretch anisotrópico** al arco, centrado en `mount`: ensancha en X
+  (`sx = 1+stretch`) y aplana la profundidad del bulge en Y
+  (`sy = 1-stretch`, `TOWER_ARCHER_BOW_STRETCH` = 0.45 máx) — simula el arco
+  liberando tensión al disparar, vuelve a su curva de descanso a medida que
+  decae. Todos los puntos están en espacio local con "adelante = -Y" (misma
+  convención que el resto de los barriles) y se rotan a mano con `rot_pt`
+  porque las specs de spline de raylib no tienen una variante con matriz de
+  rotación como sí tiene `DrawRectanglePro`.
+  **Trampa ya pisada:** la cuerda usaba `TOWER_SHADOW` (negro alpha=30,
+  pensado para sombras) y quedaba invisible — tiene su propio color opaco
+  (`string_color`, beige claro) definido inline.
+- **Squash de enemigos** (`enemy.hit_squash`, `[0,1]`, decae en
+  `update_enemies`; disparado dentro de `calc_damage` — corre en **todo**
+  hit, incluido el tick continuo del láser, a propósito: es barato y
+  representa "sigue bajo fuego"): `render_enemy_shape` ahora acepta
+  `squash` y deforma anisotrópicamente (ancho×(1+squash), alto×(1-squash))
+  las 3 formas base — círculo (ahora `DrawEllipse` en vez de `DrawCircle`),
+  cuadrado de boss, triángulo de flying.
+
+**Trampa:** los 4 dynamic arrays de efectos (`explosions`, `damage_numbers`,
+`hit_particles`, `glow_particles`, ...) se liberan en `simulation_cleanup` —
+si se agrega un array nuevo de este estilo, agregar su `delete()` ahí
+también (se detectó y arregló un leak real: `hit_particles` no se liberaba).
+
 ## Obstáculos en el camino
 
 - `obstacle_bar_dims(m, row, col, cs)` determina dimensiones de la barrera
@@ -334,6 +470,50 @@ layoutear.
   esquina o bifurcación del camino; ahí no se pueden colocar obstáculos (el
   ghost se pinta rojo con X). Criterio: ≥3 vecinos path = junction, 2
   vecinos no opuestos = corner.
+
+## Modal de confirmación Sí/No (`Confirm_Modal`)
+
+`app.confirm_modal` (`entities/app.odin`, `Confirm_Modal{active, text, action}`)
+es el mecanismo genérico para "¿estás seguro?" — `Modal_Action` (enum) más un
+`switch` en `render_ui` (`systems/menus.odin`) que ejecuta la acción real
+cuando el modal devuelve `.CONFIRMED`. Patrón para agregar una acción nueva:
+
+1. Agregar el variant a `Modal_Action`.
+2. En el botón que la dispara, en vez de ejecutar la acción directo, asignar
+   `app.confirm_modal = entities.Confirm_Modal{active = true, text = "...",
+   action = .MI_ACCION}`.
+3. Agregar el `case .MI_ACCION:` al switch dentro del bloque
+   `if app.confirm_modal.active { switch render_confirm_modal(...) { case
+   .CONFIRMED: ... } }` en `render_ui`, con la lógica que antes estaba en el
+   botón.
+
+**Nota:** el texto de estos modales (`"¿Reiniciar la partida?..."`, etc.) va
+hardcodeado en español directo, sin pasar por `constants.get_text`/
+`translations.txt` — inconsistente con el resto de la UI (que sí está
+traducida), pero es el patrón ya establecido en los modales existentes
+(NEW_GAME, RESTART_RUN, EXIT_GAME, PAUSE_TO_MENU); no traducirlo solo por
+consistencia interna si se toca este código, a menos que se traduzcan todos
+a la vez.
+
+Ejemplo real: el botón "Menú Principal" de pausa (`render_pause_menu`) antes
+salía directo a `.MENU` perdiendo el mapa actual sin avisar — ahora abre
+`Confirm_Modal{action = .PAUSE_TO_MENU}` con el aviso de pérdida de
+progreso, y el `case .PAUSE_TO_MENU` hace la transición real.
+
+## Animación de shaders: tiempo acumulado, no `GetTime()` de pared
+
+`water.glsl` usaba `raylib.GetTime()` (reloj de pared, sigue corriendo
+aunque la ventana esté minimizada/sin foco y el loop deje de renderizar
+frames reales) directo como `u_time`. Al recuperar el foco, el salto de
+reloj entre el último frame dibujado y el actual se leía como que la
+animación "se acelera" de golpe.
+
+**Fix:** `Water_Shader.anim_time` (`systems/rendering.odin`) se acumula a
+mano cada vez que se llama `water_render_apply`, con `dt` clampeado
+(`constants.WATER_ANIM_MAX_DT`, evita saltos por hitches o al recuperar
+foco) y escalado por `constants.WATER_ANIM_SPEED` (0.4 — más lento que
+antes). Si se agrega otro shader animado por tiempo, replicar este patrón
+(acumular con dt clampeado) en vez de leer `GetTime()` directo.
 
 ## Victoria / derrota
 
