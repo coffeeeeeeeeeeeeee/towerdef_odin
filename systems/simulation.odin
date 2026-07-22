@@ -212,17 +212,6 @@ start_next_wave :: proc(app: ^entities.App_State) {
 				relic_flash(sim, .INTEREST_BOOST)
 			}
 		}
-
-		// MEMENTO: +gold por stack por cada 10 oleadas completadas
-		// sim.wave_number aquí es el ANTERIOR (antes del +=1), por lo que es el conteo de olas completadas
-		if sim.relic_stacks[.MEMENTO] > 0 {
-			memento_gold := i32(sim.wave_number / 10) * sim.relic_stacks[.MEMENTO]
-			if memento_gold > 0 {
-				entities.app_add_money(app, memento_gold)
-				entities.add_toast(app, fmt.tprintf("+$%d recuerdo (ola %d)", memento_gold, sim.wave_number), .INFO)
-				relic_flash(sim, .MEMENTO)
-			}
-		}
 	}
 
 	// Wave clear bonus: escala con el número de oleada completada

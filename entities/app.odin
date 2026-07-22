@@ -470,6 +470,7 @@ app_finish_run :: proc(app: ^App_State, victory: bool) {
 	app.sim.is_victory = victory
 	lives := app.sim.health if victory else 0
 	cristales := meta_calc_cristales(app.sim.enemies_killed, lives, app.sim.wave_number)
+	cristales += app.sim.relic_stacks[.MEMENTO] * constants.MEMENTO_CRISTALES_PER_STACK
 	app.run_cristales   = cristales
 	app.meta.cristales  += cristales
 	app.meta.total_runs += 1

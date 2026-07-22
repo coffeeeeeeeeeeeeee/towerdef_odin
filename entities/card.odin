@@ -245,10 +245,10 @@ RELIC_SPECS := []Relic_Spec{
 		desc_key     = "TOOLTIP_MEMENTO_DESC",
 		icon_path    = "images/relics/memento.png",
 		stat_format  = proc() -> string {
-			return fmt.tprintf(constants.get_text("STAT_MEMENTO"), constants.MEMENTO_GOLD_PER_10W)
+			return fmt.tprintf(constants.get_text("STAT_MEMENTO"), constants.MEMENTO_CRISTALES_PER_STACK)
 		},
 		toast_format = proc(stacks: i32) -> string {
-			return fmt.tprintf(constants.get_text("TOAST_MEMENTO"), stacks, i32(stacks) * constants.MEMENTO_GOLD_PER_10W)
+			return fmt.tprintf(constants.get_text("TOAST_MEMENTO"), stacks, stacks * constants.MEMENTO_CRISTALES_PER_STACK)
 		},
 	},
 	{

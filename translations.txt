@@ -627,9 +627,9 @@ TOOLTIP_RECYCLER_DESC|PORTUGUESE|Ouro extra ao vender torres colocadas
 CARD_MEMENTO_NAME|ENGLISH|Memento
 CARD_MEMENTO_NAME|SPANISH|Memento
 CARD_MEMENTO_NAME|PORTUGUESE|Memento
-TOOLTIP_MEMENTO_DESC|ENGLISH|Earn more gold the further you progress
-TOOLTIP_MEMENTO_DESC|SPANISH|Gana más oro cuanto más avanzas
-TOOLTIP_MEMENTO_DESC|PORTUGUESE|Ganhe mais ouro quanto mais avançar
+TOOLTIP_MEMENTO_DESC|ENGLISH|Earn extra crystals at the end of the run
+TOOLTIP_MEMENTO_DESC|SPANISH|Gana cristales extra al final de la partida
+TOOLTIP_MEMENTO_DESC|PORTUGUESE|Ganhe cristais extras ao fim da partida
 
 CARD_WARMED_UP_NAME|ENGLISH|Warmed Up
 CARD_WARMED_UP_NAME|SPANISH|En Calor
@@ -705,6 +705,9 @@ RUN_LIVES_REMAINING|PORTUGUESE|Vidas restantes
 RUN_ACUM_CRISTALES|ENGLISH|Total crystals
 RUN_ACUM_CRISTALES|SPANISH|Cristales acumulados
 RUN_ACUM_CRISTALES|PORTUGUESE|Cristais acumulados
+RUN_MEMENTO_BONUS|ENGLISH|Memento bonus
+RUN_MEMENTO_BONUS|SPANISH|Bonus de Memento
+RUN_MEMENTO_BONUS|PORTUGUESE|Bônus de Memento
 
 CARD_OVERDRIVE_NAME|ENGLISH|Overdrive
 CARD_OVERDRIVE_NAME|SPANISH|Sobremarcha
@@ -792,9 +795,9 @@ STAT_SCOUT|PORTUGUESE|Anuncia o tipo da próxima onda
 STAT_RECYCLER|ENGLISH|+%.0f%% sell value per stack
 STAT_RECYCLER|SPANISH|+%.0f%% de venta por stack
 STAT_RECYCLER|PORTUGUESE|+%.0f%% de venda por stack
-STAT_MEMENTO|ENGLISH|+$%d/stack/wave every 10 waves
-STAT_MEMENTO|SPANISH|+$%d/stack/oleada cada 10 olas
-STAT_MEMENTO|PORTUGUESE|+$%d/stack/onda a cada 10 ondas
+STAT_MEMENTO|ENGLISH|+%d crystal/stack at run end
+STAT_MEMENTO|SPANISH|+%d cristal/stack al final de la partida
+STAT_MEMENTO|PORTUGUESE|+%d cristal/stack ao fim da partida
 STAT_WARMED_UP|ENGLISH|+%.0f%% dmg/stack (>%.0fs on target)
 STAT_WARMED_UP|SPANISH|+%.0f%% daño/stack (>%.0fs con objetivo)
 STAT_WARMED_UP|PORTUGUESE|+%.0f%% dano/stack (>%.0fs com alvo)
@@ -848,9 +851,9 @@ TOAST_SCOUT|PORTUGUESE|Explorador x%d (alerta de onda)
 TOAST_RECYCLER|ENGLISH|Recycler x%d (+%.0f%% tower sell)
 TOAST_RECYCLER|SPANISH|Reciclador x%d (+%.0f%% venta torres)
 TOAST_RECYCLER|PORTUGUESE|Reciclador x%d (+%.0f%% venda torres)
-TOAST_MEMENTO|ENGLISH|Memento x%d (+$%d every 10 waves)
-TOAST_MEMENTO|SPANISH|Recuerdo x%d (+$%d cada 10 olas)
-TOAST_MEMENTO|PORTUGUESE|Memento x%d (+$%d a cada 10 ondas)
+TOAST_MEMENTO|ENGLISH|Memento x%d (+%d crystals at run end)
+TOAST_MEMENTO|SPANISH|Recuerdo x%d (+%d cristales al final de la partida)
+TOAST_MEMENTO|PORTUGUESE|Memento x%d (+%d cristais ao fim da partida)
 TOAST_WARMED_UP|ENGLISH|Warmed Up x%d (+%.0f%% sustained dmg)
 TOAST_WARMED_UP|SPANISH|En calor x%d (+%.0f%% daño continuo)
 TOAST_WARMED_UP|PORTUGUESE|Aquecido x%d (+%.0f%% dano contínuo)

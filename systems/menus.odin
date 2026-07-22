@@ -2862,9 +2862,10 @@ render_run_complete_ui :: proc(app: ^entities.App_State) {
 
 	// Pre-compute cristal components from sim state (still valid before simulation_reset)
 	lives_at_end := app.sim.health if app.sim.is_victory else 0
-	c_waves := entities.meta_cristales_from_waves(app.sim.wave_number)
-	c_kills := entities.meta_cristales_from_kills(app.sim.enemies_killed)
-	c_lives := entities.meta_cristales_from_lives(lives_at_end)
+	c_waves    := entities.meta_cristales_from_waves(app.sim.wave_number)
+	c_kills    := entities.meta_cristales_from_kills(app.sim.enemies_killed)
+	c_lives    := entities.meta_cristales_from_lives(lives_at_end)
+	c_memento  := app.sim.relic_stacks[.MEMENTO] * constants.MEMENTO_CRISTALES_PER_STACK
 
 	// ── Stats panel ──────────────────────────────────────────────────────────
 	// Layout: two columns.
@@ -2884,11 +2885,13 @@ render_run_complete_ui :: proc(app: ^entities.App_State) {
 		c:     i32   // -1 = no badge
 	}
 	total_secs := i32(app.sim.play_time)
-	rows := []Contrib_Row{
-		{constants.get_text("GAME_OVER_WAVES_SURVIVED"), fmt.tprintf("%d / %d", app.sim.wave_number, constants.RUN_MAX_WAVES), c_waves},
-		{constants.get_text("GAME_OVER_TIME"),           fmt.tprintf("%d:%02d", total_secs / 60, total_secs % 60),             -1},
-		{constants.get_text("GAME_OVER_ENEMIES_KILLED"), fmt.tprintf("%d", app.sim.enemies_killed),                            c_kills},
-		{constants.get_text("RUN_LIVES_REMAINING"),      fmt.tprintf("%d", lives_at_end),                                     c_lives},
+	rows := make([dynamic]Contrib_Row, context.temp_allocator)
+	append(&rows, Contrib_Row{constants.get_text("GAME_OVER_WAVES_SURVIVED"), fmt.tprintf("%d / %d", app.sim.wave_number, constants.RUN_MAX_WAVES), c_waves})
+	append(&rows, Contrib_Row{constants.get_text("GAME_OVER_TIME"),           fmt.tprintf("%d:%02d", total_secs / 60, total_secs % 60),             -1})
+	append(&rows, Contrib_Row{constants.get_text("GAME_OVER_ENEMIES_KILLED"), fmt.tprintf("%d", app.sim.enemies_killed),                            c_kills})
+	append(&rows, Contrib_Row{constants.get_text("RUN_LIVES_REMAINING"),      fmt.tprintf("%d", lives_at_end),                                     c_lives})
+	if app.sim.relic_stacks[.MEMENTO] > 0 {
+		append(&rows, Contrib_Row{constants.get_text("RUN_MEMENTO_BONUS"), fmt.tprintf("x%d", app.sim.relic_stacks[.MEMENTO]), c_memento})
 	}
 
 	row_h := i32(small_size) + 8
