@@ -819,6 +819,11 @@ is_path_like :: proc(m: ^entities.Map, row, col, map_w, map_h: i32) -> bool {
 path_render_mask :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset_x, camera_offset_y: i32) {
 	path_width := cs * constants.PATH_WIDTH_RATIO
 
+	// Los tiles de puente (PATH sobre agua) y sus vecinos ya se recorren acá
+	// abajo para dibujar la máscara — se cachean para que render_path_railings
+	// no tenga que volver a recorrer toda la grilla ni recalcular vecinos.
+	clear(&path_bridge_tiles)
+
 	raylib.BeginTextureMode(path_shader.mask_tex)
 	raylib.ClearBackground(raylib.Color{0, 0, 0, 0})
 
@@ -878,6 +883,10 @@ path_render_mask :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_of
 			if left && top {
 				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, raylib.WHITE)
 			}
+
+			if tile == .PATH && m.water_grid[row][col] {
+				append(&path_bridge_tiles, Bridge_Tile{cx, cy, top, right, bottom, left})
+			}
 		}
 	}
 
@@ -915,38 +924,34 @@ render_path_layer :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_o
 		path_render_mask(m, cs, map_w, map_h, camera_offset_x, camera_offset_y)
 		path_render_apply(m)
 	}
-	render_path_railings(m, cs, map_w, map_h, camera_offset_x, camera_offset_y)
+	render_path_railings(cs)
 }
 
+// Un tile de puente (PATH sobre agua) con sus vecinos ya resueltos — cacheado
+// por path_render_mask para que render_path_railings no recorra la grilla de nuevo.
+Bridge_Tile :: struct {
+	cx, cy:                   f32,
+	top, right, bottom, left: bool,
+}
+
+path_bridge_tiles: [dynamic]Bridge_Tile
+
 // Railings de puentes — se dibujan encima del camino suavizado, con bordes
-// nítidos (no forman parte de la máscara blureada).
-render_path_railings :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset_x, camera_offset_y: i32) {
+// nítidos (no forman parte de la máscara blureada). Reusa path_bridge_tiles,
+// poblado por path_render_mask en la misma pasada que arma la máscara.
+render_path_railings :: proc(cs: f32) {
 	path_width := cs * constants.PATH_WIDTH_RATIO
+	pw := path_width
+	rt := cs * constants.BRIDGE_RAILING_THICK
+	rc := constants.COLOR_BRIDGE_RAILING
+	sg := constants.BRIDGE_RAILING_SEGS
 
-	for row in 0 ..< map_h {
-		for col in 0 ..< map_w {
-			if m.grid[row][col] != .PATH || !m.water_grid[row][col] { continue }
-
-			x := f32(col) * cs + f32(camera_offset_x)
-			y := f32(row) * cs + f32(camera_offset_y)
-			cx := x + cs / 2
-			cy := y + cs / 2
-
-			top := is_path_like(m, row - 1, col, map_w, map_h)
-			right := is_path_like(m, row, col + 1, map_w, map_h)
-			bottom := is_path_like(m, row + 1, col, map_w, map_h)
-			left := is_path_like(m, row, col - 1, map_w, map_h)
-
-			pw := path_width
-			rt := cs * constants.BRIDGE_RAILING_THICK
-			rc := constants.COLOR_BRIDGE_RAILING
-			sg := constants.BRIDGE_RAILING_SEGS
-
-			if !top    { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      pw, rt}, 1, sg, rc) }
-			if !bottom { raylib.DrawRectangleRounded({cx - pw/2,      cy + pw/2 - rt, pw, rt}, 1, sg, rc) }
-			if !left   { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      rt, pw}, 1, sg, rc) }
-			if !right  { raylib.DrawRectangleRounded({cx + pw/2 - rt, cy - pw/2,      rt, pw}, 1, sg, rc) }
-		}
+	for bt in path_bridge_tiles {
+		cx, cy := bt.cx, bt.cy
+		if !bt.top    { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      pw, rt}, 1, sg, rc) }
+		if !bt.bottom { raylib.DrawRectangleRounded({cx - pw/2,      cy + pw/2 - rt, pw, rt}, 1, sg, rc) }
+		if !bt.left   { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      rt, pw}, 1, sg, rc) }
+		if !bt.right  { raylib.DrawRectangleRounded({cx + pw/2 - rt, cy - pw/2,      rt, pw}, 1, sg, rc) }
 	}
 }
 

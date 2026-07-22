@@ -2777,8 +2777,16 @@ render_card_hand :: proc(app: ^entities.App_State) {
 			play_sound(.CONFIRMATION, .UI)
 		}
 
-		// Clic derecho sobre la carta = vender — permitido incluso con el shop abierto
-		if raylib.IsMouseButtonPressed(.RIGHT) && !card_is_pending {
+		// Clic derecho sobre la carta = vender — permitido incluso con el shop abierto.
+		// Si hay una carta armada (torre/obstáculo seleccionado o reliquia activa
+		// pendiente de objetivo), solo se puede vender ESA carta (cancela y
+		// reembolsa) — vender otra desincronizaría selected_card_idx del resto
+		// de la mano tras el ordered_remove (ver card_play), pudiendo hacer que
+		// una acción pendiente consuma la carta equivocada o revíente por índice
+		// fuera de rango.
+		something_armed := app.pending_tower_action != .TOWER || app.sim.selected_build_tower != .EMPTY
+		can_sell := !something_armed || app.sim.cards.selected_card_idx == i
+		if raylib.IsMouseButtonPressed(.RIGHT) && can_sell {
 			sell_card_at(app, i, card)
 		}
 
