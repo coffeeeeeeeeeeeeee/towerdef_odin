@@ -133,7 +133,7 @@ GRID_SIZE    :: 20
 CELL_SIZE    :: 32
 MAX_FPS      :: 60
 DEFAULT_MONEY  :: 80
-DEFAULT_HEALTH :: 10
+DEFAULT_HEALTH :: 20
 
 PATH_WIDTH_RATIO :: 0.4  // Path draw width as a fraction of cell size
 
