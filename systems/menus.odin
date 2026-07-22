@@ -2706,14 +2706,14 @@ render_card_hand :: proc(app: ^entities.App_State) {
 	mouse := raylib.GetMousePosition()
 
 	// Detectar carta bajo el cursor (última = la más encima).
-	// La zona de detección se extiende hacia abajo para cubrir el botón de venta
-	// que queda debajo de la carta levantada (HOVER_LIFT + 4 + 24 - CARD_H = 8px extra).
-	HOVER_DETECTION_EXTRA :: f32(8)
+	// No se usa ui_is_modal_blocked: el shop bloquea la pantalla completa vía
+	// ui_modal_blocks, pero la mano debe seguir siendo vendible mientras el shop
+	// está abierto. Solo el modal de confirmación Sí/No bloquea la mano.
 	hovered_idx := -1
-	if !ui_is_modal_blocked(i32(mouse.x), i32(mouse.y)) {
+	if !app.confirm_modal.active {
 		for i in 0 ..< n {
 			cx := start_x + f32(i) * step
-			if raylib.CheckCollisionPointRec(mouse, raylib.Rectangle{cx, card_y, CARD_W, CARD_H + HOVER_DETECTION_EXTRA}) {
+			if raylib.CheckCollisionPointRec(mouse, raylib.Rectangle{cx, card_y, CARD_W, CARD_H}) {
 				hovered_idx = i
 			}
 		}
@@ -2762,11 +2762,26 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		render_card_tooltip(app, card, card_rect)
 
 		// Clic para seleccionar / activar relicto — bloqueado si el shop está abierto
-		// Si el mouse está sobre el botón de venta, no interceptar el clic aquí.
-		sell_rect     := raylib.Rectangle{cx, cy + CARD_H + 4, CARD_W, 24}
-		mouse_on_sell := raylib.CheckCollisionPointRec(mouse, sell_rect)
-		shop_open     := app.sim.shop.active
-		if raylib.IsMouseButtonPressed(.LEFT) && !shop_open && !mouse_on_sell {
+		shop_open       := app.sim.shop.active
+		card_is_pending := app.pending_tower_action != .TOWER && app.sim.cards.selected_card_idx == i
+
+		sell_card_at :: proc(app: ^entities.App_State, i: int, card: entities.Card) {
+			sell_price := entities.card_sell_price(card)
+			entities.card_play(&app.sim, i)
+			app.sim.money += sell_price
+			if app.sim.cards.selected_card_idx == i {
+				app.sim.selected_build_tower = .EMPTY
+				app.sim.cards.selected_card_idx = -1
+			}
+			play_sound(.CONFIRMATION, .UI)
+		}
+
+		// Clic derecho sobre la carta = vender — permitido incluso con el shop abierto
+		if raylib.IsMouseButtonPressed(.RIGHT) && !card_is_pending {
+			sell_card_at(app, i, card)
+		}
+
+		if raylib.IsMouseButtonPressed(.LEFT) && !shop_open {
 			// Toggle: segundo clic sobre la carta activa cancela el modo selección
 			if app.pending_tower_action != .TOWER && app.sim.cards.selected_card_idx == i {
 				app.pending_tower_action = .TOWER
@@ -2810,22 +2825,6 @@ render_card_hand :: proc(app: ^entities.App_State) {
 				app.sim.selected_build_tower = tile
 				app.sim.cards.selected_card_idx    = i
 				play_sound(.SELECT, .UI)
-			}
-		}
-
-		// Botón de venta — oculto mientras la carta tiene modo activo pendiente
-		card_is_pending := app.pending_tower_action != .TOWER && app.sim.cards.selected_card_idx == i
-		if !card_is_pending {
-			sell_price := entities.card_sell_price(card)
-			sell_label := fmt.tprintf("%s $%d", constants.get_text("CARD_SELL_BUTTON"), sell_price)
-			if render_button(sell_label, sell_rect) {
-				entities.card_play(&app.sim, i)
-				app.sim.money += sell_price
-				if app.sim.cards.selected_card_idx == i {
-					app.sim.selected_build_tower = .EMPTY
-					app.sim.cards.selected_card_idx    = -1
-				}
-				play_sound(.CONFIRMATION, .UI)
 			}
 		}
 	}

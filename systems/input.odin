@@ -278,8 +278,9 @@ case .GARDENER:
 		}
 	}
 	
-	// Right click to deselect or cancel
-	if raylib.IsMouseButtonPressed(.RIGHT) {
+	// Right click to deselect or cancel — ignorado si cae sobre UI bloqueante
+	// (p. ej. la mano de cartas, que usa el clic derecho para vender).
+	if raylib.IsMouseButtonPressed(.RIGHT) && !ui_is_click_blocked(mouse_x, mouse_y) {
 		if app.pending_tower_action != .TOWER {
 			// Cancelar acción con target — la carta vuelve a la mano sin gastarse
 			app.pending_tower_action = .TOWER

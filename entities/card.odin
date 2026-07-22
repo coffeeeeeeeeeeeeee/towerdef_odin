@@ -670,17 +670,10 @@ card_tower_type_to_tile :: proc(tower_type: constants.Tower_Type) -> constants.T
 	return card_to_tile(Card{kind = .TOWER, tower_type = tower_type})
 }
 
-// Precio de venta de una carta desde la mano, según rareza.
+// Precio de venta de una carta desde la mano: 100% de su precio de tienda.
 // Aplica igual a torres, obstáculos y relictos.
 card_sell_price :: proc(card: Card) -> i32 {
-	switch card_rarity(card) {
-	case .COMMON:   return constants.SELL_PRICE_COMMON
-	case .UNCOMMON: return constants.SELL_PRICE_UNCOMMON
-	case .RARE:     return constants.SELL_PRICE_RARE
-	case .EPIC:     return constants.SELL_PRICE_EPIC
-	case .UNIQUE:   return constants.SELL_PRICE_UNIQUE
-	}
-	return constants.CARD_SELL_PRICE
+	return card_shop_price(card)
 }
 
 // Costo de colocar una carta
