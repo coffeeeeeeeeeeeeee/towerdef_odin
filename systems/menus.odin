@@ -3392,9 +3392,10 @@ render_card_library_ui :: proc(app: ^entities.App_State) {
 	RARITIES :: [5]constants.Card_Rarity{.COMMON, .UNCOMMON, .RARE, .EPIC, .UNIQUE}
 
 	label_h    := f32(20)  // alto del badge de rareza (render_rarity, BADGE_H)
-	row_gap    := f32(28)
-	hover_lift := f32(20)
-	row_h      := label_h + 6 + CARD_H + hover_lift + row_gap
+	label_gap  := f32(2)   // separación entre el badge y las cartas
+	row_gap    := f32(6)   // separación entre filas
+	hover_lift := f32(14)  // cuánto se levanta la carta hovereada
+	row_h      := label_h + label_gap + CARD_H + hover_lift + row_gap
 
 	mouse := raylib.GetMousePosition()
 	content_bottom := content_top
@@ -3409,7 +3410,7 @@ render_card_library_ui :: proc(app: ^entities.App_State) {
 			render_rarity(rarity, f32(spacing) * 2, row_top, bw)
 		}
 
-		card_y := row_top + label_h + 6 + hover_lift
+		card_y := row_top + label_h + label_gap + hover_lift
 
 		cards, n := library_row_cards(rarity)
 		if n == 0 { continue }

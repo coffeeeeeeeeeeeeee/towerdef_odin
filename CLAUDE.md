@@ -170,6 +170,14 @@ esos sitios iteran `RELIC_SPECS` dinámicamente.
 `rarity_card_tex` (`systems/interface.odin`) ahora mapea `.UNIQUE` a esa
 textura en vez de reusar `card_bg_epic` como fallback.
 
+## Biblioteca de cartas: espaciado vertical
+
+`render_card_library_ui` (`systems/menus.odin`) — el alto de cada fila
+(`row_h`) se redujo agrupando los márgenes en variables nombradas
+(`label_h`, `label_gap`, `row_gap`, `hover_lift`) en vez de constantes
+mágicas sueltas, bajando el alto por fila de ~229px a ~197px para que
+entren más filas en pantalla sin scroll.
+
 ### Venta de cartas de la mano
 
 `card_sell_price` (`entities/card.odin`) devuelve el 100% del precio de
