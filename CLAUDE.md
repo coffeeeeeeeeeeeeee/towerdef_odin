@@ -136,6 +136,33 @@ Se abre automáticamente entre oleadas (`card_selection_active = true`).
   da los primeros `constants.MOUNTAIN_FREE_REROLLS` (2) rerolls gratis por
   visita; de ahí en más cobra la misma curva que cualquier otro bioma.
 
+## Reliquias SABUESO y OVERKILL (RARE, pasivas)
+
+- **SABUESO** (Bloodhound): cuando una torre que ve invisibles
+  (`can_target_invisible_tower`) golpea a un enemigo `.INVISIBLE`, dispara
+  `enemy.revealed_timer = SABUESO_REVEAL_DURATION_PER_STACK * stacks`
+  (solo extiende, nunca acorta) dentro de `calc_damage`
+  (`systems/simulation.odin`). Mientras `revealed_timer > 0`, ese enemigo es
+  targeteable/dañable por **cualquier** torre — no solo ARCHER/LASER/SNIPER.
+  Los 4 sitios que antes chequeaban solo `can_target_invisible_tower` ahora
+  también aceptan `enemy.revealed_timer > 0`: `find_target`, el pulso de
+  ICE, el chain-hop de TESLA y el splash AoE. El timer decae en
+  `update_enemies` junto con `hit_squash`. El render de invisibles
+  (`render_enemies`, `systems/rendering.odin`) también respeta el timer:
+  no aplica el dimming de alpha mientras está revelado.
+- **OVERKILL** (Desborde): al morir un enemigo, si el daño sobrante
+  (`-enemy.hp`, negativo) es mayor a 0, salpica
+  `-enemy.hp * OVERKILL_RATIO_PER_STACK * stacks` de daño al enemigo vivo
+  más cercano dentro de `OVERKILL_RANGE` tiles (un solo salto, sin cadena;
+  si esa salpicadura mata a la víctima, se procesa recién el próximo frame
+  cuando el loop llegue a su índice). Lógica en el bloque de muerte de
+  `update_enemies` (`systems/simulation.odin`).
+
+Ambas se agregaron solo en `Card_Kind`/`RELIC_SPECS` (`entities/card.odin`)
++ sus constantes — no hubo que tocar ningún listado hardcodeado de
+reliquias (shop pool, tray de pasivas, Biblioteca, progresión) porque todos
+esos sitios iteran `RELIC_SPECS` dinámicamente.
+
 ### Venta de cartas de la mano
 
 `card_sell_price` (`entities/card.odin`) devuelve el 100% del precio de

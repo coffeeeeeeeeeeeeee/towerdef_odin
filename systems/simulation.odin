@@ -875,12 +875,45 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			enemy.hit_squash = max(0, enemy.hit_squash - constants.ENEMY_HIT_SQUASH_DECAY_PER_SEC * dt)
 		}
 
+		// SABUESO: decay del tiempo revelado
+		if enemy.revealed_timer > 0 {
+			enemy.revealed_timer = max(0, enemy.revealed_timer - dt)
+		}
+
 		// Check death
 		if enemy.hp <= 0 {
 			play_sound_at(.ENEMY_DEATH, .SFX, enemy.x, enemy.y, app)
 			spawn_hit_particles(app, enemy.x + 0.5, enemy.y + 0.5, entities.enemy_get_color(enemy), constants.HIT_PARTICLE_COUNT_DEATH)
 			if .BOSS in enemy.flags {
 				add_screen_shake(app, constants.SCREEN_SHAKE_BOSS_DEATH)
+			}
+
+			// OVERKILL: el daño sobrante (enemy.hp negativo) salpica al enemigo
+			// vivo más cercano dentro de OVERKILL_RANGE. Un solo salto, sin
+			// cadena — si eso mata a la víctima, se procesa recién el próximo
+			// frame cuando el loop llegue a su índice.
+			if sim.relic_stacks[.OVERKILL] > 0 && enemy.hp < 0 {
+				overkill_dmg := -enemy.hp * constants.OVERKILL_RATIO_PER_STACK * f32(sim.relic_stacks[.OVERKILL])
+				victim: ^entities.Enemy = nil
+				best_dist := constants.OVERKILL_RANGE + 1
+				for j in 0 ..< len(sim.enemies) {
+					if j == i { continue }
+					other := &sim.enemies[j]
+					if other.hp <= 0 { continue }
+					dx := other.x - enemy.x
+					dy := other.y - enemy.y
+					d  := math.sqrt_f32(dx*dx + dy*dy)
+					if d <= constants.OVERKILL_RANGE && d < best_dist {
+						victim    = other
+						best_dist = d
+					}
+				}
+				if victim != nil {
+					victim.hp -= overkill_dmg
+					spawn_damage_number(app, victim.x + 0.5, victim.y + 0.5, overkill_dmg, false)
+					spawn_hit_particles(app, victim.x + 0.5, victim.y + 0.5, entities.enemy_get_color(victim), constants.HIT_PARTICLE_COUNT_HIT)
+					relic_flash(sim, .OVERKILL)
+				}
 			}
 
 			// Enemy died - give reward
@@ -1117,9 +1150,10 @@ update_ice_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 	tower.timer = entities.tower_get_effective_cooldown(tower)
 
 	// Slow + damage all enemies in range (ground + flying). ICE no puede
-	// detectar enemigos INVISIBLE (no está en can_target_invisible_tower).
+	// detectar enemigos INVISIBLE (no está en can_target_invisible_tower),
+	// salvo que SABUESO ya lo haya revelado (enemy.revealed_timer > 0).
 	for &enemy in app.sim.enemies {
-		if .INVISIBLE in enemy.flags && !can_target_invisible_tower(tower.type) {
+		if .INVISIBLE in enemy.flags && !can_target_invisible_tower(tower.type) && enemy.revealed_timer <= 0 {
 			continue
 		}
 		dx := (enemy.x + 0.5) - (f32(tower.c) + 0.5)
@@ -1191,7 +1225,7 @@ update_tesla_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 				}
 				if already { continue }
 				e := &sim.enemies[i]
-				if .INVISIBLE in e.flags { continue } // TESLA no ve invisibles
+				if .INVISIBLE in e.flags && e.revealed_timer <= 0 { continue } // TESLA no ve invisibles, salvo SABUESO
 				dx := (e.x + 0.5) - cur_x
 				dy := (e.y + 0.5) - cur_y
 				d  := math.sqrt_f32(dx*dx + dy*dy)
@@ -1427,8 +1461,9 @@ find_target :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> ^entiti
 				tower.type == .LASER  || tower.type == .TESLA
 			flying_ok := !(.FLYING in enemy.flags) || can_target_flying
 
-			// INVISIBLE: solo ARCHER, LASER, SNIPER pueden detectarlo
-			invisible_ok := !(.INVISIBLE in enemy.flags) || can_target_invisible_tower(tower.type)
+			// INVISIBLE: solo ARCHER, LASER, SNIPER pueden detectarlo — salvo que
+			// SABUESO ya lo haya revelado para todas (enemy.revealed_timer > 0)
+			invisible_ok := !(.INVISIBLE in enemy.flags) || can_target_invisible_tower(tower.type) || enemy.revealed_timer > 0
 
 			if flying_ok && invisible_ok {
 				if n < MAX_ELIGIBLE {
@@ -1541,8 +1576,8 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 					if proj.target != nil && &enemy == proj.target {
 						continue // El objetivo principal ya recibió daño directo
 					}
-					if .INVISIBLE in enemy.flags && !can_target_invisible_tower(proj.type) {
-						continue // Esta torre no puede detectar enemigos invisibles
+					if .INVISIBLE in enemy.flags && !can_target_invisible_tower(proj.type) && enemy.revealed_timer <= 0 {
+						continue // Esta torre no puede detectar enemigos invisibles (ni fue revelado por SABUESO)
 					}
 
 					dx := enemy.x - proj.x
@@ -1738,6 +1773,19 @@ calc_damage :: proc(
 	if source != nil && enemy != nil {
 		enemy.last_attacker_r = source.r
 		enemy.last_attacker_c = source.c
+	}
+
+	// SABUESO: si una torre que ve invisibles golpea a un INVISIBLE, lo revela
+	// para todas las torres por un tiempo (solo refresca el timer la torre que
+	// "avistó" — otras torres pueden aprovechar la ventana ya revelada sin
+	// volver a extenderla).
+	if enemy != nil && .INVISIBLE in enemy.flags && can_target_invisible_tower(source_type) &&
+	   app.sim.relic_stacks[.SABUESO] > 0 {
+		duration := constants.SABUESO_REVEAL_DURATION_PER_STACK * f32(app.sim.relic_stacks[.SABUESO])
+		if duration > enemy.revealed_timer {
+			enemy.revealed_timer = duration
+		}
+		relic_flash(&app.sim, .SABUESO)
 	}
 
 	// Hit reaction visual (squash) — decae en update_enemies

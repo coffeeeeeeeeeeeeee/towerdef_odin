@@ -1780,7 +1780,7 @@ render_enemies :: proc(app: ^entities.App_State, cs: f32) {
 
 		size  := entities.enemy_get_size(&enemy) * cs
 		color := entities.enemy_get_color(&enemy)
-		if .INVISIBLE in enemy.flags {
+		if .INVISIBLE in enemy.flags && enemy.revealed_timer <= 0 {
 			color.a = u8(f32(color.a) * constants.ENEMY_INVISIBLE_ALPHA)
 		}
 		so    := max(f32(2), cs * 0.08)

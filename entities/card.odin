@@ -33,6 +33,8 @@ Card_Kind :: enum {
 	GARDENER,        // activa: mueve una torre de lugar conservando todos sus stats
 	AIRDROP,         // pasiva: airdrops más frecuentes y cartas de mayor rareza por stack
 	CRANE_KICK,      // pasiva: cada 20s carga una torre aleatoria (no hielo/potenciador) para matar al instante a su próximo objetivo
+	SABUESO,         // al detectar un INVISIBLE, lo revela para todas las torres unos segundos (acumulable: más duración)
+	OVERKILL,        // el daño sobrante que mata a un enemigo salpica al enemigo vivo más cercano (acumulable: más % de salpicado)
 }
 
 // Una carta del mazo
@@ -363,6 +365,32 @@ RELIC_SPECS := []Relic_Spec{
 		stat_format  = proc() -> string { return "" },
 		toast_format = proc(stacks: i32) -> string {
 			return constants.get_text("TOAST_CRANE_KICK")
+		},
+	},
+	{
+		kind         = .SABUESO,
+		rarity       = .RARE,
+		name_key     = "CARD_SABUESO_NAME",
+		desc_key     = "TOOLTIP_SABUESO_DESC",
+		icon_path    = "images/relics/sabueso.png",
+		stat_format  = proc() -> string {
+			return fmt.tprintf(constants.get_text("STAT_SABUESO"), constants.SABUESO_REVEAL_DURATION_PER_STACK)
+		},
+		toast_format = proc(stacks: i32) -> string {
+			return fmt.tprintf(constants.get_text("TOAST_SABUESO"), stacks, f32(stacks) * constants.SABUESO_REVEAL_DURATION_PER_STACK)
+		},
+	},
+	{
+		kind         = .OVERKILL,
+		rarity       = .RARE,
+		name_key     = "CARD_OVERKILL_NAME",
+		desc_key     = "TOOLTIP_OVERKILL_DESC",
+		icon_path    = "images/relics/overkill.png",
+		stat_format  = proc() -> string {
+			return fmt.tprintf(constants.get_text("STAT_OVERKILL"), constants.OVERKILL_RATIO_PER_STACK * 100)
+		},
+		toast_format = proc(stacks: i32) -> string {
+			return fmt.tprintf(constants.get_text("TOAST_OVERKILL"), stacks, f32(stacks) * constants.OVERKILL_RATIO_PER_STACK * 100)
 		},
 	},
 }

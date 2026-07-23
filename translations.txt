@@ -769,6 +769,24 @@ TOOLTIP_CRANE_KICK_DESC|PORTUGUESE|A cada 20s, carrega uma torre aleatória (nã
 TOAST_CRANE_KICK|ENGLISH|Crane Kick charged a tower!
 TOAST_CRANE_KICK|SPANISH|¡Patada Grulla cargó una torre!
 TOAST_CRANE_KICK|PORTUGUESE|Chute da Garça carregou uma torre!
+CARD_SABUESO_NAME|ENGLISH|Bloodhound
+CARD_SABUESO_NAME|SPANISH|Sabueso
+CARD_SABUESO_NAME|PORTUGUESE|Sabujo
+TOOLTIP_SABUESO_DESC|ENGLISH|When a tower spots an invisible enemy, it's revealed to all towers for a few seconds
+TOOLTIP_SABUESO_DESC|SPANISH|Cuando una torre detecta a un enemigo invisible, queda revelado para todas las torres por unos segundos
+TOOLTIP_SABUESO_DESC|PORTUGUESE|Quando uma torre detecta um inimigo invisível, ele fica revelado para todas as torres por alguns segundos
+TOAST_SABUESO|ENGLISH|Bloodhound x%d (%.0fs revealed)
+TOAST_SABUESO|SPANISH|Sabueso x%d (%.0fs revelado)
+TOAST_SABUESO|PORTUGUESE|Sabujo x%d (%.0fs revelado)
+CARD_OVERKILL_NAME|ENGLISH|Overkill
+CARD_OVERKILL_NAME|SPANISH|Overkill
+CARD_OVERKILL_NAME|PORTUGUESE|Overkill
+TOOLTIP_OVERKILL_DESC|ENGLISH|Damage that exceeds a kill splashes to the nearest enemy
+TOOLTIP_OVERKILL_DESC|SPANISH|El daño que sobra al matar un enemigo salpica al más cercano
+TOOLTIP_OVERKILL_DESC|PORTUGUESE|O dano excedente ao matar um inimigo respinga no mais próximo
+TOAST_OVERKILL|ENGLISH|Overkill x%d (%.0f%% splash)
+TOAST_OVERKILL|SPANISH|Overkill x%d (%.0f%% de salpicado)
+TOAST_OVERKILL|PORTUGUESE|Overkill x%d (%.0f%% de respingo)
 
 # Relic stat lines (shown in tooltip below description)
 STAT_INTEREST_BOOST|ENGLISH|+%.0f%% per stack/wave
@@ -890,6 +908,12 @@ TOOLTIP_REBOUND_DESC|PORTUGUESE|Projéteis ricocheteiam em inimigo próximo ao a
 STAT_REBOUND|ENGLISH|+1 bounce per %d stacks (range %.0f tiles)
 STAT_REBOUND|SPANISH|+1 rebote por cada %d stacks (rango %.0f tiles)
 STAT_REBOUND|PORTUGUESE|+1 ricochete por %d stacks (alcance %.0f tiles)
+STAT_SABUESO|ENGLISH|+%.0fs revealed per stack
+STAT_SABUESO|SPANISH|+%.0fs revelado por stack
+STAT_SABUESO|PORTUGUESE|+%.0fs revelado por stack
+STAT_OVERKILL|ENGLISH|+%.0f%% splash per stack
+STAT_OVERKILL|SPANISH|+%.0f%% de salpicado por stack
+STAT_OVERKILL|PORTUGUESE|+%.0f%% de respingo por stack
 TOAST_REBOUND|ENGLISH|Rebound x%d (%d bounce(s))
 TOAST_REBOUND|SPANISH|Rebote x%d (%d rebote(s))
 TOAST_REBOUND|PORTUGUESE|Ricochete x%d (%d ricochete(s))

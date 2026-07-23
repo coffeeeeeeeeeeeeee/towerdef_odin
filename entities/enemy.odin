@@ -40,6 +40,10 @@ Enemy :: struct {
 	slow_factor: f32,  // Speed multiplier: 1.0 = normal, <1.0 = slowed
 	slow_timer:  f32,  // Seconds remaining on the slow
 
+	// SABUESO relic: mientras > 0, este enemigo INVISIBLE es targeteable por
+	// cualquier torre (no solo ARCHER/LASER/SNIPER). Ver can_target_invisible_tower.
+	revealed_timer: f32,
+
 	// CRYPTOBRO relic: last tower that dealt damage to this enemy (row/col, -1 = none)
 	last_attacker_r: i32,
 	last_attacker_c: i32,
