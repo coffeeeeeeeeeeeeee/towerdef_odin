@@ -163,6 +163,13 @@ Ambas se agregaron solo en `Card_Kind`/`RELIC_SPECS` (`entities/card.odin`)
 reliquias (shop pool, tray de pasivas, Biblioteca, progresión) porque todos
 esos sitios iteran `RELIC_SPECS` dinámicamente.
 
+## Fondo de carta UNIQUE
+
+`images/cards/unique.png` ya existe — se agregó `card_bg_unique` en
+`Game_Icons` (`constants/fonts.odin`, load/mipmap/filter/unload) y
+`rarity_card_tex` (`systems/interface.odin`) ahora mapea `.UNIQUE` a esa
+textura en vez de reusar `card_bg_epic` como fallback.
+
 ### Venta de cartas de la mano
 
 `card_sell_price` (`entities/card.odin`) devuelve el 100% del precio de

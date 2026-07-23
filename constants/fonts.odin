@@ -26,6 +26,7 @@ Icons :: struct {
 	card_bg_uncommon: raylib.Texture2D,
 	card_bg_rare:     raylib.Texture2D,
 	card_bg_epic:     raylib.Texture2D,
+	card_bg_unique:   raylib.Texture2D,
 
 	// Playback control buttons
 	btn_play:     raylib.Texture2D,
@@ -105,6 +106,7 @@ load_icons :: proc() {
 	game_icons.card_bg_uncommon = raylib.LoadTexture("images/cards/uncommon.png")
 	game_icons.card_bg_rare     = raylib.LoadTexture("images/cards/rare.png")
 	game_icons.card_bg_epic     = raylib.LoadTexture("images/cards/epic.png")
+	game_icons.card_bg_unique   = raylib.LoadTexture("images/cards/unique.png")
 
 	// Generate mipmaps and enable trilinear filtering for smooth downscaling
 	raylib.GenTextureMipmaps(&game_icons.damage)
@@ -129,11 +131,13 @@ load_icons :: proc() {
 	raylib.GenTextureMipmaps(&game_icons.card_bg_uncommon)
 	raylib.GenTextureMipmaps(&game_icons.card_bg_rare)
 	raylib.GenTextureMipmaps(&game_icons.card_bg_epic)
+	raylib.GenTextureMipmaps(&game_icons.card_bg_unique)
 
 	raylib.SetTextureFilter(game_icons.card_bg_common,   .TRILINEAR)
 	raylib.SetTextureFilter(game_icons.card_bg_uncommon, .TRILINEAR)
 	raylib.SetTextureFilter(game_icons.card_bg_rare,     .TRILINEAR)
 	raylib.SetTextureFilter(game_icons.card_bg_epic,     .TRILINEAR)
+	raylib.SetTextureFilter(game_icons.card_bg_unique,   .TRILINEAR)
 
 	game_icons.btn_play     = raylib.LoadTexture("images/play.png")
 	game_icons.btn_pause    = raylib.LoadTexture("images/pause.png")
@@ -169,6 +173,7 @@ unload_icons :: proc() {
 	raylib.UnloadTexture(game_icons.card_bg_uncommon)
 	raylib.UnloadTexture(game_icons.card_bg_rare)
 	raylib.UnloadTexture(game_icons.card_bg_epic)
+	raylib.UnloadTexture(game_icons.card_bg_unique)
 
 	raylib.UnloadTexture(game_icons.btn_play)
 	raylib.UnloadTexture(game_icons.btn_pause)

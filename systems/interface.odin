@@ -1277,14 +1277,15 @@ card_bg_draw_rect :: proc(card: entities.Card, x, y: f32) -> raylib.Rectangle {
 }
 
 // Devuelve la textura de fondo de carta según rareza.
-// UNIQUE reutiliza la imagen de EPIC; si la textura no cargó (width==0) devuelve nil.
+// Si la textura no cargó (width==0) devuelve nil.
 rarity_card_tex :: proc(rarity: constants.Card_Rarity) -> ^raylib.Texture2D {
 	tex: ^raylib.Texture2D
 	switch rarity {
-	case .COMMON:            tex = &constants.game_icons.card_bg_common
-	case .UNCOMMON:          tex = &constants.game_icons.card_bg_uncommon
-	case .RARE:              tex = &constants.game_icons.card_bg_rare
-	case .EPIC, .UNIQUE:     tex = &constants.game_icons.card_bg_epic
+	case .COMMON:   tex = &constants.game_icons.card_bg_common
+	case .UNCOMMON: tex = &constants.game_icons.card_bg_uncommon
+	case .RARE:     tex = &constants.game_icons.card_bg_rare
+	case .EPIC:     tex = &constants.game_icons.card_bg_epic
+	case .UNIQUE:   tex = &constants.game_icons.card_bg_unique
 	}
 	if tex == nil || tex.width == 0 { return nil }
 	return tex
