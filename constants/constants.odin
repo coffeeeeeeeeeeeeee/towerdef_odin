@@ -268,6 +268,7 @@ OVERDRIVE_SPEED_PER_STACK :: f32(0.10)  // +10% attack speed per OVERDRIVE stack
 SABUESO_REVEAL_DURATION_PER_STACK :: f32(3.0)  // Segundos que un INVISIBLE queda revelado por stack
 OVERKILL_RATIO_PER_STACK          :: f32(0.5)  // Fracción del daño sobrante que salpica, por stack
 OVERKILL_RANGE                    :: f32(2.5)  // Radio máx. (tiles) para buscar la víctima del salpicado
+RESONANCIA_CHANCE_PER_STACK       :: f32(0.15) // Probabilidad de duplicar el efecto de una reliquia de gatillo, por stack
 
 CARD_REROLL_COST     :: i32(50)    // Gold cost to reroll the 3-card selection
 HAND_REDEAL_COST     :: i32(40)    // Gold cost to redeal the hand once the game has started (free before first wave)

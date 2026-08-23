@@ -727,6 +727,20 @@ relic_flash :: proc(sim: ^entities.Simulation, kind: entities.Card_Kind) {
 	sim.relic_flash_timers[kind] = constants.RELIC_FLASH_DURATION
 }
 
+// RESONANCIA: probabilidad (escala con stacks) de que el efecto de una
+// reliquia "de gatillo" (SABUESO, OVERKILL, CRYPTOBRO, REBOUND, BLOODLUST)
+// se dispare una segunda vez. Se llama una vez por cada disparo de esas
+// reliquias; no acumula entre sí (cada disparo es una tirada independiente).
+resonance_proc :: proc(sim: ^entities.Simulation) -> bool {
+	stacks := sim.relic_stacks[.RESONANCIA]
+	if stacks <= 0 { return false }
+	if rand.float32() < f32(stacks) * constants.RESONANCIA_CHANCE_PER_STACK {
+		relic_flash(sim, .RESONANCIA)
+		return true
+	}
+	return false
+}
+
 // Spawn enemies
 spawn_enemies :: proc(app: ^entities.App_State, dt: f32) {
 	sim := &app.sim
@@ -913,6 +927,11 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 					spawn_damage_number(app, victim.x + 0.5, victim.y + 0.5, overkill_dmg, false)
 					spawn_hit_particles(app, victim.x + 0.5, victim.y + 0.5, entities.enemy_get_color(victim), constants.HIT_PARTICLE_COUNT_HIT)
 					relic_flash(sim, .OVERKILL)
+					if resonance_proc(sim) {
+						victim.hp -= overkill_dmg
+						spawn_damage_number(app, victim.x + 0.5, victim.y + 0.5, overkill_dmg, false)
+						spawn_hit_particles(app, victim.x + 0.5, victim.y + 0.5, entities.enemy_get_color(victim), constants.HIT_PARTICLE_COUNT_HIT)
+					}
 				}
 			}
 
@@ -940,6 +959,9 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			if sim.relic_stacks[.BLOODLUST] > 0 {
 				sim.bloodlust_mult += constants.BLOODLUST_BONUS_PER_KILL * f32(sim.relic_stacks[.BLOODLUST])
 				relic_flash(sim, .BLOODLUST)
+				if resonance_proc(sim) {
+					sim.bloodlust_mult += constants.BLOODLUST_BONUS_PER_KILL * f32(sim.relic_stacks[.BLOODLUST])
+				}
 			}
 
 			// Carta aleatoria al matar — solo si el jugador tiene la reliquia LOOT
@@ -1015,6 +1037,15 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 							entities.tower_recompute_stats(&t)
 							entities.add_toast(app, fmt.tprintf("¡Cryptobro! Torre +%d Nv → Nv%d", gained, t.level), .SUCCESS, 4.0)
 							relic_flash(sim, .CRYPTOBRO)
+							if resonance_proc(sim) {
+								room2   := constants.TOWER_MAX_LEVEL - t.level
+								gained2 := min(stacks, room2)
+								if gained2 > 0 {
+									t.cryptobro_bonus += gained2
+									t.level           += gained2
+									entities.tower_recompute_stats(&t)
+								}
+							}
 						}
 						break
 					}
@@ -1639,6 +1670,9 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 						proj.target_last_x   = bounce_target.x
 						proj.target_last_y   = bounce_target.y
 						proj.bounces_left   -= 1
+						if resonance_proc(sim) {
+							proj.bounces_left += 1  // RESONANCIA: no consume el rebote
+						}
 						bounced = true
 					}
 				}
@@ -1782,6 +1816,9 @@ calc_damage :: proc(
 	if enemy != nil && .INVISIBLE in enemy.flags && can_target_invisible_tower(source_type) &&
 	   app.sim.relic_stacks[.SABUESO] > 0 {
 		duration := constants.SABUESO_REVEAL_DURATION_PER_STACK * f32(app.sim.relic_stacks[.SABUESO])
+		if resonance_proc(&app.sim) {
+			duration *= 2
+		}
 		if duration > enemy.revealed_timer {
 			enemy.revealed_timer = duration
 		}

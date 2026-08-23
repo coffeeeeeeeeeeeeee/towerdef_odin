@@ -787,6 +787,15 @@ TOOLTIP_OVERKILL_DESC|PORTUGUESE|O dano excedente ao matar um inimigo respinga n
 TOAST_OVERKILL|ENGLISH|Overkill x%d (%.0f%% splash)
 TOAST_OVERKILL|SPANISH|Overkill x%d (%.0f%% de salpicado)
 TOAST_OVERKILL|PORTUGUESE|Overkill x%d (%.0f%% de respingo)
+CARD_RESONANCIA_NAME|ENGLISH|Resonance
+CARD_RESONANCIA_NAME|SPANISH|Resonancia
+CARD_RESONANCIA_NAME|PORTUGUESE|Ressonância
+TOOLTIP_RESONANCIA_DESC|ENGLISH|Chance to trigger the effect of Bloodhound, Overkill, Cryptobro, Rebound or Bloodlust twice
+TOOLTIP_RESONANCIA_DESC|SPANISH|Probabilidad de disparar dos veces el efecto de Sabueso, Overkill, Cryptobro, Rebote o Sed de Sangre
+TOOLTIP_RESONANCIA_DESC|PORTUGUESE|Chance de disparar duas vezes o efeito de Sabujo, Overkill, Cryptobro, Rebote ou Sede de Sangue
+TOAST_RESONANCIA|ENGLISH|Resonance x%d (%.0f%% double-trigger)
+TOAST_RESONANCIA|SPANISH|Resonancia x%d (%.0f%% de disparo doble)
+TOAST_RESONANCIA|PORTUGUESE|Ressonância x%d (%.0f%% de disparo duplo)
 
 # Relic stat lines (shown in tooltip below description)
 STAT_INTEREST_BOOST|ENGLISH|+%.0f%% per stack/wave
@@ -914,6 +923,9 @@ STAT_SABUESO|PORTUGUESE|+%.0fs revelado por stack
 STAT_OVERKILL|ENGLISH|+%.0f%% splash per stack
 STAT_OVERKILL|SPANISH|+%.0f%% de salpicado por stack
 STAT_OVERKILL|PORTUGUESE|+%.0f%% de respingo por stack
+STAT_RESONANCIA|ENGLISH|+%.0f%% double-trigger chance per stack
+STAT_RESONANCIA|SPANISH|+%.0f%% de chance de disparo doble por stack
+STAT_RESONANCIA|PORTUGUESE|+%.0f%% de chance de disparo duplo por stack
 TOAST_REBOUND|ENGLISH|Rebound x%d (%d bounce(s))
 TOAST_REBOUND|SPANISH|Rebote x%d (%d rebote(s))
 TOAST_REBOUND|PORTUGUESE|Ricochete x%d (%d ricochete(s))

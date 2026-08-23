@@ -35,6 +35,7 @@ Card_Kind :: enum {
 	CRANE_KICK,      // pasiva: cada 20s carga una torre aleatoria (no hielo/potenciador) para matar al instante a su próximo objetivo
 	SABUESO,         // al detectar un INVISIBLE, lo revela para todas las torres unos segundos (acumulable: más duración)
 	OVERKILL,        // el daño sobrante que mata a un enemigo salpica al enemigo vivo más cercano (acumulable: más % de salpicado)
+	RESONANCIA,      // chance de duplicar el efecto de SABUESO/OVERKILL/CRYPTOBRO/REBOUND/BLOODLUST al dispararse (acumulable: más chance)
 }
 
 // Una carta del mazo
@@ -391,6 +392,19 @@ RELIC_SPECS := []Relic_Spec{
 		},
 		toast_format = proc(stacks: i32) -> string {
 			return fmt.tprintf(constants.get_text("TOAST_OVERKILL"), stacks, f32(stacks) * constants.OVERKILL_RATIO_PER_STACK * 100)
+		},
+	},
+	{
+		kind         = .RESONANCIA,
+		rarity       = .EPIC,
+		name_key     = "CARD_RESONANCIA_NAME",
+		desc_key     = "TOOLTIP_RESONANCIA_DESC",
+		icon_path    = "images/relics/resonancia.png",
+		stat_format  = proc() -> string {
+			return fmt.tprintf(constants.get_text("STAT_RESONANCIA"), constants.RESONANCIA_CHANCE_PER_STACK * 100)
+		},
+		toast_format = proc(stacks: i32) -> string {
+			return fmt.tprintf(constants.get_text("TOAST_RESONANCIA"), stacks, f32(stacks) * constants.RESONANCIA_CHANCE_PER_STACK * 100)
 		},
 	},
 }
