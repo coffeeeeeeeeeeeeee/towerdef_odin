@@ -36,6 +36,9 @@ GLSL 330 core. Cada shader corresponde a una capa visual:
 | `water.glsl` | Blur + threshold para charcos de agua | `Water_Shader` |
 | `path.glsl` | Blur + threshold para suavizar el trazo del camino | `Path_Shader` |
 | `heightmap.glsl` | Tinte continuo del terreno por altura | `Heightmap_Shader` |
+| `grass.glsl` | Overlay de pasto (PLAIN/FOREST) | `Grass_Shader` |
+| `dune.glsl` | Overlay de arena — ondulaciones + grano (DESERT) | `Dune_Shader` |
+| `rock.glsl` | Overlay de roca agrietada — mosaico Voronoi (MOUNTAIN) | `Rock_Shader` |
 
 ### Agregar un nuevo shader
 

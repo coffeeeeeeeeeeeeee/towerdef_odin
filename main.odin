@@ -108,6 +108,14 @@ main :: proc() {
 	systems.grass_shader_init()
 	defer systems.grass_shader_unload()
 
+	// Load dune overlay shader (Desert biome sand ripples/grain)
+	systems.dune_shader_init()
+	defer systems.dune_shader_unload()
+
+	// Load rock overlay shader (Mountain biome cracked rock plates)
+	systems.rock_shader_init()
+	defer systems.rock_shader_unload()
+
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
 	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)

@@ -41,6 +41,56 @@ de firma. Ver el commit `6f8034f` para un ejemplo de los parches típicos que
 hacen falta (allocator explícito en `read_dir`/`fstat`, `Error` en vez de
 `bool` en `write_entire_file`, etc).
 
+### Cross-compilar a Windows desde Linux
+
+`odin build . -out:towerdef.exe -target:windows_amd64` falla en el paso de
+linkeo: el compilador imprime `Linking for cross compilation for this
+platform is not yet supported (windows amd64)` y aborta, pero **sí** deja
+los `.o` intermedios en `/tmp` (`keep_object_files` se activa
+automáticamente en ese caso) con el prefijo `<out-name>-<paquete>-<hash>.obj`.
+Se puede linkear esos objetos a mano:
+
+1. Limpiar `/tmp/<out-name>*.obj` de builds previos antes de compilar, para
+   no mezclar objetos de dos intentos distintos (los hashes no son
+   puramente por contenido).
+2. `sudo apt-get install mingw-w64 lld` — hacen falta el linker `ld.lld`
+   (en modo mingw, `-m i386pep`) y los import libs de mingw
+   (`/usr/x86_64-w64-mingw32/lib/*.a`). El `ld` de GNU (`x86_64-w64-mingw32-ld`,
+   incluido en mingw-w64) **no sirve**: no resuelve los símbolos globales que
+   LLVM/Odin emite como weak+COMDAT (`constants::TRANSLATIONS` y similares
+   quedan indefinidos). `lld-link`/`ld.lld` sí entienden COMDAT.
+3. Usar `raylibdll.lib` (vendor/raylib/windows), NO `raylib.lib` estático —
+   el `.lib` estático fue compilado contra UCRT (`__stdio_common_vfprintf`,
+   `fmaxf`, `roundf`, etc.) y mingw-w64 solo trae el runtime clásico
+   `msvcrt.dll`, no UCRT. La versión dinámica evita ese problema porque esos
+   símbolos quedan resueltos *dentro* de `raylib.dll` en tiempo de
+   ejecución. Hay que shippear `raylib.dll` junto al `.exe`.
+4. Dos símbolos que Odin/LLVM esperan con nombres al estilo MSVC y que
+   mingw no provee así hacen falta como shims propios (compilarlos con
+   `x86_64-w64-mingw32-gcc -c`):
+   - `_fltused` (dato `int`, valor `0x9875` — marcador de "esta imagen usa
+     floating point", no se llama, solo debe *existir*).
+   - `__chkstk` (probe de stack; mingw solo trae `___chkstk`/`___chkstk_ms`
+     con guiones bajos de más — un `jmp ___chkstk_ms` en asm alcanza).
+5. Comando de link (ajustar rutas de gcc/mingw según la versión instalada):
+   ```bash
+   ld.lld -m i386pep -o towerdef.exe --subsystem windows -e mainCRTStartup \
+     /usr/x86_64-w64-mingw32/lib/crt2.o \
+     /usr/lib/gcc/x86_64-w64-mingw32/13-win32/crtbegin.o \
+     /tmp/towerdef*.obj \
+     shim_fltused.o shim_chkstk.o \
+     vendor/raylib/windows/raylibdll.lib \
+     -L/usr/lib/gcc/x86_64-w64-mingw32/13-win32 -L/usr/x86_64-w64-mingw32/lib \
+     -lmingw32 -lgcc -lgcc_eh -lmoldname -lmingwex -lmsvcrt \
+     -lkernel32 -ladvapi32 -lshell32 -luser32 -lgdi32 -lwinmm -lopengl32 -lole32 -lbcrypt \
+     /usr/lib/gcc/x86_64-w64-mingw32/13-win32/crtend.o
+   ```
+6. El `.exe` resultante solo importa DLLs estándar de Windows +
+   `raylib.dll` (comprobado con `objdump -p towerdef.exe | grep "DLL Name"`).
+   No se probó corriéndolo (no hay Wine/Windows en esta máquina) — si falla
+   algo en runtime, sospechar primero de la ABI/calling convention en el
+   borde LLVM↔mingw antes que del código del juego en sí.
+
 ## Estructura del proyecto
 
 ```
@@ -162,6 +212,27 @@ Ambas se agregaron solo en `Card_Kind`/`RELIC_SPECS` (`entities/card.odin`)
 + sus constantes — no hubo que tocar ningún listado hardcodeado de
 reliquias (shop pool, tray de pasivas, Biblioteca, progresión) porque todos
 esos sitios iteran `RELIC_SPECS` dinámicamente.
+
+## Reliquia RESONANCIA (EPIC, pasiva)
+
+Da, por stack, `RESONANCIA_CHANCE_PER_STACK` (15%) de probabilidad de que
+el efecto de una reliquia "de gatillo" se dispare una segunda vez. Helper
+`resonance_proc(sim) -> bool` (`systems/simulation.odin`, junto a
+`relic_flash`) hace la tirada y devuelve si duplica; se llama una vez por
+cada disparo real, sin acumular entre reliquias. Cableado en los 5 sitios
+de disparo:
+- **BLOODLUST**: suma el incremento de `bloodlust_mult` una segunda vez.
+- **OVERKILL**: repite la salpicadura de daño sobre la misma víctima.
+- **CRYPTOBRO**: intenta sumar hasta `stacks` niveles extra a la torre
+  (respetando el `room` restante hasta `TOWER_MAX_LEVEL`).
+- **REBOUND**: revierte el `bounces_left -= 1` de ese rebote (no consume
+  la carga).
+- **SABUESO**: duplica la `duration` calculada antes de aplicarla al
+  `revealed_timer` del enemigo.
+
+Como con las demás reliquias, no requirió tocar ningún listado
+hardcodeado — solo `Card_Kind`/`RELIC_SPECS` (`entities/card.odin`) y la
+constante en `constants/constants.odin`.
 
 ## Fondo de carta UNIQUE
 
@@ -413,6 +484,71 @@ pausa) así que el resultado es idéntico frame a frame, pero cachear traería
 complejidad de invalidación (resize de ventana, etc.) sin beneficio real:
 redirigir el render normal a una textura + 2 pasadas de blur no es más caro
 que lo que ya se dibuja hoy en pantalla.
+
+## Overlay de arena (dune.glsl, bioma DESERT)
+
+Las dunas son 100% procedurales y cubren todo el rect del mapa — **no**
+dependen de `m.heightmap` (el heightmap es desnivel de terreno, sin
+relación real con dónde hay arena) ni de una capa pintada a mano en el
+editor. `render_dune_layer` (`systems/rendering.odin`) dibuja igual que
+`render_grass_overlay` (un `DrawRectangle` sobre el área del mapa dentro de
+`BeginShaderMode`, sin textura ni mask propia). Lo único que ata el patrón
+a "este mapa específico" es `u_seed` (= `m.seed`, offsetea las coordenadas
+de ruido) — mapas con distinto seed tienen dunas distintas, sin acoplarse a
+ningún otro sistema.
+
+`assets/dune.glsl` tiñe con ruido 2D barato (sin raymarching, a diferencia
+de `grass.glsl`) usando **ridged noise** (`1.0 - abs(n*2-1)`, la técnica
+clásica de Musgrave para terreno: pliega un value noise sobre su punto
+medio y convierte colinas suaves en crestas afiladas e irregulares) en vez
+de un `sin()` plano — 4 octavas dan la forma grande de la duna
+(`duneShape`, estirada a lo largo de un viento fijo — el multiplicador del
+eje `along` en la llamada a `duneShape` controla cuánto se estira; más
+cerca de 1.0 = menos estiramiento), y encima van DOS capas de estrías finas
+en frecuencias distintas (como los campos de dunas reales: ondulación
+primaria + una secundaria más fina) cuya fase se corre con `duneShape`
+(para que las estrías trepen las crestas en vez de ser paralelas
+perfectas) y se afilan con `sign()*pow()` en vez de quedar como onda suave.
+Grano fino estático mezclado encima. Primera versión con puro `sin()` se
+veía "plana", sin ondulación real — el ridged noise fue el cambio que lo
+arregló. Tiempo acumulado propio (`Dune_Shader.anim_time`, mismo patrón
+dt-clampeado que `Water_Shader.anim_time`, constante `DUNE_ANIM_SPEED`).
+
+Sin guard de `for_preview` — no tiene mask texture propia ni
+`BeginTextureMode` interno, así que no aplica la trampa de anidado de la
+sección de abajo. Init/unload en `main.odin` junto a
+`grass_shader_init/unload`. `BIOME_DUNE_STYLES` (`constants.odin`) tiene
+`alpha = 0.0` en todo bioma que no sea DESERT (mutuamente excluyente con el
+pasto, que hace lo mismo al revés en `BIOME_GRASS_STYLES`).
+
+**Historia:** la primera versión sí leía el heightmap (umbral de altura →
+zonas altas = duna). Se sacó esa dependencia a pedido explícito — el
+heightmap no tiene relación semántica con la arena, y complicaba el tuning
+de opacidad (quedaba atado a qué tan "alto" era el terreno en vez de a un
+control directo). No reintroducirla sin que el usuario lo pida de nuevo.
+
+## Overlay de roca (rock.glsl, bioma MOUNTAIN)
+
+Mismo diseño que el overlay de arena: `Rock_Shader`/`render_rock_layer`
+(`systems/rendering.odin`) son un calco de `Dune_Shader`/`render_dune_layer`
+— 100% procedural, `DrawRectangle` sobre el rect del mapa dentro de
+`BeginShaderMode`, sin textura ni mask propia, `u_seed` (= `m.seed`) como
+único dato que ata el mosaico a "este mapa específico". `BIOME_ROCK_STYLES`
+(`constants.odin`) solo tiene `alpha > 0` en MOUNTAIN.
+
+Técnica en `assets/rock.glsl`: **Voronoi F1/F2** (distancia al punto-semilla
+más cercano y al segundo más cercano de una grilla de celdas jitereadas,
+implementación estándar — ver iquilezles.org/articles/voronoilines). La
+diferencia `F2-F1` da las líneas de grieta entre placas (≈0 en el borde de
+celda); el hash de la celda ganadora (`F1`) varía el tono de cada placa
+(mosaico, no todas las piedras son iguales); encima va grano fino estático
+por celda pequeña. Sin raymarching ni ridged noise (a diferencia de
+`dune.glsl`) — Voronoi es la técnica correcta para "placas separadas por
+grietas", ridged noise es para "ondulación continua".
+
+Init/unload en `main.odin` junto a `dune_shader_init/unload`. Llamado en
+`render_map` justo después de `render_dune_layer` (mismo bloque, mutuamente
+excluyentes por bioma).
 
 ## Fondo animado (nebula.glsl)
 

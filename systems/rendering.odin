@@ -296,8 +296,155 @@ grass_shader_init :: proc() {
 	}
 }
 
+// ── Dune overlay shader (Desert biome sand ripples/grain) ───────────────────
+//
+// Las dunas son parte del mapa (varían con m.seed) pero NO dependen del
+// heightmap — el heightmap es desnivel de terreno, sin relación real con
+// dónde hay arena. El shader cubre el rect completo del mapa, igual que
+// render_grass_overlay, con u_seed como único dato que lo ata a "este mapa
+// específico" (offset de las coordenadas de ruido).
+
+Dune_Shader :: struct {
+	shader:         raylib.Shader,
+	loc_resolution: i32,
+	loc_cam:        i32,
+	loc_zoom:       i32,
+	loc_time:       i32,
+	loc_seed:       i32,
+	loc_alpha:      i32,
+	loc_density:    i32,
+	loc_dune_color: i32,
+	// Tiempo acumulado a mano (dt clampeado * velocidad), mismo patrón que
+	// Water_Shader.anim_time — no GetTime() de pared.
+	anim_time: f32,
+}
+
+dune_shader: Dune_Shader
+
+dune_shader_init :: proc() {
+	s := raylib.LoadShader(nil, "assets/dune.glsl")
+	dune_shader.shader         = s
+	dune_shader.loc_resolution = raylib.GetShaderLocation(s, "u_resolution")
+	dune_shader.loc_cam        = raylib.GetShaderLocation(s, "u_camera_offset")
+	dune_shader.loc_zoom       = raylib.GetShaderLocation(s, "u_zoom")
+	dune_shader.loc_time       = raylib.GetShaderLocation(s, "u_time")
+	dune_shader.loc_seed       = raylib.GetShaderLocation(s, "u_seed")
+	dune_shader.loc_alpha      = raylib.GetShaderLocation(s, "u_alpha")
+	dune_shader.loc_density    = raylib.GetShaderLocation(s, "u_density")
+	dune_shader.loc_dune_color = raylib.GetShaderLocation(s, "u_dune_color")
+}
+
+dune_shader_unload :: proc() {
+	raylib.UnloadShader(dune_shader.shader)
+}
+
+// Dibuja el overlay de dunas sobre todo el rect del mapa. Sin textura ni
+// upload de por medio — puramente procedural, como render_grass_overlay.
+render_dune_layer :: proc(app: ^entities.App_State, m: ^entities.Map, cs: f32) {
+	style := constants.BIOME_DUNE_STYLES[m.biome]
+	if style.alpha <= 0 { return }
+	if dune_shader.shader.id <= 1 { return }
+
+	frame_dt := min(raylib.GetFrameTime(), constants.WATER_ANIM_MAX_DT)
+	dune_shader.anim_time += frame_dt * constants.DUNE_ANIM_SPEED
+	t    := dune_shader.anim_time
+	res  := [2]f32{f32(raylib.GetRenderWidth()), f32(raylib.GetRenderHeight())}
+	cam  := [2]f32{f32(app.camera_offset_x), f32(app.camera_offset_y)}
+	zoom := app.zoom
+	seed := f32(m.seed)
+
+	if dune_shader.loc_resolution >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_resolution, &res,              .VEC2)  }
+	if dune_shader.loc_cam        >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_cam,        &cam,              .VEC2)  }
+	if dune_shader.loc_zoom       >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_zoom,       &zoom,             .FLOAT) }
+	if dune_shader.loc_time       >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_time,       &t,                .FLOAT) }
+	if dune_shader.loc_seed       >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_seed,       &seed,             .FLOAT) }
+	if dune_shader.loc_alpha      >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_alpha,      &style.alpha,      .FLOAT) }
+	if dune_shader.loc_density    >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_density,    &style.density,    .FLOAT) }
+	if dune_shader.loc_dune_color >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_dune_color, &style.dune_color, .VEC4)  }
+
+	raylib.BeginShaderMode(dune_shader.shader)
+	raylib.DrawRectangle(
+		app.camera_offset_x,
+		app.camera_offset_y,
+		i32(f32(m.width) * cs),
+		i32(f32(m.height) * cs),
+		raylib.WHITE,
+	)
+	raylib.EndShaderMode()
+}
+
 grass_shader_unload :: proc() {
 	raylib.UnloadShader(grass_shader.shader)
+}
+
+// ── Rock overlay shader (Mountain biome cracked rock plates) ────────────────
+//
+// Mismo diseño que Dune_Shader: 100% procedural, cubre todo el rect del
+// mapa (DrawRectangle dentro de BeginShaderMode, sin textura/mask propia).
+// u_seed (= m.seed) es lo único que ata el mosaico a "este mapa específico".
+
+Rock_Shader :: struct {
+	shader:         raylib.Shader,
+	loc_resolution: i32,
+	loc_cam:        i32,
+	loc_zoom:       i32,
+	loc_time:       i32,
+	loc_seed:       i32,
+	loc_alpha:      i32,
+	loc_density:    i32,
+	loc_rock_color: i32,
+}
+
+rock_shader: Rock_Shader
+
+rock_shader_init :: proc() {
+	s := raylib.LoadShader(nil, "assets/rock.glsl")
+	rock_shader.shader         = s
+	rock_shader.loc_resolution = raylib.GetShaderLocation(s, "u_resolution")
+	rock_shader.loc_cam        = raylib.GetShaderLocation(s, "u_camera_offset")
+	rock_shader.loc_zoom       = raylib.GetShaderLocation(s, "u_zoom")
+	rock_shader.loc_time       = raylib.GetShaderLocation(s, "u_time")
+	rock_shader.loc_seed       = raylib.GetShaderLocation(s, "u_seed")
+	rock_shader.loc_alpha      = raylib.GetShaderLocation(s, "u_alpha")
+	rock_shader.loc_density    = raylib.GetShaderLocation(s, "u_density")
+	rock_shader.loc_rock_color = raylib.GetShaderLocation(s, "u_rock_color")
+}
+
+rock_shader_unload :: proc() {
+	raylib.UnloadShader(rock_shader.shader)
+}
+
+// Dibuja el overlay de roca sobre todo el rect del mapa. Puramente
+// procedural, como render_dune_layer/render_grass_overlay.
+render_rock_layer :: proc(app: ^entities.App_State, m: ^entities.Map, cs: f32) {
+	style := constants.BIOME_ROCK_STYLES[m.biome]
+	if style.alpha <= 0 { return }
+	if rock_shader.shader.id <= 1 { return }
+
+	t    := f32(raylib.GetTime())
+	res  := [2]f32{f32(raylib.GetRenderWidth()), f32(raylib.GetRenderHeight())}
+	cam  := [2]f32{f32(app.camera_offset_x), f32(app.camera_offset_y)}
+	zoom := app.zoom
+	seed := f32(m.seed)
+
+	if rock_shader.loc_resolution >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_resolution, &res,              .VEC2)  }
+	if rock_shader.loc_cam        >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_cam,        &cam,              .VEC2)  }
+	if rock_shader.loc_zoom       >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_zoom,       &zoom,             .FLOAT) }
+	if rock_shader.loc_time       >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_time,       &t,                .FLOAT) }
+	if rock_shader.loc_seed       >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_seed,       &seed,             .FLOAT) }
+	if rock_shader.loc_alpha      >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_alpha,      &style.alpha,      .FLOAT) }
+	if rock_shader.loc_density    >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_density,    &style.density,    .FLOAT) }
+	if rock_shader.loc_rock_color >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_rock_color, &style.rock_color, .VEC4)  }
+
+	raylib.BeginShaderMode(rock_shader.shader)
+	raylib.DrawRectangle(
+		app.camera_offset_x,
+		app.camera_offset_y,
+		i32(f32(m.width) * cs),
+		i32(f32(m.height) * cs),
+		raylib.WHITE,
+	)
+	raylib.EndShaderMode()
 }
 
 render_grass_overlay :: proc(app: ^entities.App_State, m: ^entities.Map, cs: f32) {
@@ -819,6 +966,12 @@ render_map :: proc(app: ^entities.App_State, m: ^entities.Map, for_preview: bool
 	// Heightmap overlay — se dibuja ANTES del agua para que el agua lo tape
 	// en las celdas acuáticas (sin heightmap ni contornos sobre el agua).
 	render_heightmap_overlay(app, m, cs)
+
+	// Dune overlay (arena, DESERT) y rock overlay (roca agrietada, MOUNTAIN)
+	// — ambos 100% procedurales, cubren todo el mapa, solo uno dibuja algo
+	// según el bioma (alpha=0 en el resto vía BIOME_DUNE_STYLES/BIOME_ROCK_STYLES).
+	render_dune_layer(app, m, cs)
+	render_rock_layer(app, m, cs)
 
 	render_water_layer(m, cs, app.camera_offset_x, app.camera_offset_y, app.zoom, for_preview)
 	render_path_layer(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y, for_preview)
@@ -2806,13 +2959,26 @@ render_water_lily :: proc(x, y, cs: f32, row, col: i32) {
 		return f32(s^ & 0xFFFF) / f32(0xFFFF)
 	}
 
+	// Mismo reloj acumulado que las cáusticas del agua (dt clampeado, no
+	// GetTime() de pared — ver "Animación de shaders" en CLAUDE.md), así
+	// los nenúfares derivan en sincro visual con el resto del agua.
+	t := water_shader.anim_time
+
 	// 2-4 lily pads
 	pad_count := 2 + i32(hash_random(row, col, 0) * 3)  // 2..4
 	for i in 0 ..< pad_count {
 		s := seed + u32(i) * 97
-		px := x + rng(&s) * cs * 0.70 + cs * 0.15
-		py := y + rng(&s) * cs * 0.70 + cs * 0.15
+		base_px := x + rng(&s) * cs * 0.70 + cs * 0.15
+		base_py := y + rng(&s) * cs * 0.70 + cs * 0.15
 		pr := cs * (0.09 + rng(&s) * 0.07)  // radius 0.09..0.16 of cs
+
+		// Deriva suave sobre el agua — fase y frecuencia propias por pad (de
+		// su seed) para que no floten todos sincronizados.
+		phase := rng(&s) * 6.2832
+		freq  := 0.5 + rng(&s) * 0.3
+		amp   := cs * 0.05
+		px := base_px + math.cos(t * freq + phase) * amp
+		py := base_py + math.sin(t * freq * 0.8 + phase) * amp * 0.6
 
 		// Pad shadow
 		raylib.DrawCircle(i32(px + 1), i32(py + 1), pr, raylib.Color{0, 0, 0, 40})

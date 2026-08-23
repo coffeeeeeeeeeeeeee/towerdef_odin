@@ -559,7 +559,7 @@ editor_erase_cell :: proc(app: ^entities.App_State, row, col: i32) {
 
 	// Also remove water
 	app.editor.game_map.water_grid[row][col] = false
-	
+
 	// Remove tile data — also free the cloned key string
 	if existing_key, ok := entities.map_get_existing_key(&app.editor.game_map, row, col); ok {
 		delete_key(&app.editor.game_map.tile_data, existing_key)

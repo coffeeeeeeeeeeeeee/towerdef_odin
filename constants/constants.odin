@@ -553,6 +553,45 @@ BIOME_GRASS_STYLES := [Biome]Grass_Style {
 	.MOUNTAIN = {alpha = 0.0,  density = 0.0, grass_color = {0, 0, 0, 1}},
 }
 
+// Dune overlay (arena) — mismo esquema que Grass_Style, mutuamente
+// excluyente con él (biomas con pasto llevan alpha=0 acá y viceversa).
+// Cubre todo el mapa (no depende del heightmap ni de una capa pintada) —
+// ver render_dune_layer, systems/rendering.odin.
+// alpha:      opacidad del overlay [0..1]. 0 = desactivado.
+// density:    escala del ruido de crestas/grano (mayor = más apretado).
+// dune_color: tinte RGB en espacio [0..1] (el canal A es ignorado por el shader).
+Dune_Style :: struct {
+	alpha:      f32,
+	density:    f32,
+	dune_color: [4]f32,
+}
+
+BIOME_DUNE_STYLES := [Biome]Dune_Style {
+	.PLAIN    = {alpha = 0.0,  density = 0.0, dune_color = {0, 0, 0, 1}},
+	.FOREST   = {alpha = 0.0,  density = 0.0, dune_color = {0, 0, 0, 1}},
+	.DESERT   = {alpha = 0.50, density = 6.0, dune_color = {0.82, 0.72, 0.55, 1.0}},
+	.MOUNTAIN = {alpha = 0.0,  density = 0.0, dune_color = {0, 0, 0, 1}},
+}
+
+// Rock overlay (placas de roca agrietadas) — mismo esquema que Dune_Style:
+// cubre todo el mapa, 100% procedural (ver render_rock_layer,
+// systems/rendering.odin), sin capa pintada ni dependencia del heightmap.
+// alpha:      opacidad del overlay [0..1]. 0 = desactivado.
+// density:    escala de las placas de roca (mayor = placas más chicas/apretadas).
+// rock_color: tinte RGB en espacio [0..1] (el canal A es ignorado por el shader).
+Rock_Style :: struct {
+	alpha:      f32,
+	density:    f32,
+	rock_color: [4]f32,
+}
+
+BIOME_ROCK_STYLES := [Biome]Rock_Style {
+	.PLAIN    = {alpha = 0.0,  density = 0.0, rock_color = {0, 0, 0, 1}},
+	.FOREST   = {alpha = 0.0,  density = 0.0, rock_color = {0, 0, 0, 1}},
+	.DESERT   = {alpha = 0.0,  density = 0.0, rock_color = {0, 0, 0, 1}},
+	.MOUNTAIN = {alpha = 0.50, density = 5.0, rock_color = {0.52, 0.50, 0.47, 1.0}},
+}
+
 // Rarity system — probabilidades de aparición por slot de tienda (suman 1.0)
 RARITY_PROB_COMMON   :: f32(0.60)
 RARITY_PROB_UNCOMMON :: f32(0.25)
@@ -615,6 +654,11 @@ WATER_CORNER_RADIUS_RATIO :: f32(0.32)                  // Radio de esquinas com
 // de pared, ver Water_Shader.anim_time en systems/rendering.odin.
 WATER_ANIM_SPEED  :: f32(0.4)   // Multiplicador de velocidad (1.0 = como antes)
 WATER_ANIM_MAX_DT :: f32(0.1)   // Tope de dt por frame — evita saltos tras un hitch/minimizado
+
+// Deriva de las dunas — mismo patrón de tiempo acumulado que el agua (ver
+// "Animación de shaders" en CLAUDE.md), reusa WATER_ANIM_MAX_DT como tope de
+// dt (mismo propósito, no hace falta un valor propio).
+DUNE_ANIM_SPEED :: f32(0.3)
 
 // Bridge (path over water)
 COLOR_BRIDGE_RAILING  :: raylib.Color{ 80,  75,  70, 255}  // Barandas de cemento oscuro

@@ -108,7 +108,7 @@ void main() {
 
     // Para vista top-down usamos worldPos directamente como coordenada del noise.
     vec3 pos = vec3(p.x, u_time * 0.75, p.y);
-    pos *= 3.0;
+    pos *= 2.4;
 
     float w         = mix(water_caustics(pos), water_caustics(pos + 1.0), 0.5);
     float intensity = exp(w * 4.0 - 1.0);
