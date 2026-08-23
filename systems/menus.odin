@@ -151,21 +151,17 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 	// Black background
 	render_background()
 
-	// Title (using bold font)
-	title_text := constants.GAME_NAME
-	title_size := f32(screen_height) * 0.08
-	title_width := f32(
-		raylib.MeasureTextEx(constants.game_fonts.bold, strings.clone_to_cstring(title_text, context.temp_allocator), title_size, 0).x,
-	)
-	title_x := f32(screen_width) / 2 - title_width / 2
-	title_y := f32(screen_height) / 4
-	raylib.DrawTextEx(
-		constants.game_fonts.bold,
-		strings.clone_to_cstring(title_text, context.temp_allocator),
-		{title_x, title_y},
-		title_size,
-		0,
-		raylib.WHITE,
+	// Logo (reemplaza el título de texto)
+	logo := constants.game_icons.logo
+	logo_h := f32(screen_height) * 0.16
+	logo_w := logo_h * (f32(logo.width) / f32(logo.height))
+	logo_x := f32(screen_width) / 2 - logo_w / 2
+	logo_y := f32(screen_height) / 4 - logo_h / 2
+	raylib.DrawTexturePro(
+		logo,
+		{0, 0, f32(logo.width), f32(logo.height)},
+		{logo_x, logo_y, logo_w, logo_h},
+		{0, 0}, 0, raylib.WHITE,
 	)
 
 	// Buttons - each with individual width based on its translation text

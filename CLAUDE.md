@@ -552,11 +552,11 @@ excluyentes por bioma).
 
 ## Fondo animado (nebula.glsl)
 
-Desactivado por ahora vía `constants.NEBULA_BACKGROUND_ENABLED :: false`
-(gatea la llamada a `nebula_draw()` en `render_game`, usado en MENU,
-RUN_COMPLETE, CAMPAIGN_MAP, PROGRESSION). La infraestructura
-(`nebula_init/unload/draw`) sigue cargada — solo hay que volver el flag a
-`true` para reactivarlo.
+Activado vía `constants.NEBULA_BACKGROUND_ENABLED :: true` (gatea la
+llamada a `nebula_draw()` en `render_game`, usado en MENU, RUN_COMPLETE,
+CAMPAIGN_MAP, PROGRESSION, LIBRARY). Poner el flag en `false` lo desactiva
+sin tocar nada más — la infraestructura (`nebula_init/unload/draw`) queda
+cargada igual.
 
 ## Nombre del juego
 

@@ -34,6 +34,9 @@ Icons :: struct {
 	btn_speed_1x: raylib.Texture2D,
 	btn_speed_2x: raylib.Texture2D,
 	btn_speed_3x: raylib.Texture2D,
+
+	// Logo del menú principal (reemplaza el título de texto)
+	logo: raylib.Texture2D,
 }
 
 // Global fonts instance
@@ -156,6 +159,10 @@ load_icons :: proc() {
 	raylib.SetTextureFilter(game_icons.btn_speed_1x, .TRILINEAR)
 	raylib.SetTextureFilter(game_icons.btn_speed_2x, .TRILINEAR)
 	raylib.SetTextureFilter(game_icons.btn_speed_3x, .TRILINEAR)
+
+	game_icons.logo = raylib.LoadTexture("images/first_impact_logo.png")
+	raylib.GenTextureMipmaps(&game_icons.logo)
+	raylib.SetTextureFilter(game_icons.logo, .TRILINEAR)
 }
 
 // Unload all icon textures
@@ -180,6 +187,8 @@ unload_icons :: proc() {
 	raylib.UnloadTexture(game_icons.btn_speed_1x)
 	raylib.UnloadTexture(game_icons.btn_speed_2x)
 	raylib.UnloadTexture(game_icons.btn_speed_3x)
+
+	raylib.UnloadTexture(game_icons.logo)
 }
 
 // Unload all fonts
