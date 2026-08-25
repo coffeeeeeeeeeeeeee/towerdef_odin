@@ -2703,6 +2703,10 @@ render_card_hand :: proc(app: ^entities.App_State) {
 	screen_w := f32(raylib.GetScreenWidth())
 	screen_h := f32(raylib.GetScreenHeight())
 
+	// Cartas de la mano: más grandes que el resto de la UI (shop, biblioteca, …)
+	CARD_W := CARD_W * CARD_HAND_SCALE
+	CARD_H := CARD_H * CARD_HAND_SCALE
+
 	// Paso y solapamiento
 	max_w  := screen_w * 0.60
 	step   := min(CARD_W * 0.70, (max_w - CARD_W) / max(f32(n - 1), 1))
@@ -2743,10 +2747,10 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		if i == hovered_idx { continue }
 		card    := app.sim.cards.hand[i]
 		cx      := card_draw_x(i, hovered_idx, start_x, step, overlap)
-		render_card(app, card, cx, card_y, app.sim.cards.selected_card_idx == i, true)
+		render_card(app, card, cx, card_y, app.sim.cards.selected_card_idx == i, true, scale = CARD_HAND_SCALE)
 		// Marco blanco en carta con acción pendiente activa (LUMBERJACK, OVERDRIVE, …)
 		if app.pending_tower_action != .TOWER && app.sim.cards.selected_card_idx == i {
-			tex_rect := card_bg_draw_rect(card, cx, card_y)
+			tex_rect := card_bg_draw_rect(card, cx, card_y, CARD_HAND_SCALE)
 			raylib.DrawRectangleRoundedLinesEx(tex_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 2.5, raylib.WHITE)
 		}
 		append(&ui_click_blocks, raylib.Rectangle{cx, card_y, CARD_W, CARD_H})
@@ -2759,10 +2763,10 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		card   := app.sim.cards.hand[i]
 		cx     := card_draw_x(i, hovered_idx, start_x, step, overlap)
 		cy     := card_y - HOVER_LIFT
-		render_card(app, card, cx, cy, app.sim.cards.selected_card_idx == i, true)
+		render_card(app, card, cx, cy, app.sim.cards.selected_card_idx == i, true, scale = CARD_HAND_SCALE)
 		// Marco blanco en carta con acción pendiente activa (LUMBERJACK, OVERDRIVE, …)
 		if app.pending_tower_action != .TOWER && app.sim.cards.selected_card_idx == i {
-			tex_rect := card_bg_draw_rect(card, cx, cy)
+			tex_rect := card_bg_draw_rect(card, cx, cy, CARD_HAND_SCALE)
 			raylib.DrawRectangleRoundedLinesEx(tex_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 2.5, raylib.WHITE)
 		}
 		card_rect := raylib.Rectangle{cx, cy, CARD_W, CARD_H}

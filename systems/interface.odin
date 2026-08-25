@@ -1096,11 +1096,15 @@ render_info_panel :: proc(app: ^entities.App_State, rect: raylib.Rectangle, tool
 }
 // ─── Deck builder UI ──────────────────────────────────────────────────────────
 
-// Dimensiones de una carta en la mano
+// Dimensiones base de una carta (shop, biblioteca, desbloqueo de torres, …)
 CARD_W  :: f32(110)
 CARD_H  :: f32(155)
 CARD_GAP :: f32(10)
 CARD_BOTTOM_MARGIN :: f32(16)
+
+// Escala aplicada solo a las cartas de la mano del jugador (más grandes que
+// el resto de las cartas de la UI, que se quedan en tamaño base).
+CARD_HAND_SCALE :: f32(1.3)
 
 render_relic_preview :: proc(
 	app: ^entities.App_State,
@@ -1126,18 +1130,22 @@ render_card :: proc(
 	can_afford: bool,
 	bg_override := raylib.Color{},
 	show_price: bool = false,
+	scale: f32 = 1.0,
 ) {
 	// Calcular dimensiones de la textura primero (necesario para la sombra)
 	rarity      := entities.card_rarity(card)
 	card_bg_tex := rarity_card_tex(rarity)
 
+	CARD_W := CARD_W * scale
+	CARD_H := CARD_H * scale
+
 	draw_x, draw_y, draw_w, draw_h: f32
 	if card_bg_tex != nil {
 		img_w  := f32(card_bg_tex.width)
 		img_h  := f32(card_bg_tex.height)
-		scale  := min(CARD_W / img_w, CARD_H / img_h)
-		draw_w  = img_w * scale
-		draw_h  = img_h * scale
+		img_scale := min(CARD_W / img_w, CARD_H / img_h)
+		draw_w  = img_w * img_scale
+		draw_h  = img_h * img_scale
 		draw_x  = x + (CARD_W - draw_w) / 2
 		draw_y  = y + (CARD_H - draw_h) / 2
 	} else {
@@ -1167,9 +1175,9 @@ render_card :: proc(
 	card_rect := raylib.Rectangle{draw_x, draw_y, draw_w, draw_h}
 
 	// Preview — ocupa el tercio superior
-	preview_size : f32 = 58
+	preview_size : f32 = 58 * scale
 	preview_x := x + (CARD_W - preview_size) / 2
-	preview_y := y + 12
+	preview_y := y + 12 * scale
 	icon_cx   := x + CARD_W / 2
 	if card.kind == .OBSTACLE {
 		draw_obstacle_preview(preview_x, preview_y, preview_size)
@@ -1186,36 +1194,36 @@ render_card :: proc(
 
 	// Nombre de la carta
 	name := entities.card_name(card)
-	name_size : f32 = 12
+	name_size : f32 = 12 * scale
 	name_w := raylib.MeasureTextEx(constants.game_fonts.regular, strings.clone_to_cstring(name, context.temp_allocator), name_size, 0).x
 	raylib.DrawTextEx(
 		constants.game_fonts.regular,
 		strings.clone_to_cstring(name, context.temp_allocator),
-		{x + (CARD_W - name_w) / 2, y + 78},
+		{x + (CARD_W - name_w) / 2, y + 78 * scale},
 		name_size, 0, constants.UI_PANEL_TEXT_COLOR,
 	)
 
 	// Bonus level badge — solo torres con bonus_level > 0
 	if card.kind == .TOWER && card.bonus_level > 0 {
 		bonus_str  := fmt.ctprintf("+%d", card.bonus_level)
-		bonus_size : f32 = 13
+		bonus_size : f32 = 13 * scale
 		bonus_w    := raylib.MeasureTextEx(constants.game_fonts.bold, bonus_str, bonus_size, 0).x
-		bonus_x    := x + CARD_W - bonus_w - 6
-		bonus_y    := y + 6
+		bonus_x    := x + CARD_W - bonus_w - 6 * scale
+		bonus_y    := y + 6 * scale
 		draw_text_with_outline(bonus_str, {bonus_x, bonus_y}, bonus_size, 0,
 			raylib.Color{100, 220, 255, 255}, raylib.Color{0, 0, 0, 200}, 1,
 			constants.game_fonts.bold)
 
 		level_str  := fmt.ctprintf("-> Nv. %d", card.bonus_level + 1)
-		level_size : f32 = 11
+		level_size : f32 = 11 * scale
 		level_w    := raylib.MeasureTextEx(constants.game_fonts.regular, level_str, level_size, 0).x
-		draw_text_with_outline(level_str, {x + (CARD_W - level_w) / 2, y + 90}, level_size, 0,
+		draw_text_with_outline(level_str, {x + (CARD_W - level_w) / 2, y + 90 * scale}, level_size, 0,
 			raylib.Color{100, 220, 255, 255}, raylib.Color{0, 0, 0, 200}, 1,
 			constants.game_fonts.regular)
 	}
 
 	// Separador
-	raylib.DrawLineEx({x + 10, y + 96}, {x + CARD_W - 10, y + 96}, 1, raylib.Color{100, 100, 120, 120})
+	raylib.DrawLineEx({x + 10 * scale, y + 96 * scale}, {x + CARD_W - 10 * scale, y + 96 * scale}, 1, raylib.Color{100, 100, 120, 120})
 
 	// Costo — solo en el shop
 	if show_price {
@@ -1226,19 +1234,19 @@ render_card :: proc(
 			price = entities.card_cost(card)
 		}
 		cost_str  := fmt.ctprintf("$%d", price)
-		cost_size : f32 = 15
+		cost_size : f32 = 15 * scale
 		cost_w    := raylib.MeasureTextEx(constants.game_fonts.semibold, cost_str, cost_size, 0).x
 		cost_color := can_afford ? raylib.Color{80, 220, 100, 255} : raylib.Color{200, 60, 60, 255}
 		raylib.DrawTextEx(
 			constants.game_fonts.bold,
 			cost_str,
-			{x + (CARD_W - cost_w) / 2, y + 102},
+			{x + (CARD_W - cost_w) / 2, y + 102 * scale},
 			cost_size, 0, cost_color,
 		)
 	}
 
 	// Badge de rareza — siempre al pie de la carta
-	render_rarity(entities.card_rarity(card), x, y + CARD_H - 24, CARD_W)
+	render_rarity(entities.card_rarity(card), x, y + CARD_H - 24 * scale, CARD_W)
 
 	if grayscale { raylib.EndShaderMode() }
 }
@@ -1258,17 +1266,20 @@ rarity_border_color :: proc(rarity: constants.Card_Rarity) -> raylib.Color {
 // Devuelve el rectángulo real donde se renderiza la textura de fondo de una carta.
 // Útil fuera de render_card para alinear bordes y decoraciones al contorno exacto.
 // Si no hay textura cargada devuelve el rectángulo completo {x, y, CARD_W, CARD_H}.
-card_bg_draw_rect :: proc(card: entities.Card, x, y: f32) -> raylib.Rectangle {
+card_bg_draw_rect :: proc(card: entities.Card, x, y: f32, scale: f32 = 1.0) -> raylib.Rectangle {
+	CARD_W := CARD_W * scale
+	CARD_H := CARD_H * scale
+
 	rarity := entities.card_rarity(card)
 	tex    := rarity_card_tex(rarity)
 	if tex == nil {
 		return {x, y, CARD_W, CARD_H}
 	}
-	img_w  := f32(tex.width)
-	img_h  := f32(tex.height)
-	scale  := min(CARD_W / img_w, CARD_H / img_h)
-	draw_w := img_w * scale
-	draw_h := img_h * scale
+	img_w     := f32(tex.width)
+	img_h     := f32(tex.height)
+	img_scale := min(CARD_W / img_w, CARD_H / img_h)
+	draw_w := img_w * img_scale
+	draw_h := img_h * img_scale
 	return raylib.Rectangle{
 		x + (CARD_W - draw_w) / 2,
 		y + (CARD_H - draw_h) / 2,

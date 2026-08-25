@@ -17,6 +17,10 @@ WINDOW_WIDTH :: 800
 WINDOW_HEIGHT :: 600
 WINDOW_TITLE :: constants.GAME_NAME
 
+// El tamaño mínimo de pantalla es 640 x 480 pixeles
+WINDOW_MIN_WIDTH :: 640
+WINDOW_MIN_HEIGHT :: 480
+
 main :: proc() {
 	// Load settings first
 	initial_settings := load_settings()
@@ -33,6 +37,8 @@ main :: proc() {
 	raylib.SetConfigFlags(config_flags)
 	raylib.InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE)
 	defer raylib.CloseWindow()
+
+	raylib.SetWindowMinSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
 
 	if initial_settings.fullscreen {
 		monitor := raylib.GetCurrentMonitor()
