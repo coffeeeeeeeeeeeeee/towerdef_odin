@@ -898,6 +898,25 @@ UI_MARGIN_X :: 10  // Screen-edge horizontal margin for panels
 UI_MARGIN_Y :: 8   // Screen-edge vertical margin for panels
 UI_PANEL_PADDING :: 14  // Internal padding inside panels (both axes)
 
+// Resolución de referencia para el escalado automático del HUD de la pantalla
+// de juego (paneles superiores, panel de torre/obstáculo, tray de relictos,
+// mano de cartas). No tiene relación con cell_size (zoom del mapa/mundo).
+UI_SCALE_REFERENCE_W :: f32(800)
+UI_SCALE_REFERENCE_H :: f32(600)
+UI_SCALE_MIN :: f32(0.8)
+UI_SCALE_MAX :: f32(1.2)
+
+// Factor de escala del HUD, derivado automáticamente del tamaño actual de la
+// ventana — no es un setting, se recalcula cada frame. Usa el menor de los
+// dos ejes (ancho/alto) para no desbordar en ventanas muy angostas o muy
+// bajas; 1.0 exactamente a la resolución de referencia (800x600).
+ui_scale :: proc() -> f32 {
+	sw := f32(raylib.GetScreenWidth())
+	sh := f32(raylib.GetScreenHeight())
+	s  := min(sw / UI_SCALE_REFERENCE_W, sh / UI_SCALE_REFERENCE_H)
+	return clamp(s, UI_SCALE_MIN, UI_SCALE_MAX)
+}
+
 TOOLTIP_MARGIN_X      :: i32(6)
 TOOLTIP_MARGIN_Y      :: i32(4)
 UI_TOOLTIP_FONT_SIZE  :: i32(12)

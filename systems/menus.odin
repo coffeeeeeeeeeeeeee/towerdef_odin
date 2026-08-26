@@ -272,17 +272,21 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	screen_width := raylib.GetScreenWidth()
 	screen_height := raylib.GetScreenHeight()
 
+	// Escala automática del HUD según el tamaño de ventana actual (ver
+	// constants.ui_scale — 1.0 a 800x600, crece/achica con la ventana).
+	s := constants.ui_scale()
+
 	// Track game session start time
 	if game_session_start_time == 0 {
 		game_session_start_time = raylib.GetTime()
 	}
 
 	// HUD info panels — 4 paneles separados, alineados a la izquierda
-	hud_panel_w   : f32 = 110
-	hud_panel_h   : f32 = constants.UI_PANEL_HEADER_SIZE + constants.UI_PANEL_PADDING * 2  // 32 + 28 = 60
-	hud_panel_gap : f32 = constants.UI_MARGIN_Y / 2
-	hud_px        := f32(constants.UI_MARGIN_X)
-	hud_py        := f32(constants.UI_MARGIN_Y)
+	hud_panel_w   : f32 = 110 * s
+	hud_panel_h   : f32 = (constants.UI_PANEL_HEADER_SIZE + constants.UI_PANEL_PADDING * 2) * s  // 32 + 28 = 60
+	hud_panel_gap : f32 = constants.UI_MARGIN_Y / 2 * s
+	hud_px        := f32(constants.UI_MARGIN_X) * s
+	hud_py        := f32(constants.UI_MARGIN_Y) * s
 
 	// Money
 	render_info_panel(
@@ -291,6 +295,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		constants.get_text("UI_MONEY"),
 		format_short(app.sim.money),
 		constants.game_icons.money,
+		s,
 	)
 
 	// Health
@@ -301,6 +306,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		constants.get_text("UI_HEALTH"),
 		fmt.tprintf("%d", app.sim.health),
 		constants.game_icons.health,
+		s,
 	)
 
 	// Wave
@@ -314,6 +320,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			constants.get_text("UI_WAVE"),
 			fmt.tprintf("%d", display_wave),
 			constants.game_icons.wave,
+			s,
 		)
 	}
 
@@ -321,11 +328,11 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	if app.sim.relic_stacks[.SCOUT] > 0 {
 	hud_py += hud_panel_h + hud_panel_gap
 	{
-		c := render_info_panel(app, {hud_px, hud_py, hud_panel_w, hud_panel_h}, constants.get_text("UI_UPCOMING"))
+		c := render_info_panel(app, {hud_px, hud_py, hud_panel_w, hud_panel_h}, constants.get_text("UI_UPCOMING"), scale = s)
 
 		scout_slots := min(app.sim.relic_stacks[.SCOUT], 3)
 		base_wave := app.sim.wave_number
-		icon_r    : f32 = 9
+		icon_r    : f32 = 9 * s
 		slot_w    := c.width / f32(scout_slots)
 		cy        := c.y + c.height / 2
 
@@ -392,7 +399,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 
 			// Punto secundario (esquina inferior-derecha del ícono principal)
 			if has_sub_dot {
-				sec_r : f32 = 4
+				sec_r : f32 = 4 * s
 				raylib.DrawCircle(i32(cx + icon_r - 1), i32(cy + icon_r - 1), sec_r, sub_dot_color)
 				raylib.DrawCircleLines(i32(cx + icon_r - 1), i32(cy + icon_r - 1), sec_r, raylib.ColorAlpha(raylib.BLACK, 0.4))
 			}
@@ -405,15 +412,15 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	}
 	} // Scout panel
 
-	font_size := f32(constants.UI_BUTTON_FONT_SIZE) // usado por el resto del proc
+	font_size := f32(constants.UI_BUTTON_FONT_SIZE) * s // usado por el resto del proc
 
 	// Calculate button widths based on text
-	button_y := i32(10)
-	padding := i32(20)
-	gap := i32(10)
+	button_y := i32(10 * s)
+	padding := i32(20 * s)
+	gap := i32(10 * s)
 
 	// Icon buttons are square (height × height)
-	icon_btn_size := i32(constants.UI_BUTTON_HEIGHT)
+	icon_btn_size := i32(f32(constants.UI_BUTTON_HEIGHT) * s)
 	pause_width   := icon_btn_size
 	speed1_width  := icon_btn_size
 	speed2_width  := icon_btn_size
@@ -451,7 +458,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 		visible_button_count += 1
 		gap_count += 1
 	}
-	total_buttons_width := pause_width + speed1_width + speed2_width + speed3_width + start_width + skip_shop_width + gap * gap_count + constants.UI_MARGIN_X
+	total_buttons_width := pause_width + speed1_width + speed2_width + speed3_width + start_width + skip_shop_width + gap * gap_count + i32(constants.UI_MARGIN_X * s)
 	if show_next_wave_button {
 		total_buttons_width += next_wave_width
 	}
@@ -476,13 +483,14 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	// Start button (appears before first wave or between waves)
 	if render_button(
 		start_text,
-		{f32(start_x), f32(button_y), f32(start_width), f32(constants.UI_BUTTON_HEIGHT)},
+		{f32(start_x), f32(button_y), f32(start_width), f32(icon_btn_size)},
 		{
 			disabled      = !can_start_wave,
 			text_color    = constants.UI_TEXT_COLOR,
 			button_color  = constants.UI_BUTTON_ACTION_COLOR,
 			hover_color   = constants.UI_BUTTON_ACTION_HOVER,
 			pressed_color = constants.UI_BUTTON_ACTION_PRESS,
+			scale         = s,
 		},
 	) {
 		if can_start_wave {
@@ -494,11 +502,12 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	// Skip Shop toggle — activa/desactiva el cierre automático de la tienda al final de cada oleada
 	if render_button(
 		skip_shop_text,
-		{f32(skip_shop_x), f32(button_y), f32(skip_shop_width), f32(constants.UI_BUTTON_HEIGHT)},
+		{f32(skip_shop_x), f32(button_y), f32(skip_shop_width), f32(icon_btn_size)},
 		{
 			button_color  = app.settings.auto_skip_shop ? active_green       : no_color,
 			hover_color   = app.settings.auto_skip_shop ? active_green_hover : no_color,
 			pressed_color = app.settings.auto_skip_shop ? active_green_press : no_color,
+			scale         = s,
 		},
 	) {
 		app.settings.auto_skip_shop = !app.settings.auto_skip_shop
@@ -508,8 +517,8 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	if show_next_wave_button {
 		if render_button(
 			next_wave_text,
-			{f32(next_wave_x), f32(button_y), f32(next_wave_width), f32(constants.UI_BUTTON_HEIGHT)},
-			{disabled = !is_between_waves},
+			{f32(next_wave_x), f32(button_y), f32(next_wave_width), f32(icon_btn_size)},
+			{disabled = !is_between_waves, scale = s},
 		) {
 			if is_between_waves {
 				simulation_set_pause(app, false)
@@ -528,7 +537,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	}
 	if render_icon_button(
 		pause_icon,
-		{f32(pause_x), f32(button_y), f32(pause_width), f32(constants.UI_BUTTON_HEIGHT)},
+		{f32(pause_x), f32(button_y), f32(pause_width), f32(icon_btn_size)},
 		{
 			button_color  = pause_col,
 			hover_color   = pause_hover_col,
@@ -547,7 +556,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	}
 	if render_icon_button(
 		constants.game_icons.btn_speed_1x,
-		{f32(speed1_x), f32(button_y), f32(speed1_width), f32(constants.UI_BUTTON_HEIGHT)},
+		{f32(speed1_x), f32(button_y), f32(speed1_width), f32(icon_btn_size)},
 		{
 			button_color  = speed1_col,
 			hover_color   = speed1_hover_col,
@@ -565,7 +574,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	}
 	if render_icon_button(
 		constants.game_icons.btn_speed_2x,
-		{f32(speed2_x), f32(button_y), f32(speed2_width), f32(constants.UI_BUTTON_HEIGHT)},
+		{f32(speed2_x), f32(button_y), f32(speed2_width), f32(icon_btn_size)},
 		{
 			button_color  = speed2_col,
 			hover_color   = speed2_hover_col,
@@ -583,7 +592,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	}
 	if render_icon_button(
 		constants.game_icons.btn_speed_3x,
-		{f32(speed3_x), f32(button_y), f32(speed3_width), f32(constants.UI_BUTTON_HEIGHT)},
+		{f32(speed3_x), f32(button_y), f32(speed3_width), f32(icon_btn_size)},
 		{
 			button_color  = speed3_col,
 			hover_color   = speed3_hover_col,
@@ -1866,13 +1875,16 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 		return
 	}
 
+	// Escala automática del HUD según el tamaño de ventana actual.
+	s := constants.ui_scale()
+
 	// Layout constants — height computed from actual content
-	button_height  : i32 = 30
-	strategy_height: i32 = 30
-	spacing        : i32 = constants.UI_PANEL_MARGIN / 2
-	font_size      : f32 = constants.UI_PANEL_TEXT_SIZE
-	info_height    : i32 = i32(constants.UI_PANEL_LABEL_SIZE) + 4  // coincide con current_y += UI_PANEL_LABEL_SIZE + 4
-	line_height    : i32 = i32(font_size) + 10         // más espacio entre líneas de stats
+	button_height  : i32 = i32(30 * s)
+	strategy_height: i32 = i32(30 * s)
+	spacing        : i32 = i32(f32(constants.UI_PANEL_MARGIN) / 2 * s)
+	font_size      : f32 = constants.UI_PANEL_TEXT_SIZE * s
+	info_height    : i32 = i32(constants.UI_PANEL_LABEL_SIZE * s) + i32(4 * s)  // coincide con current_y += UI_PANEL_LABEL_SIZE + 4
+	line_height    : i32 = i32(font_size) + i32(10 * s)  // más espacio entre líneas de stats
 	stats_height   : i32 = 3 * line_height             // 3 líneas: daño, velocidad, críticos
 	is_enhance    := tower.type == .ENHANCE
 	show_stats    := !is_enhance
@@ -1886,14 +1898,14 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	content_height += button_height  // sell (último, sin gap)
 
 	// render_panel consume: margin_y + title(30) + margin_y = UI_PANEL_PADDING*2 + 30
-	PANEL_OVERHEAD :: i32(constants.UI_PANEL_PADDING * 2 + 30)
+	PANEL_OVERHEAD := i32((constants.UI_PANEL_PADDING * 2 + 30) * s)
 	panel_height   := content_height + PANEL_OVERHEAD
 
 	// Panel dimensions and position
 	panel_rect := raylib.Rectangle {
-		x      = f32(raylib.GetScreenWidth() - constants.UI_PANEL_WIDTH - constants.UI_MARGIN_X),
-		y      = f32(constants.UI_PANEL_Y_POSITION),
-		width  = f32(constants.UI_PANEL_WIDTH),
+		x      = f32(raylib.GetScreenWidth()) - constants.UI_PANEL_WIDTH * s - constants.UI_MARGIN_X * s,
+		y      = constants.UI_PANEL_Y_POSITION * s,
+		width  = constants.UI_PANEL_WIDTH * s,
 		height = f32(panel_height),
 	}
 
@@ -1939,7 +1951,7 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	}
 
 	// Render panel background and get content area (title = type name only)
-	content_area  := render_panel(panel_rect, type_name)
+	content_area  := render_panel(panel_rect, type_name, s)
 	content_x     := i32(content_area.x)
 	content_y     := i32(content_area.y)
 	content_width := i32(content_area.width)
@@ -1952,24 +1964,24 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 		constants.game_fonts.semibold,
 		strings.clone_to_cstring(level_text, context.temp_allocator),
 		{f32(content_x), f32(current_y)},
-		f32(constants.UI_PANEL_LABEL_SIZE),
+		constants.UI_PANEL_LABEL_SIZE * s,
 		0,
 		constants.UI_PANEL_LABEL_COLOR,
 	)
-	current_y += i32(constants.UI_PANEL_LABEL_SIZE) + 4
+	current_y += i32(constants.UI_PANEL_LABEL_SIZE * s) + i32(4 * s)
 
 	// Stats — no se muestran para el Potenciador
 	if show_stats {
 		icon_size := f32(line_height - 2)
 
-		ICON_SLOT  :: f32(20)  // ancho fijo reservado para el ícono (todos los iconos caben aquí)
-		ICON_GAP   :: f32(6)   // margen fijo entre la columna del ícono y el texto
+		icon_slot := f32(20) * s  // ancho reservado para el ícono (todos los iconos caben aquí)
+		icon_gap  := f32(6) * s   // margen entre la columna del ícono y el texto
 
-		draw_icon_stat :: proc(icon: raylib.Texture2D, value: string, x, y: i32, icon_sz, font_sz: f32) {
+		draw_icon_stat :: proc(icon: raylib.Texture2D, value: string, x, y: i32, icon_sz, font_sz, icon_slot, icon_gap: f32) {
 			// Ícono centrado dentro del slot fijo
 			aspect := f32(icon.width) / f32(icon.height) if icon.height > 0 else 1
 			draw_w := icon_sz * aspect
-			icon_x := f32(x) + (ICON_SLOT - draw_w) / 2  // centrado horizontalmente en el slot
+			icon_x := f32(x) + (icon_slot - draw_w) / 2  // centrado horizontalmente en el slot
 			raylib.DrawTexturePro(
 				icon,
 				{0, 0, f32(icon.width), f32(icon.height)},
@@ -1978,12 +1990,12 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 				0,
 				raylib.WHITE,
 			)
-			// Texto siempre a ICON_SLOT + ICON_GAP del origen — gap constante en los tres stats
+			// Texto siempre a icon_slot + icon_gap del origen — gap constante en los tres stats
 			val_cstr := strings.clone_to_cstring(value, context.temp_allocator)
 			raylib.DrawTextEx(
 				constants.game_fonts.semibold,
 				val_cstr,
-				{f32(x) + ICON_SLOT + ICON_GAP, f32(y) + (icon_sz - font_sz) / 2},
+				{f32(x) + icon_slot + icon_gap, f32(y) + (icon_sz - font_sz) / 2},
 				font_sz,
 				0,
 				constants.UI_PANEL_TEXT_COLOR,
@@ -1991,7 +2003,7 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 		}
 
 		crit_pct := entities.tower_get_critical_chance(tower) * 100
-		draw_icon_stat(constants.game_icons.damage, fmt.tprintf("%.1f", tower.damage), content_x, current_y + 0 * line_height, icon_size, font_size)
+		draw_icon_stat(constants.game_icons.damage, fmt.tprintf("%.1f", tower.damage), content_x, current_y + 0 * line_height, icon_size, font_size, icon_slot, icon_gap)
 
 		// Bonus de daño extra (Bloodlust + Formation): mostrar en verde junto al stat de daño
 		{
@@ -2004,24 +2016,24 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 			if total_bonus >= 0.05 {
 				dmg_str      := fmt.tprintf("%.1f", tower.damage)
 				dmg_width    := raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(dmg_str, context.temp_allocator), font_size, 0).x
-				bonus_x      := f32(content_x) + ICON_SLOT + ICON_GAP + dmg_width + 4
+				bonus_x      := f32(content_x) + icon_slot + icon_gap + dmg_width + 4 * s
 				bonus_y      := f32(current_y + 0 * line_height) + (icon_size - font_size) / 2
 				bonus_str    := fmt.ctprintf("(+%.1f)", total_bonus)
 				raylib.DrawTextEx(constants.game_fonts.semibold, bonus_str, {bonus_x, bonus_y}, font_size, 0, raylib.Color{80, 220, 80, 255})
 			}
 		}
 
-		draw_icon_stat(constants.game_icons.speed,  fmt.tprintf("%.2fs", tower.cooldown), content_x, current_y + 1 * line_height, icon_size, font_size)
+		draw_icon_stat(constants.game_icons.speed,  fmt.tprintf("%.2fs", tower.cooldown), content_x, current_y + 1 * line_height, icon_size, font_size, icon_slot, icon_gap)
 		// Bonus de velocidad de OVERDRIVE: mostrar "+X%" en verde junto al cooldown
 		if tower.overdrive_stacks > 0 {
 			cd_str    := fmt.tprintf("%.2fs", tower.cooldown)
 			cd_width  := raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(cd_str, context.temp_allocator), font_size, 0).x
-			bonus_x   := f32(content_x) + ICON_SLOT + ICON_GAP + cd_width + 4
+			bonus_x   := f32(content_x) + icon_slot + icon_gap + cd_width + 4 * s
 			bonus_y   := f32(current_y + 1 * line_height) + (icon_size - font_size) / 2
 			bonus_str := fmt.ctprintf("+%d%%", i32(f32(tower.overdrive_stacks) * constants.OVERDRIVE_SPEED_PER_STACK * 100))
 			raylib.DrawTextEx(constants.game_fonts.semibold, bonus_str, {bonus_x, bonus_y}, font_size, 0, raylib.Color{80, 220, 80, 255})
 		}
-		draw_icon_stat(constants.game_icons.crit,   fmt.tprintf("%.0f%%", crit_pct),      content_x, current_y + 2 * line_height, icon_size, font_size)
+		draw_icon_stat(constants.game_icons.crit,   fmt.tprintf("%.0f%%", crit_pct),      content_x, current_y + 2 * line_height, icon_size, font_size, icon_slot, icon_gap)
 		current_y += stats_height + spacing
 	}
 
@@ -2040,7 +2052,7 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 	if render_button(
 		   upgrade_text,
 		   {f32(content_x), f32(current_y), f32(button_width), f32(button_height)},
-		   {disabled = at_max},
+		   {disabled = at_max, scale = s},
 	   ) &&
 	   can_afford_upgrade {
 		entities.tower_upgrade(tower)
@@ -2070,6 +2082,7 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 			button_width,
 			strategy_height,
 			true,
+			s,
 		) {
 			tower.target_strategy = constants.Target_Strategy(strategy_index)
 		}
@@ -2088,6 +2101,7 @@ render_tower_control_panel :: proc(app: ^entities.App_State) {
 			button_color  = constants.UI_BUTTON_SELL_COLOR,
 			hover_color   = constants.UI_BUTTON_SELL_HOVER,
 			pressed_color = constants.UI_BUTTON_SELL_PRESS,
+			scale         = s,
 		},
 	) {
 		simulation_remove_tower_at(app, tower.r, tower.c)
@@ -2107,27 +2121,30 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 	col := app.selected_obstacle.col
 	level := entities.map_get_obstacle_level(&app.editor.game_map, row, col)
 
+	// Escala automática del HUD según el tamaño de ventana actual.
+	s := constants.ui_scale()
+
 	// Layout constants — compact panel sized to content
-	button_height: i32 = 30
-	spacing      : i32 = 8
-	font_size    : f32 = 14
-	info_height  : i32 = 22
-	line_height  : i32 = i32(font_size) + 5
+	button_height: i32 = i32(30 * s)
+	spacing      : i32 = i32(8 * s)
+	font_size    : f32 = 14 * s
+	info_height  : i32 = i32(22 * s)
+	line_height  : i32 = i32(font_size) + i32(5 * s)
 	stat_height  : i32 = line_height
 	// elements: info, stat, upgrade btn, sell btn; gaps between them: 3
 	inner_height := info_height + stat_height + 2 * button_height + 3 * spacing
-	panel_height := inner_height + 20 // 10px top + 10px bottom padding
+	panel_height := inner_height + i32(20 * s) // 10px top + 10px bottom padding
 
 	// Panel dimensions and position
 	panel_rect := raylib.Rectangle {
-		x      = f32(raylib.GetScreenWidth() - constants.UI_PANEL_WIDTH - constants.UI_MARGIN_X),
-		y      = f32(constants.UI_PANEL_Y_POSITION),
-		width  = f32(constants.UI_PANEL_WIDTH),
+		x      = f32(raylib.GetScreenWidth()) - constants.UI_PANEL_WIDTH * s - constants.UI_MARGIN_X * s,
+		y      = constants.UI_PANEL_Y_POSITION * s,
+		width  = constants.UI_PANEL_WIDTH * s,
 		height = f32(panel_height),
 	}
 
 	// Render panel background and get content area
-	content_area  := render_panel(panel_rect, "")
+	content_area  := render_panel(panel_rect, "", s)
 	content_x     := i32(content_area.x)
 	content_y     := i32(content_area.y)
 	content_width := i32(content_area.width)
@@ -2140,7 +2157,7 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 		constants.game_fonts.bold,
 		strings.clone_to_cstring(info_text, context.temp_allocator),
 		{f32(content_x), f32(current_y)},
-		20,
+		20 * s,
 		0,
 		constants.UI_PANEL_TEXT_COLOR,
 	)
@@ -2166,6 +2183,7 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 	if render_button(
 		   level_text,
 		   {f32(content_x), f32(current_y), f32(button_width), f32(button_height)},
+		   {scale = s},
 	   ) &&
 	   can_afford_level {
 		entities.map_set_obstacle_level(&app.editor.game_map, row, col, level + 1)
@@ -2187,6 +2205,7 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 			button_color  = constants.UI_BUTTON_SELL_COLOR,
 			hover_color   = constants.UI_BUTTON_SELL_HOVER,
 			pressed_color = constants.UI_BUTTON_SELL_PRESS,
+			scale         = s,
 		},
 	) {
 		app.editor.game_map.obstacle_grid[row][col] = .EMPTY
@@ -2203,16 +2222,18 @@ render_obstacle_control_panel :: proc(app: ^entities.App_State) {
 // Muestra los relictos activos (stacks > 0) en la esquina inferior izquierda.
 // Cada relicto aparece como un slot cuadrado con icono y badge "x N".
 render_relic_tray :: proc(app: ^entities.App_State) {
-	ICON_SIZE    : f32 = 40  // tamaño del icono
-	BADGE_SIZE   : f32 = 16  // tamaño de fuente del número de stacks
-	SLOT_GAP     : f32 = 8   // separación entre iconos (vertical y horizontal)
-	MAX_PER_COL  : i32 = 5   // máximo de relictos por columna antes de abrir una nueva
+	s := constants.ui_scale()
+
+	ICON_SIZE    : f32 = 40 * s  // tamaño del icono
+	BADGE_SIZE   : f32 = 16 * s  // tamaño de fuente del número de stacks
+	SLOT_GAP     : f32 = 8 * s   // separación entre iconos (vertical y horizontal)
+	MAX_PER_COL  : i32 = 5       // máximo de relictos por columna antes de abrir una nueva
 
 	screen_h := f32(raylib.GetScreenHeight())
-	base_x   := f32(constants.UI_MARGIN_X)
+	base_x   := constants.UI_MARGIN_X * s
 
-	// Ancla inferior: justo encima de la zona de cartas
-	anchor_y := screen_h - CARD_H - CARD_BOTTOM_MARGIN - SLOT_GAP
+	// Ancla inferior: justo encima de la zona de cartas (mismo tamaño que usa render_card_hand)
+	anchor_y := screen_h - CARD_H * CARD_HAND_SCALE * s - CARD_BOTTOM_MARGIN * s - SLOT_GAP
 
 	slot_idx := i32(0)
 	for spec in entities.RELIC_SPECS {
@@ -2703,9 +2724,13 @@ render_card_hand :: proc(app: ^entities.App_State) {
 	screen_w := f32(raylib.GetScreenWidth())
 	screen_h := f32(raylib.GetScreenHeight())
 
-	// Cartas de la mano: más grandes que el resto de la UI (shop, biblioteca, …)
-	CARD_W := CARD_W * CARD_HAND_SCALE
-	CARD_H := CARD_H * CARD_HAND_SCALE
+	// Cartas de la mano: más grandes que el resto de la UI (shop, biblioteca, …),
+	// y además responden a la escala automática del HUD según el tamaño de ventana.
+	s := constants.ui_scale()
+	hand_scale := CARD_HAND_SCALE * s
+	CARD_W := CARD_W * hand_scale
+	CARD_H := CARD_H * hand_scale
+	CARD_BOTTOM_MARGIN := CARD_BOTTOM_MARGIN * s
 
 	// Paso y solapamiento
 	max_w  := screen_w * 0.60
@@ -2747,10 +2772,10 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		if i == hovered_idx { continue }
 		card    := app.sim.cards.hand[i]
 		cx      := card_draw_x(i, hovered_idx, start_x, step, overlap)
-		render_card(app, card, cx, card_y, app.sim.cards.selected_card_idx == i, true, scale = CARD_HAND_SCALE)
+		render_card(app, card, cx, card_y, app.sim.cards.selected_card_idx == i, true, scale = hand_scale)
 		// Marco blanco en carta con acción pendiente activa (LUMBERJACK, OVERDRIVE, …)
 		if app.pending_tower_action != .TOWER && app.sim.cards.selected_card_idx == i {
-			tex_rect := card_bg_draw_rect(card, cx, card_y, CARD_HAND_SCALE)
+			tex_rect := card_bg_draw_rect(card, cx, card_y, hand_scale)
 			raylib.DrawRectangleRoundedLinesEx(tex_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 2.5, raylib.WHITE)
 		}
 		append(&ui_click_blocks, raylib.Rectangle{cx, card_y, CARD_W, CARD_H})
@@ -2763,17 +2788,20 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		card   := app.sim.cards.hand[i]
 		cx     := card_draw_x(i, hovered_idx, start_x, step, overlap)
 		cy     := card_y - HOVER_LIFT
-		render_card(app, card, cx, cy, app.sim.cards.selected_card_idx == i, true, scale = CARD_HAND_SCALE)
+		render_card(app, card, cx, cy, app.sim.cards.selected_card_idx == i, true, scale = hand_scale)
 		// Marco blanco en carta con acción pendiente activa (LUMBERJACK, OVERDRIVE, …)
 		if app.pending_tower_action != .TOWER && app.sim.cards.selected_card_idx == i {
-			tex_rect := card_bg_draw_rect(card, cx, cy, CARD_HAND_SCALE)
+			tex_rect := card_bg_draw_rect(card, cx, cy, hand_scale)
 			raylib.DrawRectangleRoundedLinesEx(tex_rect, constants.UI_ROUNDNESS, constants.UI_SEGMENTS, 2.5, raylib.WHITE)
 		}
 		card_rect := raylib.Rectangle{cx, cy, CARD_W, CARD_H}
 		append(&ui_click_blocks, card_rect)
 		render_card_tooltip(app, card, card_rect)
 
-		// Clic para seleccionar / activar relicto — bloqueado si el shop está abierto
+		// Clic para seleccionar/colocar torre-obstáculo o activar una reliquia con
+		// objetivo — bloqueado si el shop está abierto (el mapa queda tapado).
+		// Las reliquias pasivas son la excepción: no piden objetivo, se pueden
+		// consumir aunque el shop esté abierto (ver is_passive_relic más abajo).
 		shop_open       := app.sim.shop.active
 		card_is_pending := app.pending_tower_action != .TOWER && app.sim.cards.selected_card_idx == i
 

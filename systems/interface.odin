@@ -248,8 +248,9 @@ render_select :: proc(
 	selected_index: ^i32,
 	x, y, width, height: i32,
 	dropup: bool = false,
+	scale: f32 = 1.0,
 ) -> bool {
-	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
+	font_size := f32(constants.UI_BUTTON_FONT_SIZE) * scale
 
 	// Find max width among all options to keep width stable
 	max_text_width: f32 = 0
@@ -651,6 +652,7 @@ Button_Opts :: struct {
 	button_color:  raylib.Color,
 	hover_color:   raylib.Color,
 	pressed_color: raylib.Color,
+	scale:         f32,  // 0 (default) == 1.0 — solo afecta el tamaño de fuente interno
 }
 
 render_button :: proc(
@@ -665,6 +667,8 @@ render_button :: proc(
 	button_color         := opts.button_color
 	button_hover_color   := opts.hover_color
 	button_pressed_color := opts.pressed_color
+	btn_scale := opts.scale
+	if btn_scale == 0 { btn_scale = 1.0 }
 
 	// Resolve text color: explicit > white-when-colored > default UI text
 	resolved_text_color := opts.text_color
@@ -679,7 +683,7 @@ render_button :: proc(
 		resolved_text_color = raylib.WHITE
 	}
 
-	font_size := f32(constants.UI_BUTTON_FONT_SIZE)
+	font_size := f32(constants.UI_BUTTON_FONT_SIZE) * btn_scale
 	text_width := f32(
 		raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(text, context.temp_allocator), font_size, 0).x,
 	)
@@ -905,7 +909,7 @@ ui_is_modal_blocked :: proc(x, y: i32) -> bool {
 game_session_start_time: f64 = 0
 game_session_end_time: f64 = 0
 game_session_total_kills: i32 = 0
-render_panel :: proc(rect: raylib.Rectangle, title: string = "") -> raylib.Rectangle {
+render_panel :: proc(rect: raylib.Rectangle, title: string = "", scale: f32 = 1.0) -> raylib.Rectangle {
 	// Register panel area so input system ignores grid clicks behind it
 	append(&ui_click_blocks, rect)
 
@@ -935,19 +939,19 @@ render_panel :: proc(rect: raylib.Rectangle, title: string = "") -> raylib.Recta
 		constants.UI_PANEL_COLOR
 	)
 
-	margin_x := i32(constants.UI_PANEL_PADDING)
-	margin_y := i32(constants.UI_PANEL_PADDING)
+	margin_x := i32(constants.UI_PANEL_PADDING * scale)
+	margin_y := i32(constants.UI_PANEL_PADDING * scale)
 
 	// Draw title inside panel margins if provided
 	title_height: i32 = 0
 	if title != "" {
-		title_height = 30 // Space for title line
+		title_height = i32(30 * scale) // Space for title line
 		title_cstr := strings.clone_to_cstring(title, context.temp_allocator)
 		raylib.DrawTextEx(
 			constants.game_fonts.bold,
 			title_cstr,
 			{f32(x + margin_x), f32(y + margin_y)},
-			constants.UI_PANEL_TITLE_SIZE,
+			constants.UI_PANEL_TITLE_SIZE * scale,
 			0,
 			constants.UI_PANEL_TITLE_COLOR,
 		)
@@ -1039,11 +1043,11 @@ render_confirm_modal :: proc(text: string) -> Modal_Result {
 // Render info panel: icon + large bold value filling the panel, tooltip on hover.
 // Delegates shadow + background + click-blocking to render_panel (called with no title).
 // Returns the content rectangle so callers can draw additional content.
-render_info_panel :: proc(app: ^entities.App_State, rect: raylib.Rectangle, tooltip: string, value: string = "", icon: raylib.Texture2D = {}) -> raylib.Rectangle {
+render_info_panel :: proc(app: ^entities.App_State, rect: raylib.Rectangle, tooltip: string, value: string = "", icon: raylib.Texture2D = {}, scale: f32 = 1.0) -> raylib.Rectangle {
 	// render_panel handles: drop shadow, rounded background, ui_click_blocks registration.
 	_ = render_panel(rect)
 
-	margin    : f32 = constants.UI_PANEL_PADDING
+	margin    : f32 = constants.UI_PANEL_PADDING * scale
 	content_x := rect.x + margin
 	content_y := rect.y + margin
 	content_w := rect.width  - margin * 2
@@ -1051,11 +1055,11 @@ render_info_panel :: proc(app: ^entities.App_State, rect: raylib.Rectangle, tool
 
 	// Large bold value + optional icon, left-aligned and vertically centered
 	if value != "" {
-		value_font_size : f32 = constants.UI_PANEL_HEADER_SIZE
+		value_font_size : f32 = constants.UI_PANEL_HEADER_SIZE * scale
 		value_cstr  := strings.clone_to_cstring(value, context.temp_allocator)
 		value_size  := raylib.MeasureTextEx(constants.game_fonts.bold, value_cstr, value_font_size, 0)
 
-		icon_gap : f32 = 6
+		icon_gap : f32 = 6 * scale
 		icon_w   : f32 = 0
 		icon_h   : f32 = value_size.y * 0.75  // slightly smaller than the text
 
