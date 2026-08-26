@@ -313,7 +313,7 @@ AOE_DAMAGE_MULTIPLIER :: f32(0.5)  // Splash damage is this fraction of the dire
 ENEMY_BASE_HP             :: f32(10.0)
 ENEMY_GROWTH_RATE         :: f32(1.07)    // HP multiplier per wave (exponential scaling)
 ENEMY_SPEED_GROWTH_RATE   :: f32(1.012)   // Speed multiplier per wave (~+1.2% per wave)
-ENEMY_GLOBAL_HP_MULTIPLIER    :: f32(1.15) // Global scalar applied to all enemy HP
+ENEMY_GLOBAL_HP_MULTIPLIER    :: f32(1.05) // Global scalar applied to all enemy HP
 ENEMY_GLOBAL_SPEED_MULTIPLIER :: f32(0.32) // Global scalar applied to all enemy speeds
 
 // Enemy speed (cells per second, further scaled by ENEMY_GLOBAL_SPEED_MULTIPLIER)
