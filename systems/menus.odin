@@ -2829,14 +2829,27 @@ render_card_hand :: proc(app: ^entities.App_State) {
 			sell_card_at(app, i, card)
 		}
 
-		if raylib.IsMouseButtonPressed(.LEFT) && !shop_open {
+		// Reliquias pasivas (todas salvo LUMBERJACK/OVERDRIVE/GARDENER, que piden
+		// un objetivo en el mapa) se consumen al instante con solo tocar la carta —
+		// no necesitan ver el mapa, así que se pueden jugar aunque el shop esté
+		// abierto encima (igual que la venta, más arriba).
+		is_targeted_action := card.kind == .LUMBERJACK || card.kind == .OVERDRIVE || card.kind == .GARDENER
+		is_passive_relic   := entities.is_relic(card.kind) && !is_targeted_action
+
+		if raylib.IsMouseButtonPressed(.LEFT) {
 			// Toggle: segundo clic sobre la carta activa cancela el modo selección
 			if app.pending_tower_action != .TOWER && app.sim.cards.selected_card_idx == i {
 				app.pending_tower_action = .TOWER
 				app.sim.cards.selected_card_idx = -1
 				app.gardener_source = {-1, -1}
 				play_sound(.SELECT, .UI)
-			} else if card.kind == .LUMBERJACK {
+			} else if is_passive_relic && !relic_activated {
+				relic_activated = true
+				apply_relic_card(app, card.kind)
+				entities.card_play(&app.sim, i)
+				app.sim.selected_build_tower = .EMPTY
+				app.sim.cards.selected_card_idx    = -1
+			} else if !shop_open && card.kind == .LUMBERJACK {
 				// LUMBERJACK: entrar en modo selección de árbol si hay árboles disponibles.
 				has_tree := false
 				m := &app.editor.game_map
@@ -2851,24 +2864,18 @@ render_card_hand :: proc(app: ^entities.App_State) {
 				if has_tree {
 					activate_pending_action(app, .LUMBERJACK, i)
 				}
-			} else if card.kind == .OVERDRIVE {
+			} else if !shop_open && card.kind == .OVERDRIVE {
 				// OVERDRIVE: entrar en modo selección de torre si hay torres colocadas.
 				if len(app.sim.towers) > 0 {
 					activate_pending_action(app, .OVERDRIVE, i)
 				}
-			} else if card.kind == .GARDENER {
+			} else if !shop_open && card.kind == .GARDENER {
 				// GARDENER Fase 1: entrar en modo selección de torre origen.
 				if len(app.sim.towers) > 0 {
 					app.gardener_source = {-1, -1}
 					activate_pending_action(app, .GARDENER, i)
 				}
-			} else if entities.is_relic(card.kind) && !relic_activated {
-				relic_activated = true
-				apply_relic_card(app, card.kind)
-				entities.card_play(&app.sim, i)
-				app.sim.selected_build_tower = .EMPTY
-				app.sim.cards.selected_card_idx    = -1
-			} else if !entities.is_relic(card.kind) {
+			} else if !shop_open && !entities.is_relic(card.kind) {
 				tile := entities.card_to_tile(card)
 				app.sim.selected_build_tower = tile
 				app.sim.cards.selected_card_idx    = i
