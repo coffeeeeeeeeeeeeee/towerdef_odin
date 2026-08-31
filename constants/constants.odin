@@ -135,6 +135,35 @@ MAX_FPS      :: 60
 DEFAULT_MONEY  :: 80
 DEFAULT_HEALTH :: 20
 
+// =============================================================================
+// Mapa 3D (Camera3D fija-isométrica) — ver 3D_RENDER_PLAN.md
+// =============================================================================
+
+WORLD_CELL_SIZE    :: f32(1.0)  // Tamaño de un tile en unidades de mundo 3D
+WORLD_HEIGHT_SCALE :: f32(1.5)  // Multiplicador de heightmap [0,1] -> altura real de mundo
+
+// Altura fija de todos los tiles de agua — el agua es un plano, no sigue el
+// ruido del heightmap como el resto del terreno (0 = mismo nivel que un tile
+// de heightmap mínimo, para que el agua nunca quede "flotando" por encima de
+// tierra vecina más baja).
+WORLD_WATER_HEIGHT :: f32(0.15)
+
+CAMERA_PITCH_DEG :: f32(55)  // Ángulo fijo de inclinación de la cámara (isométrico)
+CAMERA_FOVY      :: f32(45) // Field of view vertical, grados
+
+// Distancia cámara-foco, mapeada desde app.zoom (inversamente proporcional:
+// zoom alto = cámara más cerca). Reemplaza conceptualmente a cell_size en px
+// como "unidad de escala" para el mundo 3D.
+CAMERA_DISTANCE_MIN :: f32(8)
+CAMERA_DISTANCE_MAX :: f32(40)
+
+// zoom in [ZOOM_MIN, ZOOM_MAX] -> distancia de cámara en
+// [CAMERA_DISTANCE_MAX, CAMERA_DISTANCE_MIN] (invertido: más zoom = más cerca).
+camera_distance_from_zoom :: proc(zoom: f32) -> f32 {
+	t := clamp((zoom - ZOOM_MIN) / (ZOOM_MAX - ZOOM_MIN), 0, 1)
+	return CAMERA_DISTANCE_MAX + (CAMERA_DISTANCE_MIN - CAMERA_DISTANCE_MAX) * t
+}
+
 PATH_WIDTH_RATIO :: 0.4  // Path draw width as a fraction of cell size
 
 // =============================================================================
@@ -146,7 +175,7 @@ TOWER_SPECS := [Tower_Type]Tower_Spec {
 		type     = .ARCHER,
 		range    = 2.5,
 		damage   = 1.5,
-		cooldown = 0.5,
+		cooldown = 0.4,
 		aoe      = 0,
 		cost     = 20,
 		color    = raylib.BROWN,
@@ -164,7 +193,7 @@ TOWER_SPECS := [Tower_Type]Tower_Spec {
 		type     = .SNIPER,
 		range    = 6.0,
 		damage   = 18.0,
-		cooldown = 2.0,
+		cooldown = 1.6,
 		aoe      = 0,
 		cost     = 60,
 		color    = raylib.GREEN,
@@ -313,8 +342,8 @@ AOE_DAMAGE_MULTIPLIER :: f32(0.5)  // Splash damage is this fraction of the dire
 ENEMY_BASE_HP             :: f32(10.0)
 ENEMY_GROWTH_RATE         :: f32(1.07)    // HP multiplier per wave (exponential scaling)
 ENEMY_SPEED_GROWTH_RATE   :: f32(1.012)   // Speed multiplier per wave (~+1.2% per wave)
-ENEMY_GLOBAL_HP_MULTIPLIER    :: f32(1.05) // Global scalar applied to all enemy HP
-ENEMY_GLOBAL_SPEED_MULTIPLIER :: f32(0.32) // Global scalar applied to all enemy speeds
+ENEMY_GLOBAL_HP_MULTIPLIER    :: f32(0.945) // Global scalar applied to all enemy HP
+ENEMY_GLOBAL_SPEED_MULTIPLIER :: f32(0.384) // Global scalar applied to all enemy speeds
 
 // Enemy speed (cells per second, further scaled by ENEMY_GLOBAL_SPEED_MULTIPLIER)
 ENEMY_SPEED_DEFAULT  :: f32(1.0)  // Normal enemies
@@ -659,6 +688,13 @@ WATER_ANIM_MAX_DT :: f32(0.1)   // Tope de dt por frame — evita saltos tras un
 // "Animación de shaders" en CLAUDE.md), reusa WATER_ANIM_MAX_DT como tope de
 // dt (mismo propósito, no hace falta un valor propio).
 DUNE_ANIM_SPEED :: f32(0.3)
+
+// Overlay de pasto (grass.glsl) — la versión 2D usaba raylib.GetTime() de
+// pared para animar el viento (inconsistente con el resto). La versión 3D
+// (systems/rendering.odin, Lighting_Shader) sí sigue el patrón de tiempo
+// acumulado + dt clampeado; 1.0 = misma velocidad aparente que el reloj de
+// pared que tenía antes.
+GRASS_ANIM_SPEED :: f32(1.0)
 
 // Bridge (path over water)
 COLOR_BRIDGE_RAILING  :: raylib.Color{ 80,  75,  70, 255}  // Barandas de cemento oscuro

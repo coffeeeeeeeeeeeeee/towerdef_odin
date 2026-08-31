@@ -4,6 +4,7 @@ import "vendor:raylib"
 import "../entities"
 import "../constants"
 import "core:fmt"
+import "core:math"
 
 // Handle all input
 input_handle :: proc(app: ^entities.App_State) {
@@ -577,11 +578,43 @@ is_valid_grid_pos :: proc(app: ^entities.App_State, x, y: i32) -> bool {
 	return x >= 0 && x < app.editor.game_map.width && y >= 0 && y < app.editor.game_map.height
 }
 
-// Convert screen coordinates to grid coordinates (accounts for camera offset and zoom)
+// Convert screen coordinates to grid coordinates (accounts for camera offset and zoom).
+// En PLAYING el mapa es 3D (ver 3D_RENDER_PLAN.md) — se resuelve con raycast
+// contra el plano y=0 en vez de la fórmula 2D. PAUSED/EDITOR siguen 2D por ahora.
 screen_to_grid :: proc(app: ^entities.App_State, screen_x, screen_y: i32) -> (grid_x, grid_y: i32) {
+	if app.state == .PLAYING {
+		return screen_to_grid_3d(app, screen_x, screen_y)
+	}
 	cs := f32(app.settings.cell_size) * app.zoom
 	grid_x = i32((f32(screen_x) - f32(app.camera_offset_x)) / cs)
 	grid_y = i32((f32(screen_y) - f32(app.camera_offset_y)) / cs)
+	return
+}
+
+// Raycast contra el plano y=0 del mundo 3D. Si el rayo no cruza el plano
+// (mira hacia arriba, no debería pasar con la cámara fija-isométrica actual)
+// devuelve una celda claramente inválida.
+screen_to_grid_3d :: proc(app: ^entities.App_State, screen_x, screen_y: i32) -> (grid_x, grid_y: i32) {
+	point, ok := raycast_ground_point(app.camera3d, screen_x, screen_y)
+	if !ok {
+		return -1, -1
+	}
+	cs := constants.WORLD_CELL_SIZE
+	grid_x = i32(math.floor(point.x / cs))
+	grid_y = i32(math.floor(point.z / cs))
+	return
+}
+
+// Punto donde el rayo desde la cámara hacia (screen_x, screen_y) cruza el
+// plano de suelo y=0. ok=false si el rayo es paralelo o se aleja del plano.
+raycast_ground_point :: proc(camera: raylib.Camera3D, screen_x, screen_y: i32) -> (point: raylib.Vector3, ok: bool) {
+	ray := raylib.GetScreenToWorldRay({f32(screen_x), f32(screen_y)}, camera)
+	if ray.direction.y >= -0.0001 {
+		return {}, false
+	}
+	t := -ray.position.y / ray.direction.y
+	point = ray.position + ray.direction * t
+	ok = true
 	return
 }
 
@@ -774,6 +807,11 @@ tile_to_tower_type :: proc(tile: constants.Tile) -> constants.Tower_Type {
 
 // Handle camera controls (zoom and pan)
 input_handle_camera :: proc(app: ^entities.App_State) {
+	if app.state == .PLAYING {
+		input_handle_camera_3d(app)
+		return
+	}
+
 	// Zoom with mouse wheel (centered on mouse, continuous smooth zoom)
 	wheel_movement := raylib.GetMouseWheelMove()
 	if wheel_movement != 0 {
@@ -799,7 +837,7 @@ input_handle_camera :: proc(app: ^entities.App_State) {
 		app.target_camera_offset_x = i32(f32(mouse_x) - world_x * cs_new)
 		app.target_camera_offset_y = i32(f32(mouse_y) - world_y * cs_new)
 	}
-	
+
 	// Pan with middle mouse button
 	if raylib.IsMouseButtonDown(.MIDDLE) {
 		mouse_delta := raylib.GetMouseDelta()
@@ -808,5 +846,49 @@ input_handle_camera :: proc(app: ^entities.App_State) {
 		// Also update target offsets so they stay in sync during panning
 		app.target_camera_offset_x = app.camera_offset_x
 		app.target_camera_offset_y = app.camera_offset_y
+	}
+}
+
+// Pan + zoom-to-cursor para el mapa 3D (PLAYING). No hay Camera2D: el pan se
+// resuelve arrastrando el punto de suelo bajo el mouse (doble raycast,
+// antes/después del delta); el zoom-to-cursor construye una cámara
+// hipotética con la nueva distancia y desplaza camera_focus para que el
+// mismo punto de suelo quede bajo el cursor otra vez (ver 3D_RENDER_PLAN.md,
+// riesgo 7.5 — no es garantía matemática 1:1 con el zoom 2D, es una
+// aproximación visual).
+input_handle_camera_3d :: proc(app: ^entities.App_State) {
+	mouse_x := raylib.GetMouseX()
+	mouse_y := raylib.GetMouseY()
+
+	wheel_movement := raylib.GetMouseWheelMove()
+	if wheel_movement != 0 {
+		old_point, old_ok := raycast_ground_point(app.camera3d, mouse_x, mouse_y)
+
+		app.target_zoom += wheel_movement * constants.ZOOM_SPEED
+		if app.target_zoom < constants.ZOOM_MIN { app.target_zoom = constants.ZOOM_MIN }
+		if app.target_zoom > constants.ZOOM_MAX { app.target_zoom = constants.ZOOM_MAX }
+
+		if old_ok {
+			hypothetical := camera3d_for_focus(app.camera_focus, app.target_zoom)
+			new_point, new_ok := raycast_ground_point(hypothetical, mouse_x, mouse_y)
+			if new_ok {
+				delta := old_point - new_point
+				app.target_camera_focus = app.camera_focus + delta
+			}
+		}
+	}
+
+	// Pan with middle mouse button — arrastra el punto de suelo bajo el
+	// cursor, no un delta de píxeles crudo (la perspectiva no es 1:1).
+	if raylib.IsMouseButtonDown(.MIDDLE) {
+		prev_x := mouse_x - i32(raylib.GetMouseDelta().x)
+		prev_y := mouse_y - i32(raylib.GetMouseDelta().y)
+		before, before_ok := raycast_ground_point(app.camera3d, prev_x, prev_y)
+		after, after_ok := raycast_ground_point(app.camera3d, mouse_x, mouse_y)
+		if before_ok && after_ok {
+			delta := before - after
+			app.camera_focus += delta
+			app.target_camera_focus = app.camera_focus
+		}
 	}
 }

@@ -4,6 +4,7 @@ import "../constants"
 import "../entities"
 import "core:fmt"
 import "core:math"
+import "core:math/linalg"
 import "core:strings"
 import "vendor:raylib"
 
@@ -587,10 +588,933 @@ cloud_shader_draw :: proc(app: ^entities.App_State) {
 	raylib.EndShaderMode()
 }
 
+// ── Mapa 3D (Camera3D fija-isométrica) ──────────────────────────────────────
+// Ver 3D_RENDER_PLAN.md.
+
+// Construye una Camera3D a partir de un foco (punto de mundo mirado) y un
+// zoom, con el ángulo de inclinación fijo (CAMERA_PITCH_DEG) — no rota nunca,
+// solo "top-down inclinado". zoom alto = cámara más cerca (ver
+// constants.camera_distance_from_zoom).
+camera3d_for_focus :: proc(focus: raylib.Vector3, zoom: f32) -> raylib.Camera3D {
+	pitch_rad := constants.CAMERA_PITCH_DEG * math.RAD_PER_DEG
+	dist := constants.camera_distance_from_zoom(zoom)
+	offset := raylib.Vector3{
+		0,
+		dist * math.sin(pitch_rad),
+		dist * math.cos(pitch_rad),
+	}
+	return raylib.Camera3D{
+		position   = focus + offset,
+		target     = focus,
+		up         = {0, 1, 0},
+		fovy       = constants.CAMERA_FOVY,
+		projection = .PERSPECTIVE,
+	}
+}
+
+// Deriva app.camera3d a partir del estado actual de app.camera_focus/zoom —
+// llamar una vez por frame antes de dibujar/pickear el mundo 3D.
+update_camera3d :: proc(app: ^entities.App_State) {
+	app.camera3d = camera3d_for_focus(app.camera_focus, app.zoom)
+}
+
+// ── Iluminación 3D (shader real con normales) ───────────────────────────────
+// Sol direccional fijo + relleno tenue + ambient, sin especular ni sombras
+// proyectadas — "simple" a propósito. Ver 3D_RENDER_PLAN.md.
+//
+// Nota de diseño: el vertex shader NO usa matModel/matNormal — toda la
+// geometría 3D de este proyecto (malla de terreno y formas inmediatas de
+// torres/enemigos/etc) ya se construye en coordenadas de mundo absolutas, sin
+// pasar por la pila de transformación de rlgl, así que vertexPosition/
+// vertexNormal ya son world-space tal cual llegan.
+Lighting_Shader :: struct {
+	shader:          raylib.Shader,
+	loc_sun_dir:     i32,
+	loc_sun_color:   i32,
+	loc_fill_dir:    i32,
+	loc_fill_color:  i32,
+	loc_ambient:     i32,
+	loc_use_mask:    i32,  // 1.0 solo mientras se dibuja el terreno (ver render_map_3d)
+	loc_path_color:  i32,
+	loc_water_color:      i32,
+	loc_water_edge_color: i32,
+	loc_dune_seed:    i32,
+	loc_dune_time:    i32,
+	loc_dune_alpha:   i32,
+	loc_dune_density: i32,
+	loc_dune_color:   i32,
+	loc_map_size:     i32,
+	loc_caustics_time: i32,
+	loc_grass_time:    i32,
+	loc_grass_alpha:   i32,
+	loc_grass_density: i32,
+	loc_grass_color:   i32,
+	loc_rock_seed:     i32,
+	loc_rock_alpha:    i32,
+	loc_rock_density:  i32,
+	loc_rock_color:    i32,
+	dune_anim_time:     f32,  // acumulado con dt clampeado, no reloj de pared — ver render_map_3d
+	caustics_anim_time: f32,
+	grass_anim_time:    f32,
+}
+
+lighting_shader: Lighting_Shader
+
+lighting_shader_init :: proc() {
+	s := raylib.LoadShader("assets/lighting.vs", "assets/lighting.fs")
+	lighting_shader = Lighting_Shader{
+		shader           = s,
+		loc_sun_dir      = raylib.GetShaderLocation(s, "sunDir"),
+		loc_sun_color    = raylib.GetShaderLocation(s, "sunColor"),
+		loc_fill_dir     = raylib.GetShaderLocation(s, "fillDir"),
+		loc_fill_color   = raylib.GetShaderLocation(s, "fillColor"),
+		loc_ambient      = raylib.GetShaderLocation(s, "ambient"),
+		loc_use_mask     = raylib.GetShaderLocation(s, "useTerrainMask"),
+		loc_path_color   = raylib.GetShaderLocation(s, "pathColor"),
+		loc_water_color      = raylib.GetShaderLocation(s, "waterColor"),
+		loc_water_edge_color = raylib.GetShaderLocation(s, "waterEdgeColor"),
+		loc_dune_seed    = raylib.GetShaderLocation(s, "duneSeed"),
+		loc_dune_time    = raylib.GetShaderLocation(s, "duneTime"),
+		loc_dune_alpha   = raylib.GetShaderLocation(s, "duneAlpha"),
+		loc_dune_density = raylib.GetShaderLocation(s, "duneDensity"),
+		loc_dune_color   = raylib.GetShaderLocation(s, "duneColor"),
+		loc_map_size     = raylib.GetShaderLocation(s, "mapSize"),
+		loc_caustics_time = raylib.GetShaderLocation(s, "causticsTime"),
+		loc_grass_time    = raylib.GetShaderLocation(s, "grassTime"),
+		loc_grass_alpha   = raylib.GetShaderLocation(s, "grassAlpha"),
+		loc_grass_density = raylib.GetShaderLocation(s, "grassDensity"),
+		loc_grass_color   = raylib.GetShaderLocation(s, "grassColor"),
+		loc_rock_seed     = raylib.GetShaderLocation(s, "rockSeed"),
+		loc_rock_alpha    = raylib.GetShaderLocation(s, "rockAlpha"),
+		loc_rock_density  = raylib.GetShaderLocation(s, "rockDensity"),
+		loc_rock_color    = raylib.GetShaderLocation(s, "rockColor"),
+	}
+
+	// Luz "sol" alineada con el ángulo de la cámara isométrica (arriba-
+	// adelante), luz de relleno tenue del lado opuesto para que las caras en
+	// sombra no queden negro puro. Direccionales, fijas — no cambian en
+	// runtime.
+	// Intensidades pensadas para que ambient + sol + relleno sumen ~1.0 en la
+	// cara mejor iluminada (el techo del terreno, que mira casi derecho al
+	// sol) — antes sumaban >1.3 y saturaban a blanco, tapando el color de
+	// bioma por completo sin importar cuál estuviera activo.
+	sun_dir := linalg.normalize(raylib.Vector3{0.45, 1.0, 0.3})
+	sun_color := raylib.Vector3{0.55, 0.53, 0.48}
+	fill_dir := linalg.normalize(raylib.Vector3{-0.35, 0.4, -0.5})
+	fill_color := raylib.Vector3{0.12, 0.14, 0.18}
+	ambient := raylib.Vector3{0.45, 0.45, 0.5}
+
+	raylib.SetShaderValue(s, lighting_shader.loc_sun_dir, &sun_dir, .VEC3)
+	raylib.SetShaderValue(s, lighting_shader.loc_sun_color, &sun_color, .VEC3)
+	raylib.SetShaderValue(s, lighting_shader.loc_fill_dir, &fill_dir, .VEC3)
+	raylib.SetShaderValue(s, lighting_shader.loc_fill_color, &fill_color, .VEC3)
+	raylib.SetShaderValue(s, lighting_shader.loc_ambient, &ambient, .VEC3)
+
+	// Color de agua fijo (no depende del bioma, a diferencia de pathColor)
+	// — se setea una sola vez acá en vez de en terrain_cache_ensure.
+	wc := constants.COLOR_WATER
+	ec := constants.COLOR_WATER_EDGE
+	water_color := raylib.Vector3{f32(wc.r) / 255, f32(wc.g) / 255, f32(wc.b) / 255}
+	water_edge_color := raylib.Vector3{f32(ec.r) / 255, f32(ec.g) / 255, f32(ec.b) / 255}
+	raylib.SetShaderValue(s, lighting_shader.loc_water_color, &water_color, .VEC3)
+	raylib.SetShaderValue(s, lighting_shader.loc_water_edge_color, &water_edge_color, .VEC3)
+
+	// Apagado por defecto — solo el draw del terreno lo prende (ver
+	// render_map_3d). Formas inmediatas (torres/enemigos/...) que comparten
+	// este shader vía BeginShaderMode nunca deben mezclar color de camino.
+	use_mask_off := f32(0)
+	raylib.SetShaderValue(s, lighting_shader.loc_use_mask, &use_mask_off, .FLOAT)
+}
+
+lighting_shader_unload :: proc() {
+	raylib.UnloadShader(lighting_shader.shader)
+}
+
+// ── Malla cacheada del terreno (plano continuo, desniveles diagonales) ─────
+// Se construye una sola vez por run (invalidada en simulation_fit_camera):
+// una grilla de (width+1)×(height+1) vértices — un vértice por esquina
+// compartida entre hasta 4 tiles — en vez de una caja por tile. La diagonal
+// del desnivel sale sola: si dos tiles vecinos tienen distinta altura, la
+// arista que comparten interpola linealmente entre ambas.
+//
+// El color de camino se resuelve aparte, con una textura-máscara (1 texel
+// por tile, filtro POINT = bordes nítidos) sampleada en el fragment shader
+// — así el límite del camino queda nítido pese a que la malla es continua
+// (si fuera solo color de vértice, se difuminaría en cada arista
+// compartida). "Área construible" y "no-camino" son el mismo dato en este
+// juego (todo lo que no es camino se puede construir), así que una sola
+// máscara alcanza para las dos cosas que pedía el usuario.
+Terrain_Cache :: struct {
+	model:          raylib.Model,
+	path_mask_tex:  raylib.Texture2D,
+	water_mask_tex: raylib.Texture2D,
+	valid:          bool,
+}
+
+terrain_cache: Terrain_Cache
+
+terrain_cache_invalidate :: proc() {
+	if terrain_cache.valid {
+		raylib.UnloadModel(terrain_cache.model)
+		raylib.UnloadTexture(terrain_cache.path_mask_tex)
+		raylib.UnloadTexture(terrain_cache.water_mask_tex)
+		terrain_cache.valid = false
+	}
+}
+
+_terrain_push_vertex :: proc(positions, normals, texcoords: ^[dynamic]f32, colors: ^[dynamic]u8, p, n: raylib.Vector3, uv: raylib.Vector2, c: raylib.Color) {
+	append(positions, p.x, p.y, p.z)
+	append(normals, n.x, n.y, n.z)
+	append(texcoords, uv.x, uv.y)
+	append(colors, c.r, c.g, c.b, c.a)
+}
+
+// Un triángulo con normal plana (calculada del propio triángulo — look
+// "low-poly", coherente con caras diagonales de distinta inclinación).
+// Winding CCW visto desde arriba (+Y) — ver comentario de _terrain_corner
+// más abajo para el orden de los 3 vértices que hay que pasar.
+_terrain_push_tri :: proc(
+	positions, normals, texcoords: ^[dynamic]f32, colors: ^[dynamic]u8,
+	v0, v1, v2: raylib.Vector3, uv0, uv1, uv2: raylib.Vector2, c0, c1, c2: raylib.Color,
+) {
+	n := linalg.normalize(linalg.cross(v1 - v0, v2 - v0))
+	if n.y < 0 { n = -n }  // seguro — no debería pasar con las pendientes suaves de este mapa
+	_terrain_push_vertex(positions, normals, texcoords, colors, v0, n, uv0, c0)
+	_terrain_push_vertex(positions, normals, texcoords, colors, v1, n, uv1, c1)
+	_terrain_push_vertex(positions, normals, texcoords, colors, v2, n, uv2, c2)
+}
+
+// Altura y color "de terreno" (sin camino, eso lo resuelve el shader) de un
+// tile — el agua es plana a WORLD_WATER_HEIGHT, el resto sigue el heightmap.
+_terrain_tile_height_color :: proc(m: ^entities.Map, row, col: i32, biome_colors: constants.Biome_Colors) -> (h: f32, color: raylib.Color) {
+	if m.water_grid[row][col] {
+		return constants.WORLD_WATER_HEIGHT, constants.COLOR_WATER
+	}
+	return m.heightmap[row][col] * constants.WORLD_HEIGHT_SCALE, biome_colors.bg_grid
+}
+
+// Altura/color de una esquina de grilla (r,c en [0,height]×[0,width]) —
+// promedio de los hasta 4 tiles que la tocan. Esto es lo que produce el
+// desnivel diagonal: dos tiles vecinos con distinta altura comparten esta
+// esquina, así que la arista entre ellos interpola en vez de cortar en
+// escalón.
+_terrain_corner :: proc(m: ^entities.Map, r, c: i32, biome_colors: constants.Biome_Colors) -> (h: f32, color: [3]f32) {
+	sum_h := f32(0)
+	sum_c := [3]f32{0, 0, 0}
+	n := f32(0)
+	for dr in -1 ..= 0 {
+		for dc in -1 ..= 0 {
+			tr, tc := r + i32(dr), c + i32(dc)
+			if tr < 0 || tr >= m.height || tc < 0 || tc >= m.width { continue }
+			th, tcol := _terrain_tile_height_color(m, tr, tc, biome_colors)
+			sum_h += th
+			sum_c += [3]f32{f32(tcol.r), f32(tcol.g), f32(tcol.b)}
+			n += 1
+		}
+	}
+	if n == 0 { return 0, {0, 0, 0} }
+	return sum_h / n, sum_c / n
+}
+
+terrain_cache_ensure :: proc(m: ^entities.Map) {
+	if terrain_cache.valid { return }
+
+	positions := make([dynamic]f32)
+	normals := make([dynamic]f32)
+	texcoords := make([dynamic]f32)
+	colors := make([dynamic]u8)
+	defer delete(positions)
+	defer delete(normals)
+	defer delete(texcoords)
+	defer delete(colors)
+
+	biome_colors := constants.BIOME_COLORS[m.biome]
+	cs := constants.WORLD_CELL_SIZE
+
+	// world_corner: posición de mundo (X,Z) + altura promediada de la
+	// esquina de grilla (r,c). uv mapea 1:1 a la textura-máscara del camino.
+	world_corner :: proc(m: ^entities.Map, r, c: i32, biome_colors: constants.Biome_Colors, cs: f32) -> (pos: raylib.Vector3, uv: raylib.Vector2, color: raylib.Color) {
+		h, col3 := _terrain_corner(m, r, c, biome_colors)
+		pos = {f32(c) * cs, h, f32(r) * cs}
+		uv = {f32(c) / f32(m.width), f32(r) / f32(m.height)}
+		color = raylib.Color{u8(col3.r), u8(col3.g), u8(col3.b), 255}
+		return
+	}
+
+	for row in 0 ..< m.height {
+		for col in 0 ..< m.width {
+			p_tl, uv_tl, c_tl := world_corner(m, row, col, biome_colors, cs)
+			p_tr, uv_tr, c_tr := world_corner(m, row, col + 1, biome_colors, cs)
+			p_bl, uv_bl, c_bl := world_corner(m, row + 1, col, biome_colors, cs)
+			p_br, uv_br, c_br := world_corner(m, row + 1, col + 1, biome_colors, cs)
+
+			// 2 triángulos por tile, CCW visto desde +Y en ambos.
+			_terrain_push_tri(&positions, &normals, &texcoords, &colors, p_tl, p_bl, p_tr, uv_tl, uv_bl, uv_tr, c_tl, c_bl, c_tr)
+			_terrain_push_tri(&positions, &normals, &texcoords, &colors, p_tr, p_bl, p_br, uv_tr, uv_bl, uv_br, c_tr, c_bl, c_br)
+		}
+	}
+
+	mesh: raylib.Mesh
+	mesh.vertexCount = i32(len(positions) / 3)
+	mesh.triangleCount = i32(len(positions) / 3 / 3)
+	mesh.vertices = ([^]f32)(raw_data(positions[:]))
+	mesh.normals = ([^]f32)(raw_data(normals[:]))
+	mesh.texcoords = ([^]f32)(raw_data(texcoords[:]))
+	mesh.colors = ([^]u8)(raw_data(colors[:]))
+
+	raylib.UploadMesh(&mesh, false)
+
+	// Ya subida a GPU — no hace falta conservar los punteros CPU. Los
+	// dejamos en nil para que un futuro UnloadModel/UnloadMesh no intente
+	// liberar memoria alojada por Odin (los `defer delete(...)` de arriba
+	// son la única vía de liberación de estos arrays).
+	mesh.vertices = nil
+	mesh.normals = nil
+	mesh.texcoords = nil
+	mesh.colors = nil
+
+	model := raylib.LoadModelFromMesh(mesh)
+	model.materials[0].shader = lighting_shader.shader
+
+	// Textura-máscara de camino: 1 texel por tile, R8, POINT filter (sin
+	// blur — el límite del camino tiene que quedar nítido). 255 = tile de
+	// camino, 0 = resto del mapa (agua incluida — el agua ya tiene su color
+	// propio vía vertex color, la máscara no la toca).
+	mask_pixels := make([]u8, int(m.width) * int(m.height))
+	defer delete(mask_pixels)
+	for row in 0 ..< m.height {
+		for col in 0 ..< m.width {
+			v: u8 = 255 if m.grid[row][col] == .PATH else 0
+			mask_pixels[row * m.width + col] = v
+		}
+	}
+	mask_img := raylib.Image{
+		data    = raw_data(mask_pixels),
+		width   = m.width,
+		height  = m.height,
+		mipmaps = 1,
+		format  = .UNCOMPRESSED_GRAYSCALE,
+	}
+	mask_tex := raylib.LoadTextureFromImage(mask_img)
+	raylib.SetTextureFilter(mask_tex, .POINT)
+	raylib.SetTextureWrap(mask_tex, .CLAMP)
+	model.materials[0].maps[raylib.MaterialMapIndex.ALBEDO].texture = mask_tex
+
+	// Textura-máscara de agua — mismo esquema que la de camino, en el
+	// segundo slot de material (texture1 para el shader). Sirve para que el
+	// overlay de dunas no pinte encima del agua (ver duneOverlay en
+	// lighting.fs), igual que en la versión 2D (dune se dibuja antes que
+	// water/path, así que esos tiles tapan la duna).
+	water_pixels := make([]u8, int(m.width) * int(m.height))
+	defer delete(water_pixels)
+	for row in 0 ..< m.height {
+		for col in 0 ..< m.width {
+			water_pixels[row * m.width + col] = 255 if m.water_grid[row][col] else 0
+		}
+	}
+	water_img := raylib.Image{
+		data    = raw_data(water_pixels),
+		width   = m.width,
+		height  = m.height,
+		mipmaps = 1,
+		format  = .UNCOMPRESSED_GRAYSCALE,
+	}
+	water_tex := raylib.LoadTextureFromImage(water_img)
+	raylib.SetTextureFilter(water_tex, .POINT)
+	raylib.SetTextureWrap(water_tex, .CLAMP)
+	model.materials[0].maps[raylib.MaterialMapIndex.METALNESS].texture = water_tex
+
+	path_color := raylib.Vector3{f32(biome_colors.path.r) / 255, f32(biome_colors.path.g) / 255, f32(biome_colors.path.b) / 255}
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_path_color, &path_color, .VEC3)
+
+	// Dunas (bioma DESERT) — adaptado de assets/dune.glsl. alpha=0 en
+	// cualquier otro bioma (BIOME_DUNE_STYLES), así que el resto de los
+	// mapas no paga ni el costo de la rama en el shader (duneAlpha <= 0.001
+	// la saltea, ver lighting.fs).
+	dune_style := constants.BIOME_DUNE_STYLES[m.biome]
+	dune_seed := f32(m.seed)
+	dune_alpha := dune_style.alpha
+	dune_density := dune_style.density
+	dune_color := raylib.Vector3{dune_style.dune_color[0], dune_style.dune_color[1], dune_style.dune_color[2]}
+	map_size := raylib.Vector2{f32(m.width), f32(m.height)}
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_dune_seed, &dune_seed, .FLOAT)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_dune_alpha, &dune_alpha, .FLOAT)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_dune_density, &dune_density, .FLOAT)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_dune_color, &dune_color, .VEC3)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_map_size, &map_size, .VEC2)
+	lighting_shader.dune_anim_time = 0
+	lighting_shader.caustics_anim_time = 0
+	lighting_shader.grass_anim_time = 0
+
+	// Pasto (biomas PLAIN/FOREST) — adaptado de assets/grass.glsl.
+	grass_style := constants.BIOME_GRASS_STYLES[m.biome]
+	grass_alpha := grass_style.alpha
+	grass_density := grass_style.density
+	grass_color := raylib.Vector3{grass_style.grass_color[0], grass_style.grass_color[1], grass_style.grass_color[2]}
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_grass_alpha, &grass_alpha, .FLOAT)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_grass_density, &grass_density, .FLOAT)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_grass_color, &grass_color, .VEC3)
+
+	// Roca agrietada (bioma MOUNTAIN) — adaptado de assets/rock.glsl.
+	rock_style := constants.BIOME_ROCK_STYLES[m.biome]
+	rock_seed := f32(m.seed)
+	rock_alpha := rock_style.alpha
+	rock_density := rock_style.density
+	rock_color := raylib.Vector3{rock_style.rock_color[0], rock_style.rock_color[1], rock_style.rock_color[2]}
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_rock_seed, &rock_seed, .FLOAT)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_rock_alpha, &rock_alpha, .FLOAT)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_rock_density, &rock_density, .FLOAT)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_rock_color, &rock_color, .VEC3)
+
+	terrain_cache.model = model
+	terrain_cache.path_mask_tex = mask_tex
+	terrain_cache.water_mask_tex = water_tex
+	terrain_cache.valid = true
+}
+
+// Terreno del mapa: malla continua cacheada (ver terrain_cache_ensure),
+// desniveles diagonales reales, color de camino nítido vía textura-máscara,
+// iluminada con Lighting_Shader. Reemplaza a render_map para los estados 3D.
+render_map_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	terrain_cache_ensure(m)
+
+	// Tiempo acumulado con dt clampeado (no reloj de pared) para animar
+	// dunas/cáusticas/pasto — mismo patrón que Water_Shader.anim_time, ver
+	// CLAUDE.md.
+	frame_dt := min(raylib.GetFrameTime(), constants.WATER_ANIM_MAX_DT)
+	lighting_shader.dune_anim_time += frame_dt * constants.DUNE_ANIM_SPEED
+	lighting_shader.caustics_anim_time += frame_dt * constants.WATER_ANIM_SPEED
+	lighting_shader.grass_anim_time += frame_dt * constants.GRASS_ANIM_SPEED
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_dune_time, &lighting_shader.dune_anim_time, .FLOAT)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_caustics_time, &lighting_shader.caustics_anim_time, .FLOAT)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_grass_time, &lighting_shader.grass_anim_time, .FLOAT)
+
+	on := f32(1)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_use_mask, &on, .FLOAT)
+	raylib.DrawModel(terrain_cache.model, {0, 0, 0}, 1.0, raylib.WHITE)
+	off := f32(0)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_use_mask, &off, .FLOAT)
+}
+
+// Centro (X,Z) de un tile en unidades de mundo, y la altura de su superficie
+// (Y) según el heightmap — para asentar objetos sobre el terreno voxel.
+tile_world_top :: proc(m: ^entities.Map, row, col: i32) -> (center: raylib.Vector3, top_y: f32) {
+	cs := constants.WORLD_CELL_SIZE
+	top_y = m.heightmap[row][col] * constants.WORLD_HEIGHT_SCALE
+	center = {f32(col) * cs + cs * 0.5, top_y, f32(row) * cs + cs * 0.5}
+	return
+}
+
+// Cuerpo (cilindro) + cañón orientado por `angle` (mismo ángulo 2D que ya usa
+// el juego: atan2(dz, dx) sobre el plano XZ) — usado tanto por torres reales
+// como por el ghost de construcción. `alpha` permite semitransparencia (ghost).
+draw_tower_shape_3d :: proc(base: raylib.Vector3, cs: f32, angle, recoil: f32, color: raylib.Color, alpha: u8 = 255) {
+	c := color
+	c.a = alpha
+	body_r := cs * 0.32
+	body_h := cs * 0.45
+	raylib.DrawCylinder(base, body_r, body_r, body_h, 12, c)
+
+	dir := raylib.Vector3{math.cos(angle), 0, math.sin(angle)}
+	recoil_pull := recoil * cs * constants.TOWER_RECOIL_DISTANCE_RATIO
+	barrel_len := cs * 0.5 - recoil_pull
+	start := raylib.Vector3{base.x, base.y + body_h * 0.75, base.z}
+	end := start + dir * barrel_len
+	barrel := raylib.Color{40, 40, 40, alpha}
+	raylib.DrawCylinderEx(start, end, cs * 0.08, cs * 0.06, 8, barrel)
+}
+
+render_tower_3d :: proc(tower: ^entities.Tower, m: ^entities.Map) {
+	_, top_y := tile_world_top(m, tower.r, tower.c)
+	cs := constants.WORLD_CELL_SIZE
+	base := raylib.Vector3{f32(tower.c) * cs + cs * 0.5, top_y, f32(tower.r) * cs + cs * 0.5}
+	color := constants.TOWER_SPECS[tower.type].color
+	draw_tower_shape_3d(base, cs, tower.angle, tower.recoil, color)
+}
+
+render_spawn_3d :: proc(center: raylib.Vector3) {
+	cs := constants.WORLD_CELL_SIZE
+	pos := center
+	raylib.DrawCylinder(pos, cs * 0.4, cs * 0.4, cs * 0.06, 16, constants.COLOR_SPAWN)
+}
+
+render_goal_3d :: proc(center: raylib.Vector3) {
+	cs := constants.WORLD_CELL_SIZE
+	pos := center
+	raylib.DrawCylinder(pos, cs * 0.4, cs * 0.4, cs * 0.06, 16, constants.COLOR_GOAL)
+}
+
+render_tree_3d :: proc(center: raylib.Vector3, biome: constants.Biome) {
+	cs := constants.WORLD_CELL_SIZE
+	colors := constants.BIOME_TREE_COLORS[biome]
+	trunk_h := cs * 0.3
+	raylib.DrawCylinder(center, cs * 0.09, cs * 0.11, trunk_h, 8, colors.trunk)
+	foliage_base := raylib.Vector3{center.x, center.y + trunk_h, center.z}
+	raylib.DrawCylinder(foliage_base, cs * 0.34, 0, cs * 0.55, 10, colors.layer_mid)
+}
+
+render_block_3d :: proc(center: raylib.Vector3, biome: constants.Biome, level: i32) {
+	cs := constants.WORLD_CELL_SIZE
+	lvl := clamp(level, 1, 3)
+	h := cs * (0.35 + f32(lvl - 1) * 0.15)
+	color := constants.BIOME_TREE_COLORS[biome].trunk
+	pos := raylib.Vector3{center.x, center.y + h * 0.5, center.z}
+	raylib.DrawCube(pos, cs * 0.75, h, cs * 0.75, color)
+}
+
+// Barrera de obstáculo simplificada: caja orientada según a qué lado del
+// camino da (recto horizontal/vertical). El caso de esquina/unión (dos ejes
+// a la vez) se simplifica a una caja cuadrada — sin rotación 45°, ver
+// 3D_RENDER_PLAN.md (color plano, sin geometría rotada en esta v1).
+render_obstacles_3d :: proc(m: ^entities.Map, map_w, map_h: i32) {
+	cs := constants.WORLD_CELL_SIZE
+	is_path :: proc(m: ^entities.Map, r, c, map_w, map_h: i32) -> bool {
+		if r < 0 || r >= map_h || c < 0 || c >= map_w { return false }
+		t := m.grid[r][c]
+		return t == .PATH || t == .SPAWN || t == .GOAL
+	}
+	for row in 0 ..< map_h {
+		for col in 0 ..< map_w {
+			if m.obstacle_grid[row][col] != .OBSTACLE { continue }
+			center, top_y := tile_world_top(m, row, col)
+			has_h := is_path(m, row, col - 1, map_w, map_h) || is_path(m, row, col + 1, map_w, map_h)
+			has_v := is_path(m, row - 1, col, map_w, map_h) || is_path(m, row + 1, col, map_w, map_h)
+
+			bar_len := cs * constants.OBSTACLE_BARRIER_LENGTH
+			bar_thk := cs * constants.OBSTACLE_BARRIER_THICKNESS
+			bar_h := cs * 0.3
+			size_x, size_z := bar_thk, bar_thk
+			switch {
+			case has_v && !has_h:
+				size_x, size_z = bar_len, bar_thk
+			case has_h && !has_v:
+				size_x, size_z = bar_thk, bar_len
+			case:
+				size_x, size_z = bar_len * 0.6, bar_len * 0.6
+			}
+			pos := raylib.Vector3{center.x, top_y + bar_h * 0.5, center.z}
+			raylib.DrawCube(pos, size_x, bar_h, size_z, constants.COLOR_OBSTACLE_FILL)
+		}
+	}
+}
+
+// Anillo plano sobre el suelo (rango de torre, AoE, action-target hover) —
+// DrawCircle3D acostado sobre el plano XZ.
+draw_ground_ring :: proc(center: raylib.Vector3, radius: f32, color: raylib.Color) {
+	raylib.DrawCircle3D(center, radius, {1, 0, 0}, 90, color)
+}
+
+render_tower_ranges_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+	if app.settings.show_tower_range {
+		for &tower in app.sim.towers {
+			center, top_y := tile_world_top(m, tower.r, tower.c)
+			ring := raylib.Vector3{center.x, top_y + 0.02, center.z}
+			draw_ground_ring(ring, tower.range * cs, constants.TOWER_RANGE_PREVIEW)
+		}
+	}
+	if selected := entities.app_get_selected_tower(app); selected != nil {
+		center, top_y := tile_world_top(m, selected.r, selected.c)
+		ring := raylib.Vector3{center.x, top_y + 0.02, center.z}
+		draw_ground_ring(ring, selected.range * cs, constants.TOWER_RANGE_PREVIEW)
+		draw_ground_ring(ring, selected.range * cs, raylib.Color{255, 255, 255, 200})
+	}
+}
+
+// Caja plana semitransparente sobre un tile — reemplazo simplificado del
+// blur de 5 capas 2D (draw_action_target) para el mapa 3D.
+draw_action_target_3d :: proc(center: raylib.Vector3, color: raylib.Color, alpha: u8) {
+	cs := constants.WORLD_CELL_SIZE
+	c := color
+	c.a = alpha
+	pos := raylib.Vector3{center.x, center.y + 0.03, center.z}
+	raylib.DrawCube(pos, cs * 0.9, 0.02, cs * 0.9, c)
+}
+
+// Objetos del mapa (torres, spawn/goal, accesorios, obstáculos), overlays de
+// acción por tile y ghost de construcción — versión 3D de render_map_objects.
+// Debe llamarse dentro de un bloque BeginMode3D/EndMode3D activo.
+render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	COLOR_TARGET_VALID   :: raylib.Color{60, 220, 90, 255}
+	COLOR_TARGET_INVALID :: raylib.Color{220, 60, 60, 255}
+
+	// ── Overlays de casillas posibles para reliquias activas con objetivo ──
+	if app.pending_tower_action != .TOWER {
+		hover_row, hover_col, hover_valid := input_get_hovered_cell(app)
+		for row in 0 ..< m.height {
+			for col in 0 ..< m.width {
+				tile := m.grid[row][col]
+				center, top_y := tile_world_top(m, row, col)
+				surface := raylib.Vector3{center.x, top_y, center.z}
+				hovered := hover_valid && hover_row == row && hover_col == col
+				layer_a := u8(hovered ? 60 : 90)
+
+				is_tower_tile := tile == .TOWER_ARCHER || tile == .TOWER_CANNON ||
+				                  tile == .TOWER_SNIPER  || tile == .TOWER_MISSILE ||
+				                  tile == .TOWER_LASER   || tile == .TOWER_ICE ||
+				                  tile == .TOWER_ENHANCE || tile == .TOWER_TESLA ||
+				                  tile == .TOWER_MORTAR
+
+				drew_target := false
+				#partial switch app.pending_tower_action {
+				case .LUMBERJACK:
+					if tile == .ACCESSORY_TREE && !m.water_grid[row][col] {
+						draw_action_target_3d(surface, COLOR_TARGET_VALID, layer_a)
+						drew_target = true
+					}
+				case .OVERDRIVE:
+					if is_tower_tile {
+						draw_action_target_3d(surface, COLOR_TARGET_VALID, layer_a)
+						drew_target = true
+					}
+				case .GARDENER:
+					if app.gardener_source == {-1, -1} {
+						if is_tower_tile {
+							draw_action_target_3d(surface, COLOR_TARGET_VALID, layer_a)
+							drew_target = true
+						}
+					} else {
+						if app.gardener_source == {row, col} {
+							draw_action_target_3d(surface, COLOR_TARGET_INVALID, 100)
+							drew_target = true
+						} else if tile == .EMPTY &&
+						          m.obstacle_grid[row][col] == .EMPTY &&
+						          !m.water_grid[row][col] {
+							draw_action_target_3d(surface, COLOR_TARGET_VALID, layer_a)
+							drew_target = true
+						}
+					}
+				case .TOWER:
+				}
+
+				if hovered && !drew_target {
+					draw_action_target_3d(surface, COLOR_TARGET_INVALID, 40)
+				}
+			}
+		}
+	}
+
+	// ── Objetos del mapa ── (formas sólidas con normal — se iluminan; los
+	// rings/reticles/overlays de arriba y abajo se quedan con el shader
+	// default a propósito, ver Lighting_Shader).
+	raylib.BeginShaderMode(lighting_shader.shader)
+	for row in 0 ..< m.height {
+		for col in 0 ..< m.width {
+			tile := m.grid[row][col]
+			center, top_y := tile_world_top(m, row, col)
+			surface := raylib.Vector3{center.x, top_y, center.z}
+
+			#partial switch tile {
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
+			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
+				for &tower in app.sim.towers {
+					if tower.r == row && tower.c == col {
+						render_tower_3d(&tower, m)
+						break
+					}
+				}
+			case .SPAWN:
+				render_spawn_3d(surface)
+			case .GOAL:
+				render_goal_3d(surface)
+			case .ACCESSORY_TREE:
+				if !m.water_grid[row][col] {
+					render_tree_3d(surface, m.biome)
+				}
+			case .ACCESSORY_BLOCK:
+				blk_level := entities.map_get_obstacle_level(m, row, col)
+				render_block_3d(surface, m.biome, blk_level)
+			}
+		}
+	}
+
+	render_obstacles_3d(m, m.width, m.height)
+	raylib.EndShaderMode()
+
+	// ── Retículas (torre/obstáculo seleccionado, hover en modo acción) ──
+	if app.selected_tower_r >= 0 {
+		center, top_y := tile_world_top(m, app.selected_tower_r, app.selected_tower_c)
+		render_reticle_3d({center.x, top_y, center.z}, constants.UI_RETICLE_COLOR)
+	}
+	if app.pending_tower_action != .TOWER {
+		hover_row, hover_col, hover_valid := input_get_hovered_cell(app)
+		if hover_valid {
+			center, top_y := tile_world_top(m, hover_row, hover_col)
+			render_reticle_3d({center.x, top_y, center.z}, constants.UI_RETICLE_COLOR)
+		}
+	}
+	if app.selected_obstacle.valid {
+		center, top_y := tile_world_top(m, app.selected_obstacle.row, app.selected_obstacle.col)
+		render_reticle_3d({center.x, top_y, center.z}, constants.UI_RETICLE_COLOR)
+	}
+
+	// ── Ghost de construcción ──
+	if app.selected_cell.valid && app.sim.selected_build_tower != .EMPTY {
+		center, top_y := tile_world_top(m, app.selected_cell.row, app.selected_cell.col)
+		surface := raylib.Vector3{center.x, top_y, center.z}
+		cs := constants.WORLD_CELL_SIZE
+
+		if app.sim.selected_build_tower == .OBSTACLE {
+			forbidden := entities.map_is_path_corner_or_junction(m, app.selected_cell.row, app.selected_cell.col)
+			color := COLOR_TARGET_VALID if !forbidden else COLOR_TARGET_INVALID
+			draw_action_target_3d(surface, color, 130)
+		} else {
+			tower_type := tile_to_tower_type(app.sim.selected_build_tower)
+			spec := constants.TOWER_SPECS[tower_type]
+			draw_tower_shape_3d(surface, cs, 0, 0, spec.color, 160)
+			ring := raylib.Vector3{surface.x, surface.y + 0.02, surface.z}
+			draw_ground_ring(ring, spec.range * cs, constants.TOWER_RANGE_PREVIEW)
+			if spec.aoe > 0 {
+				draw_ground_ring(ring, spec.aoe * cs, raylib.Color{255, 180, 60, 180})
+			}
+		}
+	}
+}
+
+// ── Gameplay 3D (enemigos, proyectiles, efectos) ────────────────────────────
+// Ver 3D_RENDER_PLAN.md, paso 4. Las funciones *_3d deben llamarse dentro de
+// un bloque BeginMode3D/EndMode3D activo; render_gameplay_screenspace_3d es
+// la excepción — se llama DESPUÉS de EndMode3D (barras de vida y números de
+// daño se resuelven reproyectando con GetWorldToScreen, así el texto siempre
+// mira a cámara sin billboarding real).
+
+// Altura de superficie aproximada bajo una posición fraccional de grilla —
+// heightmap del tile más cercano, sin interpolar (misma simplificación que
+// el resto del terreno 3D v1).
+world_ground_y :: proc(m: ^entities.Map, gx, gy: f32) -> f32 {
+	col := clamp(i32(gx), 0, m.width - 1)
+	row := clamp(i32(gy), 0, m.height - 1)
+	return m.heightmap[row][col] * constants.WORLD_HEIGHT_SCALE
+}
+
+// enemy.x/y son "crudas" (índice de celda sin +0.5, igual que tile_world_top).
+world_from_raw_grid :: proc(m: ^entities.Map, gx, gy: f32) -> raylib.Vector3 {
+	cs := constants.WORLD_CELL_SIZE
+	return {gx * cs + cs * 0.5, world_ground_y(m, gx, gy), gy * cs + cs * 0.5}
+}
+
+// proyectiles/partículas/beams ya vienen centradas (+0.5 aplicado al spawnear).
+world_from_centered_grid :: proc(m: ^entities.Map, gx, gy: f32) -> raylib.Vector3 {
+	cs := constants.WORLD_CELL_SIZE
+	return {gx * cs, world_ground_y(m, gx, gy), gy * cs}
+}
+
+// Cuerpos de enemigos — formas sólidas con normal, se llama dentro del wrap
+// de Lighting_Shader (ver render_gameplay_3d). Los anillos de estado
+// (armored/slow) se resuelven aparte en render_enemy_status_rings_3d, fuera
+// del shader de iluminación (DrawCircle3D no emite normales).
+render_enemies_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+	for &enemy in app.sim.enemies {
+		pos := world_from_raw_grid(m, enemy.x, enemy.y)
+		size := entities.enemy_get_size(&enemy) * cs
+		color := entities.enemy_get_color(&enemy)
+		if .INVISIBLE in enemy.flags && enemy.revealed_timer <= 0 {
+			color.a = u8(f32(color.a) * constants.ENEMY_INVISIBLE_ALPHA)
+		}
+		squash := enemy.hit_squash * constants.ENEMY_HIT_SQUASH_AMOUNT
+		size_xz := size * (1 + squash)
+		size_y := size * (1 - squash)
+
+		switch {
+		case .BOSS in enemy.flags:
+			center := raylib.Vector3{pos.x, pos.y + size_y, pos.z}
+			raylib.DrawCube(center, size_xz * 2, size_y * 2, size_xz * 2, color)
+		case .FLYING in enemy.flags:
+			base := raylib.Vector3{pos.x, pos.y + cs * 0.6, pos.z}
+			raylib.DrawCylinder(base, size_xz, 0, size_y * 2, 4, color)
+		case:
+			center := raylib.Vector3{pos.x, pos.y + size_y, pos.z}
+			raylib.DrawSphereEx(center, size_xz, 10, 10, color)
+		}
+	}
+}
+
+render_enemy_status_rings_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+	for &enemy in app.sim.enemies {
+		pos := world_from_raw_grid(m, enemy.x, enemy.y)
+		size := entities.enemy_get_size(&enemy) * cs
+		squash := enemy.hit_squash * constants.ENEMY_HIT_SQUASH_AMOUNT
+		size_xz := size * (1 + squash)
+
+		if .ARMORED in enemy.flags {
+			draw_ground_ring({pos.x, pos.y + 0.02, pos.z}, size_xz * 1.1, constants.COLOR_ENEMY_ARMORED)
+		}
+		if enemy.slow_timer > 0 {
+			pulse := f32(math.abs(math.sin(f64(raylib.GetTime()) * 5.0)))
+			alpha := u8(60.0 + 50.0 * pulse)
+			draw_ground_ring({pos.x, pos.y + 0.03, pos.z}, size_xz * 1.2, raylib.Color{100, 200, 255, alpha})
+		}
+	}
+}
+
+render_projectiles_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+	for &proj in app.sim.projectiles {
+		pos := world_from_centered_grid(m, proj.x, proj.y)
+		pos.y += cs * 0.35
+		#partial switch proj.type {
+		case .ARCHER:
+			raylib.DrawSphere(pos, cs * 0.05, raylib.Color{160, 110, 55, 255})
+		case .CANNON:
+			raylib.DrawSphere(pos, cs * 0.1, constants.COLOR_BLOCK)
+		case .SNIPER:
+			raylib.DrawSphere(pos, cs * 0.06, constants.COLOR_BLOCK)
+		case .MISSILE:
+			raylib.DrawSphere(pos, cs * 0.08, raylib.Color{220, 80, 60, 255})
+		case .MORTAR:
+			raylib.DrawSphere(pos, cs * 0.13, constants.TOWER_MORTAR_BASE)
+		case:
+			raylib.DrawSphere(pos, cs * 0.06, raylib.WHITE)
+		}
+	}
+}
+
+render_explosions_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	for &explosion in app.sim.explosions {
+		cs := constants.WORLD_CELL_SIZE
+		pos := world_from_centered_grid(m, explosion.x, explosion.y)
+		radius := explosion.radius * cs
+		alpha := u8(255 * (explosion.life / explosion.max_life))
+		pos.y += radius * 0.5
+		raylib.DrawSphere(pos, radius, raylib.Color{255, 100, 50, alpha})
+	}
+}
+
+render_hit_particles_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+	for &p in app.sim.hit_particles {
+		pos := world_from_centered_grid(m, p.x, p.y)
+		pos.y += cs * 0.25
+		alpha := u8(255 * (p.life / p.max_life))
+		color := p.color
+		color.a = alpha
+		raylib.DrawSphere(pos, p.radius * cs, color)
+	}
+}
+
+render_ice_pulses_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+	for &pulse in app.sim.ice_pulses {
+		pos := world_from_centered_grid(m, pulse.x, pulse.y)
+		t := pulse.life / pulse.max_life
+		alpha := u8(t * 210.0)
+		ring := raylib.Vector3{pos.x, pos.y + 0.02, pos.z}
+		draw_ground_ring(ring, pulse.radius * cs, raylib.Color{180, 235, 255, alpha})
+	}
+}
+
+render_laser_beams_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+	for &beam in app.sim.laser_beams {
+		alpha := beam.duration / beam.max_duration
+		color := beam.color
+		color.a = u8(f32(color.a) * alpha)
+		start := world_from_centered_grid(m, beam.start_x, beam.start_y)
+		end := world_from_centered_grid(m, beam.end_x, beam.end_y)
+		start.y += cs * 0.4
+		end.y += cs * 0.35
+		raylib.DrawLine3D(start, end, color)
+	}
+}
+
+// dy_start/dy_end vienen en convención screen-space (negativo = arriba) —
+// se invierte el signo para el mundo 3D (arriba = +Y).
+render_glow_particles_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+	for &p in app.sim.glow_particles {
+		progress := p.t / p.lifetime
+		ease := progress * progress
+		alpha := u8((1.0 - progress) * 255)
+		radius := p.radius_start + (p.radius_end - p.radius_start) * progress
+		dy_cells := p.dy_start + (p.dy_end - p.dy_start) * ease
+		pos := world_from_centered_grid(m, p.grid_x, p.grid_y)
+		pos.y += -dy_cells * cs + 0.05
+		draw_ground_ring(pos, radius * cs, raylib.Color{255, 255, 255, alpha})
+	}
+}
+
+render_gameplay_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	// Rings/líneas primero, sin iluminar (DrawCircle3D/DrawLine3D no emiten
+	// normales — el depth buffer se encarga del orden visual correcto, no
+	// hace falta un painter's-algorithm como en la versión 2D).
+	render_ice_pulses_3d(app, m)
+	render_glow_particles_3d(app, m)
+	render_laser_beams_3d(app, m)
+
+	// Formas sólidas — iluminadas.
+	raylib.BeginShaderMode(lighting_shader.shader)
+	render_enemies_3d(app, m)
+	render_projectiles_3d(app, m)
+	render_explosions_3d(app, m)
+	render_hit_particles_3d(app, m)
+	raylib.EndShaderMode()
+
+	render_enemy_status_rings_3d(app, m)
+}
+
+// Barras de vida + números de daño — screen-space, reproyectados con
+// GetWorldToScreen tras cerrar BeginMode3D (ver comentario arriba).
+render_gameplay_screenspace_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+
+	for &enemy in app.sim.enemies {
+		pos := world_from_raw_grid(m, enemy.x, enemy.y)
+		size := entities.enemy_get_size(&enemy) * cs
+		top := raylib.Vector3{pos.x, pos.y + size * 2 + 0.15, pos.z}
+		screen := raylib.GetWorldToScreen(top, app.camera3d)
+
+		hp_percent := enemy.hp / enemy.max_hp
+		bar_w := f32(36)
+		bar_h := f32(5)
+		bx := screen.x - bar_w * 0.5
+		by := screen.y
+
+		raylib.DrawRectangle(i32(bx), i32(by), i32(bar_w), i32(bar_h), raylib.DARKGRAY)
+		if hp_percent > 0.01 {
+			hp_color := raylib.GREEN
+			if hp_percent < 0.3 {
+				hp_color = raylib.Color{200, 50, 50, 255}
+			} else if hp_percent < 0.6 {
+				hp_color = raylib.YELLOW
+			}
+			fill_w := max(bar_w * hp_percent, 1.0)
+			raylib.DrawRectangle(i32(bx), i32(by), i32(fill_w), i32(bar_h), hp_color)
+		}
+	}
+
+	if !app.settings.show_damage_numbers { return }
+	for &dn in app.sim.damage_numbers {
+		pos := world_from_centered_grid(m, dn.x, dn.y)
+		screen := raylib.GetWorldToScreen(pos, app.camera3d)
+
+		display_value := i32(dn.value + 0.5)
+		if display_value == 0 { continue }
+
+		alpha := u8(255 * dn.life)
+		color := dn.color
+		color.a = alpha
+		outline_color := raylib.Color{0, 0, 0, alpha}
+
+		if dn.is_money {
+			money_text := fmt.ctprintf("+$%d", display_value)
+			draw_text_with_outline(money_text, screen, 10 * app.zoom, 0, color, outline_color, 1)
+		} else {
+			font_size := f32(9) * app.zoom
+			if dn.is_critical {
+				font_size = 18 * app.zoom
+			}
+			damage_text := fmt.ctprintf("%d", display_value)
+			draw_text_with_outline(damage_text, screen, font_size, 0, color, outline_color, 1)
+		}
+	}
+}
+
 // Render the entire game
 render_game :: proc(app: ^entities.App_State) {
 	ui_blocks_clear()
-	raylib.ClearBackground(raylib.BLACK)		
+	raylib.ClearBackground(raylib.BLACK)
 
 	if constants.NEBULA_BACKGROUND_ENABLED &&
 		(app.state == .MENU ||
@@ -645,14 +1569,41 @@ render_game :: proc(app: ^entities.App_State) {
 	// Map and gameplay are only visible while actually playing or editing.
 	// In menu/overlay states the nebula is the sole background.
 	if app.state == .PLAYING || app.state == .PAUSED || app.state == .EDITOR {
-		render_map(app, &app.editor.game_map, is_paused_glass)
-		render_tower_ranges(app)
-		render_map_objects(app, &app.editor.game_map)
-		render_gameplay(app)
+		// Mapa 3D — paso 4 (ver 3D_RENDER_PLAN.md): solo PLAYING por ahora,
+		// PAUSED/EDITOR se quedan en el camino 2D viejo hasta los pasos
+		// siguientes (glass de pausa, overlays del editor). camera_focus ya
+		// no se hardcodea acá — lo centra simulation_fit_camera al arrancar
+		// la run, y de ahí en más lo mueve input_handle_camera (pan/zoom).
+		// Nota: la retícula de torre/obstáculo seleccionado todavía no se
+		// portó (queda para el paso 5) — no se dibuja en PLAYING hasta
+		// entonces. render_airdrops sigue 2D (fuera de alcance del plan).
+		if app.state == .PLAYING {
+			m := &app.editor.game_map
+			update_camera3d(app)
+
+			raylib.ClearBackground(constants.BIOME_COLORS[m.biome].bg)
+			raylib.BeginMode3D(app.camera3d)
+			render_map_3d(app, m)
+			render_tower_ranges_3d(app, m)
+			render_map_objects_3d(app, m)
+			render_gameplay_3d(app, m)
+			raylib.EndMode3D()
+			render_gameplay_screenspace_3d(app, m)
+		} else {
+			render_map(app, &app.editor.game_map, is_paused_glass)
+			render_tower_ranges(app)
+			render_map_objects(app, &app.editor.game_map)
+			render_gameplay(app)
+		}
 		render_airdrops(app)
 	}
 
-	if app.state == .PLAYING || app.state == .PAUSED || app.state == .EDITOR {
+	// Pájaros: decoración ambiental 2D pura (líneas en world-px de pantalla,
+	// sin relación con el grid), fuera del alcance de 3D_RENDER_PLAN.md. En
+	// PLAYING se ven "pegados" como un plano flotando sobre el mundo 3D — se
+	// desactivan ahí hasta portarlos (necesitarían posición 3D real +
+	// billboarding). Se mantienen en PAUSED/EDITOR, que siguen 100% 2D.
+	if app.state == .PAUSED || app.state == .EDITOR {
 		update_bird_flock(app, app.delta_time)
 		render_bird_flock(app)
 		// cloud_shader_draw(app)  // desactivado
@@ -2216,9 +3167,9 @@ render_damage_numbers :: proc(app: ^entities.App_State, cs: f32) {
 			draw_text_with_outline(money_text, {x, y}, font_size, 0, color, outline_color, 1)
 		} else {
 			damage_text := fmt.ctprintf("%d", display_value)
-			font_size := cs * 0.25
+			font_size := cs * 0.275
 			if dn.is_critical {
-				font_size = cs * 0.5
+				font_size = cs * 0.55
 			}
 			draw_text_with_outline(damage_text, {x, y}, font_size, 0, color, outline_color, 1)
 		}
@@ -2711,6 +3662,35 @@ render_reticle :: proc(x, y, cs: f32, color: raylib.Color) {
 	// Bottom-right corner
 	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size - reticle_len)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)}, f32(corner_thickness), color)
 	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size - reticle_len), f32(ry + reticle_size)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)}, f32(corner_thickness), color)
+}
+
+// Versión 3D de render_reticle — mismos 4 brackets de esquina, acostados
+// sobre el plano del suelo (XZ) en vez de en pantalla. `center` es el centro
+// (X,Z) + altura de superficie (Y) del tile, ver tile_world_top.
+render_reticle_3d :: proc(center: raylib.Vector3, color: raylib.Color) {
+	cs := constants.WORLD_CELL_SIZE
+	size := cs * 0.7
+	len := cs * 0.15
+	y := center.y + 0.02
+	rx := center.x - size / 2
+	rz := center.z - size / 2
+
+	line :: proc(x1, z1, x2, z2, y: f32, color: raylib.Color) {
+		raylib.DrawLine3D({x1, y, z1}, {x2, y, z2}, color)
+	}
+
+	// Top-left
+	line(rx, rz, rx + len, rz, y, color)
+	line(rx, rz, rx, rz + len, y, color)
+	// Top-right
+	line(rx + size - len, rz, rx + size, rz, y, color)
+	line(rx + size, rz, rx + size, rz + len, y, color)
+	// Bottom-left
+	line(rx, rz + size - len, rx, rz + size, y, color)
+	line(rx, rz + size, rx + len, rz + size, y, color)
+	// Bottom-right
+	line(rx + size, rz + size - len, rx + size, rz + size, y, color)
+	line(rx + size - len, rz + size, rx + size, rz + size, y, color)
 }
 
 // =============================================================================

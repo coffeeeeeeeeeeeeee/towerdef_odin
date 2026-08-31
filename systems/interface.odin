@@ -1108,7 +1108,7 @@ CARD_BOTTOM_MARGIN :: f32(16)
 
 // Escala aplicada solo a las cartas de la mano del jugador (más grandes que
 // el resto de las cartas de la UI, que se quedan en tamaño base).
-CARD_HAND_SCALE :: f32(1.3)
+CARD_HAND_SCALE :: f32(1.04)
 
 render_relic_preview :: proc(
 	app: ^entities.App_State,

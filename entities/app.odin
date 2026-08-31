@@ -285,6 +285,13 @@ App_State :: struct {
 	zoom: f32,
 	target_zoom: f32,  // For smooth zoom interpolation
 
+	// Mapa 3D — cámara fija-isométrica (ver 3D_RENDER_PLAN.md, paso 1).
+	// camera_focus es el punto del terreno mirado (unidades de mundo, plano XZ);
+	// camera3d se deriva de él cada frame en update_camera3d, no se persiste.
+	camera3d:            raylib.Camera3D,
+	camera_focus:        raylib.Vector3,
+	target_camera_focus: raylib.Vector3,
+
 	// Screen shake — "trauma" en [0,1], decae con el tiempo. El offset visual
 	// se calcula en render_game a partir de esto y se aplica solo por el
 	// tiempo del frame (no persiste en camera_offset_x/y).

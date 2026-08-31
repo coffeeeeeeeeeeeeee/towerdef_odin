@@ -3,6 +3,7 @@ package main
 import "core:encoding/json"
 import "core:fmt"
 import "core:math"
+import "core:math/linalg"
 import "core:math/rand"
 import "core:mem"
 import "core:os"
@@ -121,6 +122,11 @@ main :: proc() {
 	// Load rock overlay shader (Mountain biome cracked rock plates)
 	systems.rock_shader_init()
 	defer systems.rock_shader_unload()
+
+	// Load 3D lighting shader (mapa de juego en Camera3D — ver 3D_RENDER_PLAN.md)
+	systems.lighting_shader_init()
+	defer systems.lighting_shader_unload()
+	defer systems.terrain_cache_invalidate()
 
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
@@ -244,6 +250,13 @@ main :: proc() {
 					app.camera_offset_x = app.target_camera_offset_x
 					app.camera_offset_y = app.target_camera_offset_y
 				}
+			}
+
+			// Mapa 3D: mismo easing, aplicado a camera_focus (mundo, no píxeles).
+			focus_diff := app.target_camera_focus - app.camera_focus
+			app.camera_focus += focus_diff * eased_speed
+			if linalg.length(app.camera_focus - app.target_camera_focus) < 0.001 {
+				app.camera_focus = app.target_camera_focus
 			}
 		}
 

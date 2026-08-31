@@ -897,7 +897,6 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 		// Check death
 		if enemy.hp <= 0 {
 			play_sound_at(.ENEMY_DEATH, .SFX, enemy.x, enemy.y, app)
-			spawn_hit_particles(app, enemy.x + 0.5, enemy.y + 0.5, entities.enemy_get_color(enemy), constants.HIT_PARTICLE_COUNT_DEATH)
 			if .BOSS in enemy.flags {
 				add_screen_shake(app, constants.SCREEN_SHAKE_BOSS_DEATH)
 			}
@@ -2263,6 +2262,16 @@ simulation_fit_camera :: proc(app: ^entities.App_State, screen_w, screen_h: f32)
 	app.camera_offset_y        = i32((screen_h - grid_h) / 2)
 	app.target_camera_offset_x = app.camera_offset_x
 	app.target_camera_offset_y = app.camera_offset_y
+
+	// Mapa 3D — foco de cámara al centro del mapa (mismo momento que el fit 2D).
+	wcs := constants.WORLD_CELL_SIZE
+	focus := raylib.Vector3{f32(m.width) * wcs * 0.5, 0, f32(m.height) * wcs * 0.5}
+	app.camera_focus        = focus
+	app.target_camera_focus = focus
+
+	// Invalida la malla cacheada del terreno — se reconstruye lazily en el
+	// próximo frame de PLAYING (terrain_cache_ensure) para el mapa actual.
+	terrain_cache_invalidate()
 }
 // =============================================================================
 // Airdrop
