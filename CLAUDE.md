@@ -125,7 +125,7 @@ towerdef_odin/
 │   ├── console.odin
 │   └── ui.odin
 ├── maps/                    # Mapas guardados (.map)
-├── assets/                  # Shaders GLSL (water.glsl, path.glsl, nebula.glsl, ...)
+├── assets/                  # Shaders GLSL (lighting.vs/.fs, nebula.glsl, blur.glsl, ...)
 ├── images/, fonts/, audio/, music/  # Assets
 ├── translations.txt         # Strings de UI por idioma (clave → traducción)
 ├── docs/assets.md
@@ -409,64 +409,46 @@ cualquier cstring de temp_allocator es válido durante todo el frame.
 campos de structs) → usar `fmt.aprintf(...)` o `strings.clone(s)` (heap,
 requieren `delete()` explícito). Ver `init_translations` como ejemplo.
 
-## Shaders de máscara + blur/threshold (agua y camino)
+## El mapa (terreno, agua, camino, biomas) es 100% 3D — no queda renderer 2D
 
-`assets/water.glsl` y `assets/path.glsl` comparten la misma técnica en dos
-fases (ver `Water_Shader`/`Path_Shader` en `systems/rendering.odin`):
+El renderer 2D del mapa (`render_map`, `render_map_objects`,
+`render_tower_ranges`, `render_gameplay`, y toda la maquinaria que
+alimentaban — `Water_Shader`/`Path_Shader`/`Dune_Shader`/`Rock_Shader`/
+`Heightmap_Shader`/grass/glow-circle, sus `*_render_mask`/`*_render_apply`
+de dos fases, `render_grid_lines`, el sistema de pájaros ambiente — se
+eliminó por completo. `PLAYING`, `EDITOR`, `PAUSED` **y** el thumbnail del
+browser de mapas (`render_map_preview_to_texture`) usan todos el mismo
+camino: `render_map_3d`/`render_map_objects_3d` con el terreno cacheado de
+`terrain_cache_ensure` (máscaras de camino/agua horneadas en texturas del
+material, ver "Iluminación 3D" en `systems/rendering.odin`) y el shader
+`lighting.fs` (overlays de bioma: cáusticas de agua, dunas, pasto, roca
+agrietada — todo dentro del mismo pase, ver comentarios en
+`assets/lighting.fs`). No queda ningún `BeginTextureMode` propio en el
+camino de dibujo del mapa — la vieja trampa de "`BeginTextureMode` no
+anida" (`EndTextureMode()` siempre vuelve al framebuffer por defecto, no a
+un "anterior" en una pila) ya no aplica a nada de esto; `BeginMode3D`/
+`EndMode3D` sí puede correr sin problema dentro de un `BeginTextureMode`
+activo (lo usa `Pause_Blur`, ver más abajo), que es un caso distinto.
 
-1. **Máscara** (`water_render_mask` / `path_render_mask`): dibuja rectángulos
-   BLANCOS lisos (sin AA) para los tiles relevantes sobre un
-   `RenderTexture2D` dedicado (`*_shader.mask_tex`), del tamaño de la
-   pantalla (se redimensiona con `*_shader_resize` en cada resize de
-   ventana). Debe llamarse **fuera** de cualquier `BeginTextureMode` activo.
-2. **Apply** (`water_render_apply` / `path_render_apply`): dibuja esa máscara
-   a pantalla a través del shader, que hace *box blur* (radio fijo, ver
-   comentario "Phase 1" en `water.glsl`) y después `smoothstep` en el punto
-   medio (~0.5) de los valores blureados — el blur+threshold redondea los
-   bordes de la máscara binaria sin necesidad de geometría curva real.
+Dos detalles visuales que el 2D tenía y no tenían equivalente al migrar se
+portaron a geometría 3D real, ambos en `render_map_objects_3d`:
+- **Rieles de puente** (`render_bridge_railings_3d`): en tiles de PATH
+  sobre agua, un `DrawCube` fino por cada borde que NO conecta con otro
+  tile de camino (mismo criterio de vecinos que el viejo `is_path_like`).
+  El tile en sí ya se ve como camino por la máscara horneada en
+  `terrain_cache`, esto solo agrega la baranda.
+- **Nenúfares** (`render_water_lily_3d`): árboles (`ACCESSORY_TREE`) que
+  caen en un tile de agua ya no se dibujan como árbol — en su lugar, 2-4
+  discos chatos (`DrawCylinder` muy bajo, raylib no tiene un círculo 3D
+  relleno nativo) con deriva animada y flor opcional, apoyados en
+  `WORLD_WATER_HEIGHT` (la altura fija del agua, no el heightmap — ver
+  `_terrain_tile_height_color`).
 
-**Preview de mapas** (`render_map_preview_to_texture`): la máscara no se
-puede computar dentro del `BeginTextureMode` de la preview (raylib no
-soporta texture-mode anidado), así que se precomputa ANTES, con el
-`mask_tex` temporalmente intercambiado a la resolución 1:1 de la preview
-(guardar/restaurar `tex_w/tex_h/mask_tex` de cada shader). Si se agrega un
-shader nuevo con este patrón, replicar el mismo swap para agua Y camino.
-
-`render_path_layer` además cachea los tiles de puente (PATH sobre agua) con
-sus vecinos ya resueltos en `path_bridge_tiles` (poblado durante
-`path_render_mask`) para que `render_path_railings` los dibuje sin volver a
-recorrer la grilla ni recalcular `is_path_like`. Los railings se dibujan
-**después** de aplicar el shader, sin blur (bordes nítidos a propósito).
-
-### ⚠️ Trampa: `BeginTextureMode` no anida en raylib
-
-`EndTextureMode()` siempre vuelve al framebuffer por defecto (pantalla), **no**
-a un "anterior" en una pila — no existe tal pila. Si envolvés una secuencia de
-render con `BeginTextureMode(mi_textura)` y en el medio se llama a algo que
-internamente hace su propio `BeginTextureMode(...)/EndTextureMode()` (como
-`water_render_mask` o `path_render_mask`), todo lo que se dibuje **después**
-de ese `EndTextureMode()` interno se va derecho a pantalla en vez de a
-`mi_textura` — la captura queda cortada a la mitad, sin error ni warning.
-
-**Fix estándar** (sigue vigente para `render_map_preview_to_texture`, el
-thumbnail 2D del selector de mapas): precomputar `water_render_mask`/
-`path_render_mask` **antes** de entrar al `BeginTextureMode` propio, y
-llamar a `render_map(app, m, for_preview = true)` para que
-`render_water_layer`/`render_path_layer` solo apliquen la máscara ya
-calculada en vez de recomputarla (evitando el `BeginTextureMode` interno).
-Efecto colateral de `for_preview = true`: también saltea el overlay de
-pasto (`render_grass_overlay`) — aceptable si lo que se está capturando va
-a quedar chico/no necesita verse con el detalle completo.
-
-**`Pause_Blur` (ver más abajo) ya NO pisa esta trampa** — se migró del
-render 2D (`render_map`, con esta trampa) al mismo camino 3D que PLAYING/
-EDITOR (`render_map_3d`), que no hace ningún `BeginTextureMode` propio: el
-terreno es un `Model` cacheado con las máscaras de camino/agua ya horneadas
-en las texturas del material (ver `terrain_cache_ensure`,
-`systems/rendering.odin`), no algo que se recalcule con su propio
-render-a-textura por frame. `BeginMode3D`/`EndMode3D` sí puede correr sin
-problema dentro de un `BeginTextureMode` activo — la trampa de arriba es
-específica de `BeginTextureMode`, no de `BeginMode3D`.
+`render_map_objects_3d` dibuja las torres reales buscando el `Tower` que
+matchea en `app.sim.towers` — cuando no hay uno (EDITOR, o el preview de un
+mapa que no tiene una simulación asociada) cae a un fallback: forma
+genérica a partir del tipo de tile (`tile_to_tower_type` +
+`draw_tower_shape_3d`), igual criterio que ya usaba el render 2D viejo.
 
 ## Vidrio esmerilado de la pantalla de Pausa (`Pause_Blur`)
 
@@ -502,70 +484,45 @@ complejidad de invalidación (resize de ventana, etc.) sin beneficio real:
 redirigir el render normal a una textura + 2 pasadas de blur no es más caro
 que lo que ya se dibuja hoy en pantalla.
 
-## Overlay de arena (dune.glsl, bioma DESERT)
+## Overlays de bioma del terreno 3D (dunas, roca, pasto, cáusticas)
 
-Las dunas son 100% procedurales y cubren todo el rect del mapa — **no**
-dependen de `m.heightmap` (el heightmap es desnivel de terreno, sin
-relación real con dónde hay arena) ni de una capa pintada a mano en el
-editor. `render_dune_layer` (`systems/rendering.odin`) dibuja igual que
-`render_grass_overlay` (un `DrawRectangle` sobre el área del mapa dentro de
-`BeginShaderMode`, sin textura ni mask propia). Lo único que ata el patrón
-a "este mapa específico" es `u_seed` (= `m.seed`, offsetea las coordenadas
-de ruido) — mapas con distinto seed tienen dunas distintas, sin acoplarse a
-ningún otro sistema.
+Viven todos dentro de `assets/lighting.fs` (`duneOverlay`/`rockOverlay`/
+`grassOverlay`/`waterCausticsOverlay`), aplicados en un único pase de
+fragment shader sobre la malla del terreno — no hay una capa/pasada de
+render por overlay como en el viejo camino 2D (`assets/dune.glsl`/
+`rock.glsl`/`grass.glsl` originales, cuya lógica se portó ahí adentro, ver
+comentarios en el propio `lighting.fs`). Los uniforms por bioma
+(seed/alpha/density/color, sacados de `BIOME_DUNE_STYLES`/
+`BIOME_ROCK_STYLES`/`BIOME_GRASS_STYLES` en `constants.odin`) se hornean una
+vez en `terrain_cache_ensure` (`systems/rendering.odin`) cuando se
+(re)construye la malla del mapa, y el tiempo animado
+(`lighting_shader.dune_anim_time`/`caustics_anim_time`/`grass_anim_time`) se
+acumula en `render_map_3d` cada frame — mismo patrón dt-clampeado descrito
+en "Animación de shaders" más abajo.
 
-`assets/dune.glsl` tiñe con ruido 2D barato (sin raymarching, a diferencia
-de `grass.glsl`) usando **ridged noise** (`1.0 - abs(n*2-1)`, la técnica
-clásica de Musgrave para terreno: pliega un value noise sobre su punto
-medio y convierte colinas suaves en crestas afiladas e irregulares) en vez
-de un `sin()` plano — 4 octavas dan la forma grande de la duna
-(`duneShape`, estirada a lo largo de un viento fijo — el multiplicador del
-eje `along` en la llamada a `duneShape` controla cuánto se estira; más
-cerca de 1.0 = menos estiramiento), y encima van DOS capas de estrías finas
-en frecuencias distintas (como los campos de dunas reales: ondulación
-primaria + una secundaria más fina) cuya fase se corre con `duneShape`
-(para que las estrías trepen las crestas en vez de ser paralelas
-perfectas) y se afilan con `sign()*pow()` en vez de quedar como onda suave.
-Grano fino estático mezclado encima. Primera versión con puro `sin()` se
-veía "plana", sin ondulación real — el ridged noise fue el cambio que lo
-arregló. Tiempo acumulado propio (`Dune_Shader.anim_time`, mismo patrón
-dt-clampeado que `Water_Shader.anim_time`, constante `DUNE_ANIM_SPEED`).
+**Dunas** (`duneOverlay`, bioma DESERT): ruido 2D barato con **ridged
+noise** (`1.0 - abs(n*2-1)`, técnica de Musgrave: pliega un value noise
+sobre su punto medio y convierte colinas suaves en crestas afiladas) — 4
+octavas dan la forma grande de la duna estirada a lo largo de un viento
+fijo, más dos capas de estrías finas en frecuencias distintas cuya fase se
+corre con la forma grande (para que trepen las crestas en vez de quedar
+paralelas) y se afilan con `sign()*pow()`. Grano fino estático encima.
+**No** depende de `m.heightmap` — el heightmap es desnivel de terreno, sin
+relación real con dónde hay arena (dependencia sacada a pedido explícito
+en su momento; no reintroducirla sin que el usuario lo pida de nuevo).
 
-Sin guard de `for_preview` — no tiene mask texture propia ni
-`BeginTextureMode` interno, así que no aplica la trampa de anidado de la
-sección de abajo. Init/unload en `main.odin` junto a
-`grass_shader_init/unload`. `BIOME_DUNE_STYLES` (`constants.odin`) tiene
-`alpha = 0.0` en todo bioma que no sea DESERT (mutuamente excluyente con el
-pasto, que hace lo mismo al revés en `BIOME_GRASS_STYLES`).
+**Roca agrietada** (`rockOverlay`, bioma MOUNTAIN): **Voronoi F1/F2**
+(distancia al punto-semilla más cercano y al segundo más cercano de una
+grilla jitereada — ver iquilezles.org/articles/voronoilines). La
+diferencia `F2-F1` da las líneas de grieta entre placas; el hash de la
+celda ganadora varía el tono de cada placa; grano fino estático encima.
+Voronoi es la técnica correcta para "placas separadas por grietas" (vs.
+ridged noise, que es para "ondulación continua" como las dunas).
 
-**Historia:** la primera versión sí leía el heightmap (umbral de altura →
-zonas altas = duna). Se sacó esa dependencia a pedido explícito — el
-heightmap no tiene relación semántica con la arena, y complicaba el tuning
-de opacidad (quedaba atado a qué tan "alto" era el terreno en vez de a un
-control directo). No reintroducirla sin que el usuario lo pida de nuevo.
-
-## Overlay de roca (rock.glsl, bioma MOUNTAIN)
-
-Mismo diseño que el overlay de arena: `Rock_Shader`/`render_rock_layer`
-(`systems/rendering.odin`) son un calco de `Dune_Shader`/`render_dune_layer`
-— 100% procedural, `DrawRectangle` sobre el rect del mapa dentro de
-`BeginShaderMode`, sin textura ni mask propia, `u_seed` (= `m.seed`) como
-único dato que ata el mosaico a "este mapa específico". `BIOME_ROCK_STYLES`
-(`constants.odin`) solo tiene `alpha > 0` en MOUNTAIN.
-
-Técnica en `assets/rock.glsl`: **Voronoi F1/F2** (distancia al punto-semilla
-más cercano y al segundo más cercano de una grilla de celdas jitereadas,
-implementación estándar — ver iquilezles.org/articles/voronoilines). La
-diferencia `F2-F1` da las líneas de grieta entre placas (≈0 en el borde de
-celda); el hash de la celda ganadora (`F1`) varía el tono de cada placa
-(mosaico, no todas las piedras son iguales); encima va grano fino estático
-por celda pequeña. Sin raymarching ni ridged noise (a diferencia de
-`dune.glsl`) — Voronoi es la técnica correcta para "placas separadas por
-grietas", ridged noise es para "ondulación continua".
-
-Init/unload en `main.odin` junto a `dune_shader_init/unload`. Llamado en
-`render_map` justo después de `render_dune_layer` (mismo bloque, mutuamente
-excluyentes por bioma).
+`BIOME_DUNE_STYLES`/`BIOME_ROCK_STYLES`/`BIOME_GRASS_STYLES` tienen
+`alpha = 0.0` en cualquier bioma que no sea el suyo — mutuamente
+excluyentes entre sí vía `groundMix` en `lighting.fs` (además de excluidos
+de tiles de camino/agua).
 
 ## Fondo animado (nebula.glsl)
 
@@ -697,18 +654,20 @@ progreso, y el `case .PAUSE_TO_MENU` hace la transición real.
 
 ## Animación de shaders: tiempo acumulado, no `GetTime()` de pared
 
-`water.glsl` usaba `raylib.GetTime()` (reloj de pared, sigue corriendo
-aunque la ventana esté minimizada/sin foco y el loop deje de renderizar
-frames reales) directo como `u_time`. Al recuperar el foco, el salto de
-reloj entre el último frame dibujado y el actual se leía como que la
-animación "se acelera" de golpe.
+`raylib.GetTime()` es reloj de pared — sigue corriendo aunque la ventana
+esté minimizada/sin foco y el loop deje de renderizar frames reales. Al
+recuperar el foco, el salto entre el último frame dibujado y el actual se
+leía como que la animación "se acelera" de golpe (bug real de una versión
+vieja de `water.glsl`, ya no existe ese archivo pero el patrón que lo
+arregló sigue vigente).
 
-**Fix:** `Water_Shader.anim_time` (`systems/rendering.odin`) se acumula a
-mano cada vez que se llama `water_render_apply`, con `dt` clampeado
-(`constants.WATER_ANIM_MAX_DT`, evita saltos por hitches o al recuperar
-foco) y escalado por `constants.WATER_ANIM_SPEED` (0.4 — más lento que
-antes). Si se agrega otro shader animado por tiempo, replicar este patrón
-(acumular con dt clampeado) en vez de leer `GetTime()` directo.
+**Patrón:** acumular el tiempo a mano con `dt` clampeado en vez de leer
+`GetTime()` directo. Ejemplo vivo — `render_map_3d`
+(`systems/rendering.odin`) acumula `lighting_shader.dune_anim_time`/
+`caustics_anim_time`/`grass_anim_time` cada frame con
+`min(raylib.GetFrameTime(), constants.WATER_ANIM_MAX_DT) *
+<ESO>_ANIM_SPEED` (evita saltos por hitches o al recuperar foco). Si se
+agrega otro shader animado por tiempo, replicar este mismo patrón.
 
 ## Victoria / derrota
 
@@ -732,20 +691,22 @@ card.kind == .X` dentro del bloque de clic izquierdo.
 Ver también la trampa de `selected_card_idx` en la sección de venta de
 cartas más arriba — es la más importante de esta lista.
 
-### render_tower_ranges (systems/rendering.odin)
+### render_tower_ranges_3d (systems/rendering.odin)
 
-Dibuja los círculos de rango de torres como capa separada entre `render_map`
-y `render_map_objects`, llamado cada frame desde `render_game`.
+Dibuja los círculos de rango de torres como capa separada entre
+`render_map_3d` y `render_map_objects_3d`, llamado cada frame desde
+`render_game`.
 
-- Modo "todas las torres" (`show_tower_range` activo): solo relleno
-  semitransparente (`TOWER_RANGE_PREVIEW`, alpha=30).
-- Torre seleccionada (siempre): relleno sutil + **outline nítido**
-  (`DrawCircleLines`, alpha=200) — el outline es la parte que realmente se
-  ve; sin él el rango es casi invisible.
+- Modo "todas las torres" (`show_tower_range` activo): un solo
+  `draw_ground_ring` semitransparente (`TOWER_RANGE_PREVIEW`) por torre.
+- Torre seleccionada (siempre): **dos** `draw_ground_ring` superpuestos —
+  relleno sutil (`TOWER_RANGE_PREVIEW`) + outline nítido (blanco,
+  alpha=200) — el outline es la parte que realmente se ve; sin él el rango
+  es casi invisible.
 
-**Trampa:** al editar el bloque de la torre seleccionada es fácil borrar el
-`DrawCircleLines` si se reemplaza solo parte del bloque. Verificar que
-ambas llamadas sigan presentes.
+**Trampa:** al editar el bloque de la torre seleccionada es fácil borrar
+el segundo `draw_ground_ring` (el outline) si se reemplaza solo parte del
+bloque. Verificar que ambas llamadas sigan presentes.
 
 ### Shop overlay y `ui_modal_blocks`
 

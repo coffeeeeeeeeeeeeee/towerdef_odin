@@ -77,10 +77,6 @@ main :: proc() {
 	systems.card_grayscale_shader_init()
 	defer systems.card_grayscale_shader_unload()
 
-	// Initialize glow particle shader
-	systems.glow_circle_shader_init()
-	defer systems.glow_circle_shader_unload()
-
 	// Initialize audio system
 	systems.audio_init()
 	defer systems.audio_cleanup()
@@ -91,14 +87,6 @@ main :: proc() {
 	systems.nebula_init()
 	defer systems.nebula_unload()
 
-	// Load water blob shader
-	systems.water_shader_init()
-	defer systems.water_shader_unload()
-
-	// Load path blur+threshold shader
-	systems.path_shader_init()
-	defer systems.path_shader_unload()
-
 	// Load pause screen "glass" blur shader
 	systems.pause_blur_init()
 	defer systems.pause_blur_unload()
@@ -106,22 +94,6 @@ main :: proc() {
 	// Load cloud layer shader
 	systems.cloud_shader_init()
 	defer systems.cloud_shader_unload()
-
-	// Load heightmap overlay shader (desniveles del terreno)
-	systems.heightmap_shader_init()
-	defer systems.heightmap_shader_unload()
-
-	// Load grass overlay shader (Plain & Forest biomes)
-	systems.grass_shader_init()
-	defer systems.grass_shader_unload()
-
-	// Load dune overlay shader (Desert biome sand ripples/grain)
-	systems.dune_shader_init()
-	defer systems.dune_shader_unload()
-
-	// Load rock overlay shader (Mountain biome cracked rock plates)
-	systems.rock_shader_init()
-	defer systems.rock_shader_unload()
 
 	// Load 3D lighting shader (mapa de juego en Camera3D — ver 3D_RENDER_PLAN.md)
 	systems.lighting_shader_init()
@@ -168,8 +140,6 @@ main :: proc() {
 			app.camera_offset_x = app.target_camera_offset_x
 			app.camera_offset_y = app.target_camera_offset_y
 
-			systems.water_shader_resize()
-			systems.path_shader_resize()
 			systems.pause_blur_resize()
 		}
 

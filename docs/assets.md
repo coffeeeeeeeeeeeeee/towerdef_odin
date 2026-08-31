@@ -33,12 +33,15 @@ GLSL 330 core. Cada shader corresponde a una capa visual:
 |---|---|---|
 | `nebula.glsl` | Fondo animado de menú y juego | `Nebula_Shader` en `rendering.odin` |
 | `clouds.glsl` | Capa de nubes con parallax sobre el mapa | `Cloud_Shader` |
-| `water.glsl` | Blur + threshold para charcos de agua | `Water_Shader` |
-| `path.glsl` | Blur + threshold para suavizar el trazo del camino | `Path_Shader` |
-| `heightmap.glsl` | Tinte continuo del terreno por altura | `Heightmap_Shader` |
-| `grass.glsl` | Overlay de pasto (PLAIN/FOREST) | `Grass_Shader` |
-| `dune.glsl` | Overlay de arena — ondulaciones + grano (DESERT) | `Dune_Shader` |
-| `rock.glsl` | Overlay de roca agrietada — mosaico Voronoi (MOUNTAIN) | `Rock_Shader` |
+| `blur.glsl` | Blur separable 2 pasadas para el vidrio esmerilado de pausa | `Pause_Blur` |
+| `grayscale.glsl` | Desaturado de cartas no compradas/bloqueadas | (global en `interface.odin`) |
+| `lighting.vs` / `lighting.fs` | Iluminación + overlays de bioma del mapa 3D (terreno, torres, enemigos, todo lo dibujado en `BeginMode3D`) — sol/relleno/ambient, cáusticas de agua, dunas, pasto, roca agrietada, todo en un solo pase | `Lighting_Shader` |
+
+El mapa (agua, camino, dunas, roca, pasto, altura del terreno) es 100% 3D
+— no hay shaders 2D de overlay por bioma; esa lógica vive dentro de
+`lighting.fs` y se hornea por mapa en `terrain_cache_ensure`
+(`systems/rendering.odin`). Ver CLAUDE.md → "Overlays de bioma del terreno
+3D".
 
 ### Agregar un nuevo shader
 

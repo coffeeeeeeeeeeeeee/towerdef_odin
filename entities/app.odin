@@ -361,9 +361,6 @@ App_State :: struct {
 	// Only one tooltip can be visible per frame; first writer wins.
 	pending_tooltip: Pending_Tooltip,
 
-	// Ambient bird flock animation
-	bird_flock: Bird_Flock,
-
 	// Generic Sí/No confirmation modal (e.g. confirmar nueva campaña)
 	confirm_modal: Confirm_Modal,
 }
@@ -399,22 +396,6 @@ Airdrop :: struct {
 	// Ping convergente (círculo que se encoge hasta el centro de la caja)
 	ping_timer:  f32,   // cuenta regresiva hasta el próximo ping
 	ping_t:      f32,   // 1.0 = inicio del anillo grande, 0.0 = colapsó en centro; -1 = inactivo
-}
-
-// Bird flock ambient animation
-Bird :: struct {
-	pos:    raylib.Vector2,  // Current screen position
-	offset: raylib.Vector2,  // Offset from flock center
-	phase:  f32,             // Wing flap phase offset
-}
-
-Bird_Flock :: struct {
-	active:      bool,
-	spawn_timer: f32,        // Countdown to next flock spawn
-	anim_time:   f32,        // Accumulated time for wing animation
-	birds:       [12]Bird,
-	bird_count:  i32,
-	velocity:    raylib.Vector2,
 }
 
 Tooltip_Kind :: enum { NONE, LABEL, CARD }

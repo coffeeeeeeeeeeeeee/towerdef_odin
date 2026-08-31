@@ -5,7 +5,6 @@ import "../entities"
 import "core:fmt"
 import "core:math"
 import "core:math/linalg"
-import "core:strings"
 import "vendor:raylib"
 
 // ── Nebula background shader ──────────────────────────────────────────────────
@@ -52,60 +51,6 @@ nebula_draw :: proc() {
 	raylib.BeginShaderMode(nebula_shader.shader)
 	raylib.DrawRectangle(0, 0, i32(w), i32(h), raylib.WHITE)
 	raylib.EndShaderMode()
-}
-
-// ── Water blob shader ────────────────────────────────────────────────────────
-
-Water_Shader :: struct {
-	shader:      raylib.Shader,
-	loc_texel:   i32,
-	loc_water:   i32,
-	loc_edge:    i32,
-	loc_time:    i32,
-	loc_cam:     i32,
-	loc_zoom:    i32,
-	mask_tex:    raylib.RenderTexture2D,
-	tex_w:       i32,
-	tex_h:       i32,
-	// Tiempo acumulado a mano (dt clampeado * velocidad), NO GetTime() de pared.
-	// GetTime() sigue corriendo aunque la ventana esté minimizada/sin foco y el
-	// loop deje de renderizar frames reales — al volver, el salto de reloj se
-	// leía como que la animación "se acelera". anim_time solo avanza con dt de
-	// frames que realmente se dibujan, y clampeado, así que no hay salto.
-	anim_time: f32,
-}
-
-water_shader: Water_Shader
-
-water_shader_init :: proc() {
-	s := raylib.LoadShader(nil, "assets/water.glsl")
-	water_shader.shader    = s
-	water_shader.loc_texel = raylib.GetShaderLocation(s, "texelSize")
-	water_shader.loc_water = raylib.GetShaderLocation(s, "waterColor")
-	water_shader.loc_edge  = raylib.GetShaderLocation(s, "edgeColor")
-	water_shader.loc_time  = raylib.GetShaderLocation(s, "u_time")
-	water_shader.loc_cam   = raylib.GetShaderLocation(s, "u_camera_offset")
-	water_shader.loc_zoom  = raylib.GetShaderLocation(s, "u_zoom")
-	water_shader_resize()
-}
-
-water_shader_resize :: proc() {
-	w := raylib.GetRenderWidth()
-	h := raylib.GetRenderHeight()
-	if water_shader.tex_w == w && water_shader.tex_h == h { return }
-	if water_shader.tex_w > 0 {
-		raylib.UnloadRenderTexture(water_shader.mask_tex)
-	}
-	water_shader.mask_tex = raylib.LoadRenderTexture(w, h)
-	water_shader.tex_w    = w
-	water_shader.tex_h    = h
-}
-
-water_shader_unload :: proc() {
-	raylib.UnloadShader(water_shader.shader)
-	if water_shader.tex_w > 0 {
-		raylib.UnloadRenderTexture(water_shader.mask_tex)
-	}
 }
 
 // ── Pause "glass" blur (vidrio esmerilado sobre el mundo congelado) ─────────
@@ -193,339 +138,6 @@ pause_blur_draw :: proc() {
 
 	// Tinte de vidrio — oscurece/opaca un poco encima del blur
 	raylib.DrawRectangle(0, 0, pause_blur.tex_w, pause_blur.tex_h, constants.PAUSE_GLASS_TINT)
-}
-
-// ── Path blur+threshold shader (misma técnica que el agua, Fase 1) ──────────
-
-Path_Shader :: struct {
-	shader:     raylib.Shader,
-	loc_texel:  i32,
-	loc_path:   i32,
-	loc_edge:   i32,
-	mask_tex:   raylib.RenderTexture2D,
-	tex_w:      i32,
-	tex_h:      i32,
-}
-
-path_shader: Path_Shader
-
-path_shader_init :: proc() {
-	s := raylib.LoadShader(nil, "assets/path.glsl")
-	path_shader.shader    = s
-	path_shader.loc_texel = raylib.GetShaderLocation(s, "texelSize")
-	path_shader.loc_path  = raylib.GetShaderLocation(s, "pathColor")
-	path_shader.loc_edge  = raylib.GetShaderLocation(s, "edgeColor")
-	path_shader_resize()
-}
-
-path_shader_resize :: proc() {
-	w := raylib.GetRenderWidth()
-	h := raylib.GetRenderHeight()
-	if path_shader.tex_w == w && path_shader.tex_h == h { return }
-	if path_shader.tex_w > 0 {
-		raylib.UnloadRenderTexture(path_shader.mask_tex)
-	}
-	path_shader.mask_tex = raylib.LoadRenderTexture(w, h)
-	path_shader.tex_w    = w
-	path_shader.tex_h    = h
-}
-
-path_shader_unload :: proc() {
-	raylib.UnloadShader(path_shader.shader)
-	if path_shader.tex_w > 0 {
-		raylib.UnloadRenderTexture(path_shader.mask_tex)
-	}
-}
-
-// ── Heightmap overlay shader ─────────────────────────────────────────────────
-
-Heightmap_Shader :: struct {
-	shader:               raylib.Shader,
-	loc_contrast:         i32,
-	loc_alpha_max:        i32,
-	loc_contour_steps:    i32,
-	loc_contour_strength: i32,
-	loc_contour_width:    i32,
-	loc_map_pixel_size:   i32,
-}
-
-heightmap_shader: Heightmap_Shader
-
-heightmap_shader_init :: proc() {
-	s := raylib.LoadShader(nil, "assets/heightmap.glsl")
-	heightmap_shader = Heightmap_Shader{
-		shader               = s,
-		loc_contrast         = raylib.GetShaderLocation(s, "u_contrast"),
-		loc_alpha_max        = raylib.GetShaderLocation(s, "u_alpha_max"),
-		loc_contour_steps    = raylib.GetShaderLocation(s, "u_contour_steps"),
-		loc_contour_strength = raylib.GetShaderLocation(s, "u_contour_strength"),
-		loc_contour_width    = raylib.GetShaderLocation(s, "u_contour_width"),
-		loc_map_pixel_size   = raylib.GetShaderLocation(s, "u_map_pixel_size"),
-	}
-}
-
-heightmap_shader_unload :: proc() {
-	raylib.UnloadShader(heightmap_shader.shader)
-}
-
-// ── Grass overlay shader (Plain & Forest biomes) ─────────────────────────────
-
-Grass_Shader :: struct {
-	shader:          raylib.Shader,
-	loc_resolution:  i32,
-	loc_cam_offset:  i32,
-	loc_zoom:        i32,
-	loc_time:        i32,
-	loc_alpha:       i32,
-	loc_density:     i32,
-	loc_grass_color: i32,
-}
-
-grass_shader: Grass_Shader
-
-grass_shader_init :: proc() {
-	s := raylib.LoadShader(nil, "assets/grass.glsl")
-	grass_shader = Grass_Shader{
-		shader          = s,
-		loc_resolution  = raylib.GetShaderLocation(s, "u_resolution"),
-		loc_cam_offset  = raylib.GetShaderLocation(s, "u_camera_offset"),
-		loc_zoom        = raylib.GetShaderLocation(s, "u_zoom"),
-		loc_time        = raylib.GetShaderLocation(s, "u_time"),
-		loc_alpha       = raylib.GetShaderLocation(s, "u_alpha"),
-		loc_density     = raylib.GetShaderLocation(s, "u_density"),
-		loc_grass_color = raylib.GetShaderLocation(s, "u_grass_color"),
-	}
-}
-
-// ── Dune overlay shader (Desert biome sand ripples/grain) ───────────────────
-//
-// Las dunas son parte del mapa (varían con m.seed) pero NO dependen del
-// heightmap — el heightmap es desnivel de terreno, sin relación real con
-// dónde hay arena. El shader cubre el rect completo del mapa, igual que
-// render_grass_overlay, con u_seed como único dato que lo ata a "este mapa
-// específico" (offset de las coordenadas de ruido).
-
-Dune_Shader :: struct {
-	shader:         raylib.Shader,
-	loc_resolution: i32,
-	loc_cam:        i32,
-	loc_zoom:       i32,
-	loc_time:       i32,
-	loc_seed:       i32,
-	loc_alpha:      i32,
-	loc_density:    i32,
-	loc_dune_color: i32,
-	// Tiempo acumulado a mano (dt clampeado * velocidad), mismo patrón que
-	// Water_Shader.anim_time — no GetTime() de pared.
-	anim_time: f32,
-}
-
-dune_shader: Dune_Shader
-
-dune_shader_init :: proc() {
-	s := raylib.LoadShader(nil, "assets/dune.glsl")
-	dune_shader.shader         = s
-	dune_shader.loc_resolution = raylib.GetShaderLocation(s, "u_resolution")
-	dune_shader.loc_cam        = raylib.GetShaderLocation(s, "u_camera_offset")
-	dune_shader.loc_zoom       = raylib.GetShaderLocation(s, "u_zoom")
-	dune_shader.loc_time       = raylib.GetShaderLocation(s, "u_time")
-	dune_shader.loc_seed       = raylib.GetShaderLocation(s, "u_seed")
-	dune_shader.loc_alpha      = raylib.GetShaderLocation(s, "u_alpha")
-	dune_shader.loc_density    = raylib.GetShaderLocation(s, "u_density")
-	dune_shader.loc_dune_color = raylib.GetShaderLocation(s, "u_dune_color")
-}
-
-dune_shader_unload :: proc() {
-	raylib.UnloadShader(dune_shader.shader)
-}
-
-// Dibuja el overlay de dunas sobre todo el rect del mapa. Sin textura ni
-// upload de por medio — puramente procedural, como render_grass_overlay.
-render_dune_layer :: proc(app: ^entities.App_State, m: ^entities.Map, cs: f32) {
-	style := constants.BIOME_DUNE_STYLES[m.biome]
-	if style.alpha <= 0 { return }
-	if dune_shader.shader.id <= 1 { return }
-
-	frame_dt := min(raylib.GetFrameTime(), constants.WATER_ANIM_MAX_DT)
-	dune_shader.anim_time += frame_dt * constants.DUNE_ANIM_SPEED
-	t    := dune_shader.anim_time
-	res  := [2]f32{f32(raylib.GetRenderWidth()), f32(raylib.GetRenderHeight())}
-	cam  := [2]f32{f32(app.camera_offset_x), f32(app.camera_offset_y)}
-	zoom := app.zoom
-	seed := f32(m.seed)
-
-	if dune_shader.loc_resolution >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_resolution, &res,              .VEC2)  }
-	if dune_shader.loc_cam        >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_cam,        &cam,              .VEC2)  }
-	if dune_shader.loc_zoom       >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_zoom,       &zoom,             .FLOAT) }
-	if dune_shader.loc_time       >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_time,       &t,                .FLOAT) }
-	if dune_shader.loc_seed       >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_seed,       &seed,             .FLOAT) }
-	if dune_shader.loc_alpha      >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_alpha,      &style.alpha,      .FLOAT) }
-	if dune_shader.loc_density    >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_density,    &style.density,    .FLOAT) }
-	if dune_shader.loc_dune_color >= 0 { raylib.SetShaderValue(dune_shader.shader, dune_shader.loc_dune_color, &style.dune_color, .VEC4)  }
-
-	raylib.BeginShaderMode(dune_shader.shader)
-	raylib.DrawRectangle(
-		app.camera_offset_x,
-		app.camera_offset_y,
-		i32(f32(m.width) * cs),
-		i32(f32(m.height) * cs),
-		raylib.WHITE,
-	)
-	raylib.EndShaderMode()
-}
-
-grass_shader_unload :: proc() {
-	raylib.UnloadShader(grass_shader.shader)
-}
-
-// ── Rock overlay shader (Mountain biome cracked rock plates) ────────────────
-//
-// Mismo diseño que Dune_Shader: 100% procedural, cubre todo el rect del
-// mapa (DrawRectangle dentro de BeginShaderMode, sin textura/mask propia).
-// u_seed (= m.seed) es lo único que ata el mosaico a "este mapa específico".
-
-Rock_Shader :: struct {
-	shader:         raylib.Shader,
-	loc_resolution: i32,
-	loc_cam:        i32,
-	loc_zoom:       i32,
-	loc_time:       i32,
-	loc_seed:       i32,
-	loc_alpha:      i32,
-	loc_density:    i32,
-	loc_rock_color: i32,
-}
-
-rock_shader: Rock_Shader
-
-rock_shader_init :: proc() {
-	s := raylib.LoadShader(nil, "assets/rock.glsl")
-	rock_shader.shader         = s
-	rock_shader.loc_resolution = raylib.GetShaderLocation(s, "u_resolution")
-	rock_shader.loc_cam        = raylib.GetShaderLocation(s, "u_camera_offset")
-	rock_shader.loc_zoom       = raylib.GetShaderLocation(s, "u_zoom")
-	rock_shader.loc_time       = raylib.GetShaderLocation(s, "u_time")
-	rock_shader.loc_seed       = raylib.GetShaderLocation(s, "u_seed")
-	rock_shader.loc_alpha      = raylib.GetShaderLocation(s, "u_alpha")
-	rock_shader.loc_density    = raylib.GetShaderLocation(s, "u_density")
-	rock_shader.loc_rock_color = raylib.GetShaderLocation(s, "u_rock_color")
-}
-
-rock_shader_unload :: proc() {
-	raylib.UnloadShader(rock_shader.shader)
-}
-
-// Dibuja el overlay de roca sobre todo el rect del mapa. Puramente
-// procedural, como render_dune_layer/render_grass_overlay.
-render_rock_layer :: proc(app: ^entities.App_State, m: ^entities.Map, cs: f32) {
-	style := constants.BIOME_ROCK_STYLES[m.biome]
-	if style.alpha <= 0 { return }
-	if rock_shader.shader.id <= 1 { return }
-
-	t    := f32(raylib.GetTime())
-	res  := [2]f32{f32(raylib.GetRenderWidth()), f32(raylib.GetRenderHeight())}
-	cam  := [2]f32{f32(app.camera_offset_x), f32(app.camera_offset_y)}
-	zoom := app.zoom
-	seed := f32(m.seed)
-
-	if rock_shader.loc_resolution >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_resolution, &res,              .VEC2)  }
-	if rock_shader.loc_cam        >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_cam,        &cam,              .VEC2)  }
-	if rock_shader.loc_zoom       >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_zoom,       &zoom,             .FLOAT) }
-	if rock_shader.loc_time       >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_time,       &t,                .FLOAT) }
-	if rock_shader.loc_seed       >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_seed,       &seed,             .FLOAT) }
-	if rock_shader.loc_alpha      >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_alpha,      &style.alpha,      .FLOAT) }
-	if rock_shader.loc_density    >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_density,    &style.density,    .FLOAT) }
-	if rock_shader.loc_rock_color >= 0 { raylib.SetShaderValue(rock_shader.shader, rock_shader.loc_rock_color, &style.rock_color, .VEC4)  }
-
-	raylib.BeginShaderMode(rock_shader.shader)
-	raylib.DrawRectangle(
-		app.camera_offset_x,
-		app.camera_offset_y,
-		i32(f32(m.width) * cs),
-		i32(f32(m.height) * cs),
-		raylib.WHITE,
-	)
-	raylib.EndShaderMode()
-}
-
-render_grass_overlay :: proc(app: ^entities.App_State, m: ^entities.Map, cs: f32) {
-	style := constants.BIOME_GRASS_STYLES[m.biome]
-	if style.alpha <= 0 { return }
-	if grass_shader.shader.id <= 1 { return }
-
-	w    := f32(raylib.GetRenderWidth())
-	h    := f32(raylib.GetRenderHeight())
-	t    := f32(raylib.GetTime())
-	res  := [2]f32{w, h}
-	cam  := [2]f32{f32(app.camera_offset_x), f32(app.camera_offset_y)}
-	zoom := app.zoom
-
-	if grass_shader.loc_resolution  >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_resolution,  &res,              .VEC2)  }
-	if grass_shader.loc_cam_offset  >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_cam_offset,  &cam,              .VEC2)  }
-	if grass_shader.loc_zoom        >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_zoom,        &zoom,             .FLOAT) }
-	if grass_shader.loc_time        >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_time,        &t,                .FLOAT) }
-	if grass_shader.loc_alpha       >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_alpha,       &style.alpha,      .FLOAT) }
-	if grass_shader.loc_density     >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_density,     &style.density,    .FLOAT) }
-	if grass_shader.loc_grass_color >= 0 { raylib.SetShaderValue(grass_shader.shader, grass_shader.loc_grass_color, &style.grass_color, .VEC4) }
-
-	raylib.BeginShaderMode(grass_shader.shader)
-	raylib.DrawRectangle(
-		app.camera_offset_x,
-		app.camera_offset_y,
-		i32(f32(m.width) * cs),
-		i32(f32(m.height) * cs),
-		raylib.WHITE,
-	)
-	raylib.EndShaderMode()
-}
-
-// ── Glow circle shader (enemy spawn / goal-reach particles) ─────────────────
-
-_glow_circle_shader: raylib.Shader
-_glow_white_tex:     raylib.Texture2D  // 1×1 white pixel — ensures UV interpolates 0..1
-
-glow_circle_shader_init :: proc() {
-	_glow_circle_shader = raylib.LoadShader(nil, "assets/glow_circle.glsl")
-	img := raylib.GenImageColor(1, 1, raylib.WHITE)
-	_glow_white_tex = raylib.LoadTextureFromImage(img)
-	raylib.UnloadImage(img)
-}
-
-glow_circle_shader_unload :: proc() {
-	raylib.UnloadShader(_glow_circle_shader)
-	raylib.UnloadTexture(_glow_white_tex)
-}
-
-render_glow_particles :: proc(app: ^entities.App_State, cs: f32) {
-	if len(app.sim.glow_particles) == 0 { return }
-
-	raylib.BeginShaderMode(_glow_circle_shader)
-	defer raylib.EndShaderMode()
-
-	for &p in app.sim.glow_particles {
-		progress  := p.t / p.lifetime           // 0..1
-		ease      := progress * progress         // cuadrático: acelera hacia el final
-		alpha     := u8((1.0 - progress) * 255)
-
-		color := raylib.Color{255, 255, 255, alpha}
-
-		radius_px := (p.radius_start + (p.radius_end - p.radius_start) * progress) * cs
-		quad_half := radius_px * 2.2  // ring_d=0.45 → ring edge sits at 0.45*2.2*r = r
-
-		dy_cells  := p.dy_start + (p.dy_end - p.dy_start) * ease
-		sx := f32(app.camera_offset_x) + p.grid_x * cs
-		sy := f32(app.camera_offset_y) + p.grid_y * cs + dy_cells * cs
-
-		// DrawTexturePro interpolates UV 0..1 across the quad — required for shader
-		raylib.DrawTexturePro(
-			_glow_white_tex,
-			{0, 0, 1, 1},
-			{sx - quad_half, sy - quad_half, quad_half * 2, quad_half * 2},
-			{0, 0},
-			0,
-			color,
-		)
-	}
 }
 
 // ── Cloud layer shader ───────────────────────────────────────────────────────
@@ -1098,6 +710,103 @@ render_obstacles_3d :: proc(m: ^entities.Map, map_w, map_h: i32) {
 	}
 }
 
+// Rieles de puente — versión 3D del viejo render_path_railings (2D,
+// eliminado junto al resto del renderer 2D). El tile en sí ya se ve como
+// camino sobre agua gracias a la máscara horneada en terrain_cache
+// (pathColor sobre la altura fija de agua, ver lighting.fs) — esto solo
+// agrega la baranda en los bordes que NO conectan con otro tile de camino
+// (bordes "abiertos" del puente), igual criterio de vecinos que antes.
+render_bridge_railings_3d :: proc(m: ^entities.Map) {
+	cs         := constants.WORLD_CELL_SIZE
+	path_width := cs * constants.PATH_WIDTH_RATIO
+	rail_t     := cs * constants.BRIDGE_RAILING_THICK
+	rail_h     := cs * 0.18
+	color      := constants.COLOR_BRIDGE_RAILING
+	// El tile-puente es agua a altura FIJA (ver _terrain_tile_height_color) —
+	// no el heightmap, así que la baranda se apoya en WORLD_WATER_HEIGHT.
+	deck_y := constants.WORLD_WATER_HEIGHT + rail_h*0.5
+
+	is_path_like :: proc(m: ^entities.Map, r, c: i32) -> bool {
+		if r < 0 || r >= m.height || c < 0 || c >= m.width { return false }
+		t := m.grid[r][c]
+		return t == .PATH || t == .SPAWN || t == .GOAL
+	}
+
+	for row in 0 ..< m.height {
+		for col in 0 ..< m.width {
+			if m.grid[row][col] != .PATH || !m.water_grid[row][col] { continue }
+			cx := f32(col) * cs + cs*0.5
+			cz := f32(row) * cs + cs*0.5
+
+			if !is_path_like(m, row - 1, col) {
+				raylib.DrawCube({cx, deck_y, cz - path_width*0.5}, path_width, rail_h, rail_t, color)
+			}
+			if !is_path_like(m, row + 1, col) {
+				raylib.DrawCube({cx, deck_y, cz + path_width*0.5}, path_width, rail_h, rail_t, color)
+			}
+			if !is_path_like(m, row, col - 1) {
+				raylib.DrawCube({cx - path_width*0.5, deck_y, cz}, rail_t, rail_h, path_width, color)
+			}
+			if !is_path_like(m, row, col + 1) {
+				raylib.DrawCube({cx + path_width*0.5, deck_y, cz}, rail_t, rail_h, path_width, color)
+			}
+		}
+	}
+}
+
+// Nenúfar 3D — versión del viejo render_water_lily (2D, eliminado) para
+// árboles que caen en tile de agua. Discos chatos (cilindros muy bajos,
+// simulan un círculo plano — raylib no tiene un DrawCircle3D relleno)
+// apoyados sobre el agua en vez de círculos de pantalla; misma semilla
+// determinística por tile (hash_position/hash_random, definidas más abajo)
+// y misma deriva animada que la versión 2D, ahora usando
+// lighting_shader.caustics_anim_time (water_shader ya no existe).
+render_water_lily_3d :: proc(center: raylib.Vector3, row, col: i32) {
+	cs := constants.WORLD_CELL_SIZE
+	seed := hash_position(row, col)
+	rng :: proc(s: ^u32) -> f32 {
+		s^ = s^ * 1664525 + 1013904223
+		return f32(s^ & 0xFFFF) / f32(0xFFFF)
+	}
+
+	t := lighting_shader.caustics_anim_time
+	pad_count := 2 + i32(hash_random(row, col, 0) * 3)  // 2..4
+
+	for i in 0 ..< pad_count {
+		s := seed + u32(i) * 97
+		local_x := (rng(&s) * 0.70 + 0.15 - 0.5) * cs
+		local_z := (rng(&s) * 0.70 + 0.15 - 0.5) * cs
+		pr := cs * (0.09 + rng(&s) * 0.07)  // radio 0.09..0.16 de cs
+
+		// Deriva suave sobre el agua — fase y frecuencia propias por pad.
+		phase := rng(&s) * 6.2832
+		freq  := 0.5 + rng(&s) * 0.3
+		amp   := cs * 0.05
+		dx := math.cos(t * freq + phase) * amp
+		dz := math.sin(t * freq * 0.8 + phase) * amp * 0.6
+
+		pad_pos := raylib.Vector3{center.x + local_x + dx, center.y + 0.02, center.z + local_z + dz}
+		raylib.DrawCylinder(pad_pos, pr, pr, 0.02, 12, raylib.Color{40, 110, 50, 230})
+		raylib.DrawCylinderWires(pad_pos, pr, pr, 0.02, 12, raylib.Color{70, 150, 70, 160})
+
+		// 50% de chance de una florcita rosa sobre el pad.
+		if rng(&s) > 0.5 {
+			fr := cs * (0.016 + rng(&s) * 0.023)
+			flower_pos := raylib.Vector3{pad_pos.x, pad_pos.y + 0.015, pad_pos.z}
+			for p in 0 ..< 5 {
+				a := f32(p) * 1.2566  // 2π/5
+				ppos := raylib.Vector3{
+					flower_pos.x + math.cos(a) * fr * 1.6,
+					flower_pos.y,
+					flower_pos.z + math.sin(a) * fr * 1.6,
+				}
+				raylib.DrawCylinder(ppos, fr, fr, 0.015, 8, raylib.Color{255, 150, 190, 240})
+			}
+			raylib.DrawCylinder(flower_pos, fr * 0.6, fr * 0.6, 0.018, 8, raylib.Color{255, 230, 80, 255})
+		}
+	}
+}
+
 // Anillo plano sobre el suelo (rango de torre, AoE, action-target hover) —
 // DrawCircle3D acostado sobre el plano XZ.
 draw_ground_ring :: proc(center: raylib.Vector3, radius: f32, color: raylib.Color) {
@@ -1201,6 +910,7 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	// ── Objetos del mapa ── (formas sólidas con normal — se iluminan; los
 	// rings/reticles/overlays de arriba y abajo se quedan con el shader
 	// default a propósito, ver Lighting_Shader).
+	biome_colors := constants.BIOME_COLORS[m.biome]  // para el promedio de altura de agua bajo los nenúfares, ver caso ACCESSORY_TREE
 	raylib.BeginShaderMode(lighting_shader.shader)
 	for row in 0 ..< m.height {
 		for col in 0 ..< m.width {
@@ -1211,18 +921,49 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 			#partial switch tile {
 			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
 			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
+				found := false
 				for &tower in app.sim.towers {
 					if tower.r == row && tower.c == col {
 						render_tower_3d(&tower, m)
+						found = true
 						break
 					}
+				}
+				if !found {
+					// Sin torre real en la simulación (EDITOR, o el preview
+					// del browser de mapas) — dibujar una forma genérica a
+					// partir del tipo de tile en vez de nada, mismo criterio
+					// que usaba el render 2D (tile_to_tower_type +
+					// draw_tower_tile) pero con la primitiva 3D.
+					tower_type := tile_to_tower_type(tile)
+					color := constants.TOWER_SPECS[tower_type].color
+					draw_tower_shape_3d(surface, constants.WORLD_CELL_SIZE, 0, 0, color)
 				}
 			case .SPAWN:
 				render_spawn_3d(surface)
 			case .GOAL:
 				render_goal_3d(surface)
 			case .ACCESSORY_TREE:
-				if !m.water_grid[row][col] {
+				if m.water_grid[row][col] {
+					// La malla del terreno promedia la altura por ESQUINA
+					// compartida entre tiles vecinos (ver _terrain_corner) —
+					// un tile de agua junto a tierra no queda perfectamente
+					// plano en WORLD_WATER_HEIGHT cerca del borde. Promediar
+					// las 4 esquinas del tile da la altura real de la
+					// superficie en el centro (donde se planta el nenúfar),
+					// para que quede apoyado en el agua y no floreciendo por
+					// encima o hundido.
+					water_y := f32(0)
+					for dr in 0 ..= 1 {
+						for dc in 0 ..= 1 {
+							h, _ := _terrain_corner(m, row + i32(dr), col + i32(dc), biome_colors)
+							water_y += h
+						}
+					}
+					water_y *= 0.25
+					lily_center := raylib.Vector3{surface.x, water_y, surface.z}
+					render_water_lily_3d(lily_center, row, col)
+				} else {
 					render_tree_3d(surface, m.biome)
 				}
 			case .ACCESSORY_BLOCK:
@@ -1233,6 +974,7 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	}
 
 	render_obstacles_3d(m, m.width, m.height)
+	render_bridge_railings_3d(m)
 	raylib.EndShaderMode()
 
 	// ── Retículas (torre/obstáculo seleccionado, hover en modo acción) ──
@@ -1631,591 +1373,75 @@ render_game :: proc(app: ^entities.App_State) {
 	render_console(app)       // La consola va encima de absolutamente todo
 }
 
-// Render tower ranges (separate layer above grid)
-render_tower_ranges :: proc(app: ^entities.App_State) {
-	cs := f32(app.settings.cell_size) * app.zoom
-
-	// All towers when the setting is on
-	if app.settings.show_tower_range {
-		for &tower in app.sim.towers {
-			center_x := f32(tower.c) * cs + f32(app.camera_offset_x) + cs / 2
-			center_y := f32(tower.r) * cs + f32(app.camera_offset_y) + cs / 2
-			range_px := tower.range * cs
-			raylib.DrawCircle(i32(center_x), i32(center_y), range_px, constants.TOWER_RANGE_PREVIEW)
-		}
-	}
-
-	// Selected tower always gets a highlighted range ring, regardless of the setting
-	if selected := entities.app_get_selected_tower(app); selected != nil {
-		center_x := f32(selected.c) * cs + f32(app.camera_offset_x) + cs / 2
-		center_y := f32(selected.r) * cs + f32(app.camera_offset_y) + cs / 2
-		range_px := selected.range * cs
-		cx_i := i32(center_x)
-		cy_i := i32(center_y)
-
-		// Relleno sutil + outline nítido (sin outline el rango es invisible).
-		// Ver CLAUDE.md → "render_tower_ranges → ⚠️ Trampa conocida".
-		raylib.DrawCircle(cx_i, cy_i, range_px, constants.TOWER_RANGE_PREVIEW)
-		raylib.DrawCircleLines(cx_i, cy_i, range_px, raylib.Color{255, 255, 255, 200})
-	}
-}
-
-// Dibuja un overlay difuminado sobre un tile para marcar un action target.
-// El blur se simula con LAYERS rectángulos concéntricos: el más externo cubre el
-// tile completo y el más interno cubre el 80%. Cada capa tiene el mismo alpha base,
-// por lo que el área central (cubierta por todas las capas) acumula más opacidad.
-// layer_alpha controla la intensidad: más bajo = más sutil (p.ej. al hacer hover).
-draw_action_target :: proc(x, y, cs: f32, color: raylib.Color, layer_alpha: u8 = 20) {
-	LAYERS   :: 5
-	PAD_STEP :: f32(0.025)   // cada capa se inset 2.5% del tile
-	for k in 0 ..< LAYERS {
-		pad := cs * PAD_STEP * f32(k)
-		sz  := cs - 2 * pad
-		c   := raylib.Color{color.r, color.g, color.b, layer_alpha}
-		raylib.DrawRectangleRounded(raylib.Rectangle{x + pad, y + pad, sz, sz}, 0.4, 6, c)
-	}
-}
-
-// Render map objects (towers, spawn, goal, accessories, obstacles) - intermediate layer
-render_map_objects :: proc(app: ^entities.App_State, m: ^entities.Map) {
-	cs    := f32(app.settings.cell_size) * app.zoom
-	mouse := raylib.GetMousePosition()
-
-	COLOR_TARGET_VALID   :: raylib.Color{60, 220, 90, 255}   // verde: action target válido
-	COLOR_TARGET_INVALID :: raylib.Color{220, 60, 60, 255}   // rojo: inválido / origen Gardener
-
-	// ── Pasada 1: overlays de casillas posibles (debajo de los objetos del mapa) ──
-	if app.pending_tower_action != .TOWER && (app.state == .PLAYING || app.state == .PAUSED) {
-		for row in 0 ..< m.height {
-			for col in 0 ..< m.width {
-				tile    := m.grid[row][col]
-				x       := f32(col) * cs + f32(app.camera_offset_x)
-				y       := f32(row) * cs + f32(app.camera_offset_y)
-				hovered := raylib.CheckCollisionPointRec(mouse, raylib.Rectangle{x, y, cs, cs})
-				// Hover más sutil: layer_alpha más bajo para dar mayor transparencia
-				layer_a := u8(hovered ? 10 : 20)
-
-				is_tower_tile := tile == .TOWER_ARCHER || tile == .TOWER_CANNON ||
-				                 tile == .TOWER_SNIPER  || tile == .TOWER_MISSILE ||
-				                 tile == .TOWER_LASER   || tile == .TOWER_ICE ||
-				                 tile == .TOWER_ENHANCE || tile == .TOWER_TESLA ||
-				                 tile == .TOWER_MORTAR
-
-				drew_target := false
-
-				#partial switch app.pending_tower_action {
-				case .LUMBERJACK:
-					if tile == .ACCESSORY_TREE && !m.water_grid[row][col] {
-						draw_action_target(x, y, cs, COLOR_TARGET_VALID, layer_a)
-						drew_target = true
-					}
-				case .OVERDRIVE:
-					if is_tower_tile {
-						draw_action_target(x, y, cs, COLOR_TARGET_VALID, layer_a)
-						drew_target = true
-					}
-				case .GARDENER:
-					if app.gardener_source == {-1, -1} {
-						// Fase 1: torres válidas en verde
-						if is_tower_tile {
-							draw_action_target(x, y, cs, COLOR_TARGET_VALID, layer_a)
-							drew_target = true
-						}
-					} else {
-						// Fase 2: origen siempre en rojo, destinos válidos en verde
-						if app.gardener_source == {i32(row), i32(col)} {
-							draw_action_target(x, y, cs, COLOR_TARGET_INVALID, 25)
-							drew_target = true
-						} else if tile == .EMPTY &&
-						          m.obstacle_grid[row][col] == .EMPTY &&
-						          !m.water_grid[row][col] {
-							draw_action_target(x, y, cs, COLOR_TARGET_VALID, layer_a)
-							drew_target = true
-						}
-					}
-				case .TOWER:
-					// inactivo
-				}
-
-				// Tile hovereado sin ser target válido → overlay rojo sutil
-				if hovered && !drew_target {
-					draw_action_target(x, y, cs, COLOR_TARGET_INVALID, 8)
-				}
-			}
-		}
-	}
-
-	// ── Pasada 2: objetos del mapa (encima de los overlays) ──────────────────────
-	for row in 0 ..< m.height {
-		for col in 0 ..< m.width {
-			tile := m.grid[row][col]
-			x := f32(col) * cs + f32(app.camera_offset_x)
-			y := f32(row) * cs + f32(app.camera_offset_y)
-
-			#partial switch tile {
-			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
-			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
-				if app.state == .PLAYING || app.state == .PAUSED {
-					for &tower in app.sim.towers {
-						if tower.r == i32(row) && tower.c == i32(col) {
-							render_tower(&tower, x, y, cs)
-							break
-						}
-					}
-				} else {
-					tower_type := tile_to_tower_type(tile)
-					draw_tower_tile(x, y, cs, tower_type, 0, false)
-				}
-
-			case .SPAWN:
-				render_spawn(x, y, cs)
-
-			case .GOAL:
-				render_goal(x, y, cs)
-
-			case .ACCESSORY_TREE:
-				if m.water_grid[row][col] {
-					render_water_lily(x, y, cs, i32(row), i32(col))
-				} else {
-					render_tree(x, y, cs, m.biome, i32(row), i32(col))
-				}
-
-			case .ACCESSORY_BLOCK:
-				blk_level := entities.map_get_obstacle_level(m, i32(row), i32(col))
-				render_block(x, y, cs, m.biome, blk_level, i32(row), i32(col))
-			}
-		}
-	}
-
-	render_obstacles(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y)
-
-	// Draw laser beams (on top of everything)
-	if app.state == .PLAYING || (app.state == .PAUSED && app.previous_state == .PLAYING) {
-		render_laser_beams(app, cs)
-	}
-
-	// Draw reticle for selected tower in PLAYING/PAUSED modes
-	if app.selected_tower_r >= 0 && (app.state == .PLAYING || app.state == .PAUSED) {
-		sx := f32(app.selected_tower_c) * cs + f32(app.camera_offset_x)
-		sy := f32(app.selected_tower_r) * cs + f32(app.camera_offset_y)
-		render_reticle(sx, sy, cs, constants.UI_RETICLE_COLOR)
-	}
-
-	// Retícula sobre el tile hovereado en modo selección de carta activa
-	if app.pending_tower_action != .TOWER && (app.state == .PLAYING || app.state == .PAUSED) {
-		hover_col := int((mouse.x - f32(app.camera_offset_x)) / cs)
-		hover_row := int((mouse.y - f32(app.camera_offset_y)) / cs)
-		if hover_col >= 0 && hover_col < int(m.width) && hover_row >= 0 && hover_row < int(m.height) {
-			rx := f32(hover_col) * cs + f32(app.camera_offset_x)
-			ry := f32(hover_row) * cs + f32(app.camera_offset_y)
-			render_reticle(rx, ry, cs, constants.UI_RETICLE_COLOR)
-		}
-	}
-
-	// Draw reticle for selected obstacle in PLAYING/PAUSED modes
-	if app.selected_obstacle.valid && (app.state == .PLAYING || app.state == .PAUSED) {
-		sx := f32(app.selected_obstacle.col) * cs + f32(app.camera_offset_x)
-		sy := f32(app.selected_obstacle.row) * cs + f32(app.camera_offset_y)
-		render_reticle(sx, sy, cs, constants.UI_RETICLE_COLOR)
-	}
-
-	// Draw reticle for selected cell (in editor and simulation modes)
-	if app.selected_cell.valid && app.state == .EDITOR {
-		sx := f32(app.selected_cell.col) * cs + f32(app.camera_offset_x)
-		sy := f32(app.selected_cell.row) * cs + f32(app.camera_offset_y)
-		render_reticle(sx, sy, cs, constants.UI_RETICLE_COLOR)
-
-		// Draw tower ghost if a tower type is selected for building
-		if app.sim.selected_build_tower != .EMPTY {
-			// Convert tile to tower type
-			tower_type := tile_to_tower_type(app.sim.selected_build_tower)
-			draw_tower_tile(sx, sy, cs, tower_type, 0, true) // is_ghost = true
-			// Draw range preview
-			spec := constants.TOWER_SPECS[tower_type]
-			raylib.DrawCircle(i32(sx + cs / 2), i32(sy + cs / 2), spec.range * cs, constants.TOWER_RANGE_PREVIEW)
-		}
-	}
-}
-
-// Overlay de heightmap — dibuja un gradient continuo (vía shader) que tinta el
-// terreno según el heightmap del mapa. Hace upload lazy de la textura GPU si
-// está marcada como dirty (típicamente después de map_load o map_init).
-// La intensidad/contraste/isolíneas dependen del bioma (BIOME_HEIGHTMAP_STYLES).
-render_heightmap_overlay :: proc(app: ^entities.App_State, m: ^entities.Map, cs: f32) {
-	style := constants.BIOME_HEIGHTMAP_STYLES[m.biome]
-	if style.alpha_max <= 0 && style.contour_strength <= 0 { return }
-
-	// Lazy upload: si dirty o nunca subida, regenerar la textura desde m.heightmap.
-	if m.heightmap_tex_dirty || !m.heightmap_tex_valid {
-		entities.map_upload_heightmap_to_gpu(m)
-	}
-	if !m.heightmap_tex_valid { return }
-
-	// Si el shader no cargó (id <= 1 = default fallback), salir.
-	if heightmap_shader.shader.id <= 1 { return }
-
-	// Pasar uniforms del bioma.
-	contrast        := style.contrast_mult
-	alpha_max       := style.alpha_max
-	contour_steps   := style.contour_steps
-	contour_strength := style.contour_strength
-	contour_width   := style.contour_width
-	if heightmap_shader.loc_contrast >= 0 {
-		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_contrast, &contrast, .FLOAT)
-	}
-	if heightmap_shader.loc_alpha_max >= 0 {
-		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_alpha_max, &alpha_max, .FLOAT)
-	}
-	if heightmap_shader.loc_contour_steps >= 0 {
-		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_contour_steps, &contour_steps, .FLOAT)
-	}
-	if heightmap_shader.loc_contour_strength >= 0 {
-		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_contour_strength, &contour_strength, .FLOAT)
-	}
-	if heightmap_shader.loc_contour_width >= 0 {
-		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_contour_width, &contour_width, .FLOAT)
-	}
-	// Tamaño del mapa en "píxeles de referencia" (constante, sin zoom) — ancla el
-	// patrón de dithering al terreno en vez de a la pantalla.
-	map_pixel_size := [2]f32{f32(m.width) * f32(constants.CELL_SIZE), f32(m.height) * f32(constants.CELL_SIZE)}
-	if heightmap_shader.loc_map_pixel_size >= 0 {
-		raylib.SetShaderValue(heightmap_shader.shader, heightmap_shader.loc_map_pixel_size, &map_pixel_size, .VEC2)
-	}
-
-	// src: solo la porción del heightmap que corresponde al mapa real (m.width × m.height).
-	// dst: el área del mapa en pantalla.
-	src := raylib.Rectangle{0, 0, f32(m.width), f32(m.height)}
-	dst := raylib.Rectangle{
-		f32(app.camera_offset_x),
-		f32(app.camera_offset_y),
-		f32(m.width) * cs,
-		f32(m.height) * cs,
-	}
-
-	raylib.BeginShaderMode(heightmap_shader.shader)
-	raylib.DrawTexturePro(m.heightmap_tex, src, dst, {0, 0}, 0, raylib.WHITE)
-	raylib.EndShaderMode()
-}
-
-// Render map (grid, paths, obstacles)
-render_map :: proc(app: ^entities.App_State, m: ^entities.Map, for_preview: bool = false) {
-	cs := f32(app.settings.cell_size) * app.zoom
-	gs := m.width // Use map's actual dimensions
-
-	// Background
-	biome_colors := constants.BIOME_COLORS[m.biome]
-	raylib.ClearBackground(biome_colors.bg)
-
-	// Fill grid background (use both width and height)
-	total_width := f32(m.width) * cs
-	total_height := f32(m.height) * cs
-	raylib.DrawRectangle(
-		i32(app.camera_offset_x),
-		i32(app.camera_offset_y),
-		i32(total_width),
-		i32(total_height),
-		biome_colors.bg_grid,
-	)
-
-	// Grass overlay — se dibuja ANTES del agua para que el agua la tape naturalmente.
-	if !for_preview { render_grass_overlay(app, m, cs) }
-
-	// Heightmap overlay — se dibuja ANTES del agua para que el agua lo tape
-	// en las celdas acuáticas (sin heightmap ni contornos sobre el agua).
-	render_heightmap_overlay(app, m, cs)
-
-	// Dune overlay (arena, DESERT) y rock overlay (roca agrietada, MOUNTAIN)
-	// — ambos 100% procedurales, cubren todo el mapa, solo uno dibuja algo
-	// según el bioma (alpha=0 en el resto vía BIOME_DUNE_STYLES/BIOME_ROCK_STYLES).
-	render_dune_layer(app, m, cs)
-	render_rock_layer(app, m, cs)
-
-	render_water_layer(m, cs, app.camera_offset_x, app.camera_offset_y, app.zoom, for_preview)
-	render_path_layer(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y, for_preview)
-
-	// Grid lines
-	if app.settings.show_grid {
-		render_grid_lines(app, cs, i32(m.width), i32(m.height))
-	}
-
-	// Draw ghost in PLAYING/PAUSED modes when building
-	if app.selected_cell.valid && (app.state == .PLAYING || app.state == .PAUSED) {
-		if app.sim.selected_build_tower != .EMPTY {
-			sx := f32(app.selected_cell.col) * cs + f32(app.camera_offset_x)
-			sy := f32(app.selected_cell.row) * cs + f32(app.camera_offset_y)
-			if app.sim.selected_build_tower == .OBSTACLE {
-				// Ghost de obstáculo: rojo si está en esquina/unión, normal si es válido
-				forbidden := entities.map_is_path_corner_or_junction(
-					m,
-					app.selected_cell.row, app.selected_cell.col,
-				)
-				if forbidden {
-					draw_obstacle_preview_invalid(sx, sy, cs, m, app.selected_cell.row, app.selected_cell.col)
-				} else {
-					draw_obstacle_preview(sx, sy, cs, m, app.selected_cell.row, app.selected_cell.col)
-				}
-			} else {
-				tower_type := tile_to_tower_type(app.sim.selected_build_tower)
-				draw_tower_tile(sx, sy, cs, tower_type, 0, true) // is_ghost = true
-				spec  := constants.TOWER_SPECS[tower_type]
-				cx_px := i32(sx + cs / 2)
-				cy_px := i32(sy + cs / 2)
-				// Relleno semitransparente + outline nítido del rango
-				raylib.DrawCircle(cx_px, cy_px, spec.range * cs, constants.TOWER_RANGE_PREVIEW)
-				raylib.DrawCircleLines(cx_px, cy_px, spec.range * cs, constants.TOWER_RANGE_OUTLINE)
-				// Círculo interior de AoE (solo si la torre tiene explosión)
-				if spec.aoe > 0 {
-					raylib.DrawCircleSectorLines(
-						{f32(cx_px), f32(cy_px)}, spec.aoe * cs, 0, 360,
-						constants.TOWER_AOE_CIRCLE_SEGMENTS,
-						raylib.Color{255, 180, 60, 180},
-					)
-				}
-			}
-		}
-	}
-}
-
-// Render map preview to a RenderTexture2D for the map browser.
-// Saves and restores the relevant app fields used by render_map / render_map_objects.
+// Genera el thumbnail del browser de mapas con el mismo pipeline 3D
+// iluminado que PLAYING/EDITOR/PAUSED (terreno con biomas/agua/camino +
+// torres/spawn/goal/árboles/obstáculos vía render_map_3d/render_map_objects_3d)
+// en vez del render 2D plano que tenía antes. Cámara fija-isométrica propia,
+// encuadrada para que el mapa entero entre en el rect de la textura con el
+// mismo criterio de zoom-to-fit que simulation_fit_camera (systems/simulation.odin)
+// — no toca camera_focus/zoom/camera3d en vivo, la cámara real del editor
+// queda intacta.
 render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 	m := &app.editor.browser.preview
 
-	// Unload previous texture if any
 	if app.editor.browser.preview_tex_valid {
 		raylib.UnloadRenderTexture(app.editor.browser.preview_tex)
 		app.editor.browser.preview_tex_valid = false
 	}
 
-	cs    := f32(app.settings.cell_size)
+	cs := f32(app.settings.cell_size)
 	tex_w := i32(f32(m.width)  * cs)
 	tex_h := i32(f32(m.height) * cs)
 	app.editor.browser.preview_tex = raylib.LoadRenderTexture(tex_w, tex_h)
 
-	// Save fields that render_map / render_map_objects read from app
-	saved_offset_x          := app.camera_offset_x
-	saved_offset_y          := app.camera_offset_y
-	saved_zoom              := app.zoom
-	saved_state             := app.state
-	saved_show_grid         := app.settings.show_grid
-	saved_selected_cell     := app.selected_cell.valid
+	MARGIN :: f32(24)
+	zoom_x := (f32(tex_w) - MARGIN * 2) / (f32(m.width)  * cs)
+	zoom_y := (f32(tex_h) - MARGIN * 2) / (f32(m.height) * cs)
+	zoom := clamp(min(zoom_x, zoom_y), constants.ZOOM_MIN, constants.ZOOM_MAX)
 
-	// Override for a clean, static preview (no camera pan, no ghost, no reticles)
-	app.camera_offset_x     = 0
-	app.camera_offset_y     = 0
-	app.zoom                = 1.0
+	wcs := constants.WORLD_CELL_SIZE
+	focus := raylib.Vector3{f32(m.width) * wcs * 0.5, 0, f32(m.height) * wcs * 0.5}
+	camera := camera3d_for_focus(focus, zoom)
+
+	// terrain_cache es un singleton compartido con el mapa real en curso —
+	// invalidar antes (para que tome los datos de `m`, el preview) y después
+	// (para que el próximo frame real lo reconstruya desde app.editor.game_map
+	// en vez de quedarse con el del preview).
+	terrain_cache_invalidate()
+
+	// render_map_objects_3d lee app.sim.towers/app.state/app.selected_cell
+	// para dibujar torres reales y overlays de PLAYING — el preview no tiene
+	// una simulación asociada a `m`, así que se pisan temporalmente:
+	// sim.towers vacío hace caer a render_map_objects_3d en su fallback "sin
+	// torre real" (tile → forma genérica del tipo, igual que en el editor), y
+	// state=.EDITOR desactiva los overlays de PLAYING.
+	saved_towers        := app.sim.towers
+	saved_state         := app.state
+	saved_selected_cell := app.selected_cell.valid
+	app.sim.towers          = nil
 	app.state               = .EDITOR
-	app.settings.show_grid  = false
 	app.selected_cell.valid = false
 
-	// Pre-computar la máscara de agua ANTES de entrar al BeginTextureMode.
-	// La máscara se redimensiona temporalmente al tamaño del preview (1:1 pixel)
-	// para que el shader UV mapping sea exacto, luego se restaura al tamaño
-	// de pantalla para el render normal.
-	cs_preview := f32(app.settings.cell_size)  // zoom=1 en la preview
-
-	// Swap mask to preview size (agua + camino)
-	saved_mask_w := water_shader.tex_w
-	saved_mask_h := water_shader.tex_h
-	saved_mask   := water_shader.mask_tex
-	water_shader.mask_tex = raylib.LoadRenderTexture(tex_w, tex_h)
-	water_shader.tex_w    = tex_w
-	water_shader.tex_h    = tex_h
-
-	saved_path_mask_w := path_shader.tex_w
-	saved_path_mask_h := path_shader.tex_h
-	saved_path_mask   := path_shader.mask_tex
-	path_shader.mask_tex = raylib.LoadRenderTexture(tex_w, tex_h)
-	path_shader.tex_w    = tex_w
-	path_shader.tex_h    = tex_h
-
-	water_render_mask(m, cs_preview, 0, 0)
-	path_render_mask(m, cs_preview, m.width, m.height, 0, 0)
-
 	raylib.BeginTextureMode(app.editor.browser.preview_tex)
-		render_map(app, m, true)
-		render_map_objects(app, m)
+	raylib.ClearBackground(constants.BIOME_COLORS[m.biome].bg)
+	raylib.BeginMode3D(camera)
+	render_map_3d(app, m)
+	render_map_objects_3d(app, m)
+	raylib.EndMode3D()
 	raylib.EndTextureMode()
 
-	// Restore mask to screen size
-	raylib.UnloadRenderTexture(water_shader.mask_tex)
-	water_shader.mask_tex = saved_mask
-	water_shader.tex_w    = saved_mask_w
-	water_shader.tex_h    = saved_mask_h
-
-	raylib.UnloadRenderTexture(path_shader.mask_tex)
-	path_shader.mask_tex = saved_path_mask
-	path_shader.tex_w    = saved_path_mask_w
-	path_shader.tex_h    = saved_path_mask_h
-
-	// Restore
-	app.camera_offset_x     = saved_offset_x
-	app.camera_offset_y     = saved_offset_y
-	app.zoom                = saved_zoom
+	app.sim.towers          = saved_towers
 	app.state               = saved_state
-	app.settings.show_grid  = saved_show_grid
 	app.selected_cell.valid = saved_selected_cell
+
+	terrain_cache_invalidate()
 
 	app.editor.browser.preview_tex_valid = true
 }
 
-// Render paths
-is_path_like :: proc(m: ^entities.Map, row, col, map_w, map_h: i32) -> bool {
-	if row < 0 || row >= map_h || col < 0 || col >= map_w {
-		return false
-	}
-	tile := m.grid[row][col]
-	return tile == .PATH || tile == .SPAWN || tile == .GOAL
-}
-
-// Fase 1: renderiza la geometría del camino (centro, conectores, esquinas
-// redondeadas) en BLANCO sobre path_shader.mask_tex. La forma es la misma
-// que antes se dibujaba directo a pantalla; ahora sirve de máscara binaria
-// para el blur+threshold del shader.
-// Debe llamarse FUERA de cualquier BeginTextureMode activo.
-path_render_mask :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset_x, camera_offset_y: i32) {
-	path_width := cs * constants.PATH_WIDTH_RATIO
-
-	// Los tiles de puente (PATH sobre agua) y sus vecinos ya se recorren acá
-	// abajo para dibujar la máscara — se cachean para que render_path_railings
-	// no tenga que volver a recorrer toda la grilla ni recalcular vecinos.
-	clear(&path_bridge_tiles)
-
-	raylib.BeginTextureMode(path_shader.mask_tex)
-	raylib.ClearBackground(raylib.Color{0, 0, 0, 0})
-
-	for row in 0 ..< map_h {
-		for col in 0 ..< map_w {
-			tile := m.grid[row][col]
-			if tile != .PATH && tile != .SPAWN && tile != .GOAL {
-				continue
-			}
-
-			x := f32(col) * cs + f32(camera_offset_x)
-			y := f32(row) * cs + f32(camera_offset_y)
-			cx := x + cs / 2
-			cy := y + cs / 2
-
-			top := is_path_like(m, row - 1, col, map_w, map_h)
-			right := is_path_like(m, row, col + 1, map_w, map_h)
-			bottom := is_path_like(m, row + 1, col, map_w, map_h)
-			left := is_path_like(m, row, col - 1, map_w, map_h)
-
-			// Draw center
-			is_spawn_or_goal := tile == .SPAWN || tile == .GOAL
-			if is_spawn_or_goal {
-				raylib.DrawCircleV({cx, cy}, cs / 2, raylib.WHITE)
-			} else {
-				raylib.DrawRectangleRec(
-					{cx - path_width / 2, cy - path_width / 2, path_width, path_width},
-					raylib.WHITE,
-				)
-			}
-
-			// Draw connections
-			if top {
-				raylib.DrawRectangleRec({cx - path_width / 2, y, path_width, cs / 2}, raylib.WHITE)
-			}
-			if right {
-				raylib.DrawRectangleRec({cx, cy - path_width / 2, cs / 2, path_width}, raylib.WHITE)
-			}
-			if bottom {
-				raylib.DrawRectangleRec({cx - path_width / 2, cy, path_width, cs / 2}, raylib.WHITE)
-			}
-			if left {
-				raylib.DrawRectangleRec({x, cy - path_width / 2, cs / 2, path_width}, raylib.WHITE)
-			}
-
-			// Draw rounded corners for smooth path turns
-			corner_radius := path_width / 2
-			if top && right {
-				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, raylib.WHITE)
-			}
-			if right && bottom {
-				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, raylib.WHITE)
-			}
-			if bottom && left {
-				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, raylib.WHITE)
-			}
-			if left && top {
-				raylib.DrawCircle(i32(cx), i32(cy), corner_radius, raylib.WHITE)
-			}
-
-			if tile == .PATH && m.water_grid[row][col] {
-				append(&path_bridge_tiles, Bridge_Tile{cx, cy, top, right, bottom, left})
-			}
-		}
-	}
-
-	raylib.EndTextureMode()
-}
-
-// Fase 2: aplica el shader de blur+threshold sobre la máscara pre-computada.
-// Dibuja al render target activo (pantalla o una RenderTexture2D de preview).
-path_render_apply :: proc(m: ^entities.Map) {
-	pc := constants.BIOME_COLORS[m.biome].path
-	path_color := [4]f32{f32(pc.r)/255, f32(pc.g)/255, f32(pc.b)/255, f32(pc.a)/255}
-	edge_color := [4]f32{path_color.r * 0.75, path_color.g * 0.75, path_color.b * 0.75, path_color.a}
-	texel_size := [2]f32{1.0 / f32(path_shader.tex_w), 1.0 / f32(path_shader.tex_h)}
-
-	raylib.SetShaderValue(path_shader.shader, path_shader.loc_texel, &texel_size, .VEC2)
-	raylib.SetShaderValue(path_shader.shader, path_shader.loc_path,  &path_color, .VEC4)
-	raylib.SetShaderValue(path_shader.shader, path_shader.loc_edge,  &edge_color, .VEC4)
-
-	raylib.BeginShaderMode(path_shader.shader)
-	src := raylib.Rectangle{
-		0, f32(path_shader.tex_h),
-		f32(path_shader.tex_w), -f32(path_shader.tex_h),
-	}
-	raylib.DrawTextureRec(path_shader.mask_tex.texture, src, {0, 0}, raylib.WHITE)
-	raylib.EndShaderMode()
-}
-
-// Render de camino completo (máscara + shader) + railings de puentes encima
-// (geometría nítida, sin blur). Usado en el camino normal de juego/editor.
-render_path_layer :: proc(m: ^entities.Map, cs: f32, map_w, map_h: i32, camera_offset_x, camera_offset_y: i32, for_preview: bool = false) {
-	if for_preview {
-		path_render_apply(m) // preview: la máscara ya fue precomputada al tamaño del preview
-	} else {
-		path_shader_resize()
-		path_render_mask(m, cs, map_w, map_h, camera_offset_x, camera_offset_y)
-		path_render_apply(m)
-	}
-	render_path_railings(cs)
-}
-
-// Un tile de puente (PATH sobre agua) con sus vecinos ya resueltos — cacheado
-// por path_render_mask para que render_path_railings no recorra la grilla de nuevo.
-Bridge_Tile :: struct {
-	cx, cy:                   f32,
-	top, right, bottom, left: bool,
-}
-
-path_bridge_tiles: [dynamic]Bridge_Tile
-
-// Railings de puentes — se dibujan encima del camino suavizado, con bordes
-// nítidos (no forman parte de la máscara blureada). Reusa path_bridge_tiles,
-// poblado por path_render_mask en la misma pasada que arma la máscara.
-render_path_railings :: proc(cs: f32) {
-	path_width := cs * constants.PATH_WIDTH_RATIO
-	pw := path_width
-	rt := cs * constants.BRIDGE_RAILING_THICK
-	rc := constants.COLOR_BRIDGE_RAILING
-	sg := constants.BRIDGE_RAILING_SEGS
-
-	for bt in path_bridge_tiles {
-		cx, cy := bt.cx, bt.cy
-		if !bt.top    { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      pw, rt}, 1, sg, rc) }
-		if !bt.bottom { raylib.DrawRectangleRounded({cx - pw/2,      cy + pw/2 - rt, pw, rt}, 1, sg, rc) }
-		if !bt.left   { raylib.DrawRectangleRounded({cx - pw/2,      cy - pw/2,      rt, pw}, 1, sg, rc) }
-		if !bt.right  { raylib.DrawRectangleRounded({cx + pw/2 - rt, cy - pw/2,      rt, pw}, 1, sg, rc) }
-	}
-}
-
-// Render grid lines
-// Líneas de grilla en 3D — cubre PLAYING y EDITOR (mismo toggle general
-// app.settings.show_grid que ya existía en el menú de Settings; PAUSED sigue
-// con la grilla 2D vieja de render_grid_lines, dentro del vidrio esmerilado).
+// Líneas de grilla en 3D — cubre PLAYING, EDITOR y PAUSED por igual (los
+// tres comparten el mismo bloque de render 3D, ver render_game), gateada
+// por el mismo toggle general app.settings.show_grid del menú de Settings.
 // Sigue la altura de cada esquina con el mismo criterio de promedio que
 // _terrain_corner (ver terrain_cache_ensure) para que las líneas se apoyen
 // sobre el terreno real en vez de flotar o enterrarse en las pendientes
@@ -2246,28 +1472,6 @@ render_grid_lines_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	}
 }
 
-render_grid_lines :: proc(app: ^entities.App_State, cs: f32, map_w, map_h: i32) {
-	raylib.BeginBlendMode(.MULTIPLIED)
-	// Vertical lines (one per column boundary)
-	for i in 0 ..= map_w {
-		x := i32(f32(i) * cs) + app.camera_offset_x
-		raylib.DrawLine(
-			x, app.camera_offset_y,
-			x, app.camera_offset_y + i32(f32(map_h) * cs),
-			constants.COLOR_GRID_LINE,
-		)
-	}
-	// Horizontal lines (one per row boundary)
-	for i in 0 ..= map_h {
-		y := i32(f32(i) * cs) + app.camera_offset_y
-		raylib.DrawLine(
-			app.camera_offset_x, y,
-			app.camera_offset_x + i32(f32(map_w) * cs), y,
-			constants.COLOR_GRID_LINE,
-		)
-	}
-	raylib.EndBlendMode()
-}
 render_spawn :: proc(x, y, cs: f32) {
 	// Draw spawn circle
 	center_x := x + cs / 2
@@ -2627,205 +1831,6 @@ draw_obstacle_preview :: proc(x, y, cs: f32, m: ^entities.Map = nil, row: i32 = 
 	raylib.DrawRectangleRoundedLinesEx(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.OBSTACLE_BARRIER_BORDER_THICK, constants.COLOR_OBSTACLE_BORDER)
 }
 
-// Preview de obstáculo inválido (esquina/unión): tinte rojo semitransparente
-draw_obstacle_preview_invalid :: proc(x, y, cs: f32, m: ^entities.Map = nil, row: i32 = -1, col: i32 = -1) {
-	bar_w, bar_h: f32
-	if m != nil && row >= 0 {
-		bar_w, bar_h = obstacle_bar_dims(m, row, col, cs)
-	} else {
-		bar_w = cs * constants.OBSTACLE_BARRIER_THICKNESS
-		bar_h = cs * constants.OBSTACLE_BARRIER_LENGTH
-	}
-	bar_x := x + cs/2 - bar_w/2
-	bar_y := y + cs/2 - bar_h/2
-	rect  := raylib.Rectangle{bar_x, bar_y, bar_w, bar_h}
-	raylib.DrawRectangleRounded(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, raylib.Color{220, 50, 50, 160})
-	raylib.DrawRectangleRoundedLinesEx(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.OBSTACLE_BARRIER_BORDER_THICK, raylib.Color{255, 80, 80, 220})
-	// Cruz para indicar que no es válido
-	cx := x + cs/2
-	cy := y + cs/2
-	arm := cs * 0.18
-	thick := f32(2)
-	raylib.DrawLineEx({cx - arm, cy - arm}, {cx + arm, cy + arm}, thick, raylib.Color{255, 255, 255, 200})
-	raylib.DrawLineEx({cx + arm, cy - arm}, {cx - arm, cy + arm}, thick, raylib.Color{255, 255, 255, 200})
-}
-
-// Render obstacles
-render_obstacles :: proc(
-	m: ^entities.Map,
-	cs: f32,
-	map_w, map_h: i32,
-	camera_offset_x, camera_offset_y: i32,
-) {
-
-	// Helper: ¿es la celda adyacente parte del camino?
-	is_path :: proc(m: ^entities.Map, r, c, map_w, map_h: i32) -> bool {
-		if r < 0 || r >= map_h || c < 0 || c >= map_w { return false }
-		t := m.grid[r][c]
-		return t == .PATH || t == .SPAWN || t == .GOAL
-	}
-
-	for row in 0 ..< map_h {
-		for col in 0 ..< map_w {
-			if m.obstacle_grid[row][col] == .OBSTACLE {
-				x := f32(col) * cs + f32(camera_offset_x)
-				y := f32(row) * cs + f32(camera_offset_y)
-
-				// Camino horizontal → barrera vertical (estrecha en X, larga en Y)
-				// Camino vertical   → barrera horizontal (larga en X, estrecha en Y)
-				has_h := is_path(m, row, col-1, map_w, map_h) || is_path(m, row, col+1, map_w, map_h)
-				has_v := is_path(m, row-1, col, map_w, map_h) || is_path(m, row+1, col, map_w, map_h)
-
-				cx := x + cs/2
-				cy := y + cs/2
-
-				if has_h && has_v {
-					// Codo: barrera rotada 45°. DrawRectanglePro no soporta esquinas
-					// redondeadas, así que el borde se simula con un rect más grande debajo.
-					bar_w := cs * constants.OBSTACLE_BARRIER_THICKNESS
-					bar_h := cs * constants.OBSTACLE_BARRIER_LENGTH
-					bx    := cx - bar_w/2
-					by    := cy - bar_h/2
-					pivot := raylib.Vector2{bar_w/2, bar_h/2}
-					be    := constants.OBSTACLE_BARRIER_BORDER_THICK
-					so    := constants.OBSTACLE_BARRIER_SHADOW_OFFSET
-
-					// Sombra
-					raylib.DrawRectanglePro(
-						{bx + so, by + so, bar_w, bar_h}, pivot, 45, constants.COLOR_OBSTACLE_SHADOW,
-					)
-					// Borde (rect ligeramente más grande)
-					raylib.DrawRectanglePro(
-						{bx - be/2, by - be/2, bar_w + be, bar_h + be},
-						{(bar_w+be)/2, (bar_h+be)/2}, 45, constants.COLOR_OBSTACLE_BORDER,
-					)
-					// Fill
-					raylib.DrawRectanglePro(
-						{bx, by, bar_w, bar_h}, pivot, 45, constants.COLOR_OBSTACLE_FILL,
-					)
-				} else {
-					// Recto: barrera alineada al eje, con esquinas redondeadas
-					bar_w, bar_h: f32
-					if has_v && !has_h {
-						bar_w = cs * constants.OBSTACLE_BARRIER_LENGTH
-						bar_h = cs * constants.OBSTACLE_BARRIER_THICKNESS
-					} else {
-						bar_w = cs * constants.OBSTACLE_BARRIER_THICKNESS
-						bar_h = cs * constants.OBSTACLE_BARRIER_LENGTH
-					}
-					bx := cx - bar_w/2
-					by := cy - bar_h/2
-					rect   := raylib.Rectangle{bx, by, bar_w, bar_h}
-					shadow := raylib.Rectangle{
-						bx + constants.OBSTACLE_BARRIER_SHADOW_OFFSET,
-						by + constants.OBSTACLE_BARRIER_SHADOW_OFFSET,
-						bar_w, bar_h,
-					}
-					raylib.DrawRectangleRounded(shadow, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.COLOR_OBSTACLE_SHADOW)
-					raylib.DrawRectangleRounded(rect,   constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.COLOR_OBSTACLE_FILL)
-					raylib.DrawRectangleRoundedLinesEx(rect, constants.OBSTACLE_BARRIER_ROUNDNESS, constants.TOWER_CORNER_SEGMENTS, constants.OBSTACLE_BARRIER_BORDER_THICK, constants.COLOR_OBSTACLE_BORDER)
-				}
-
-				level := entities.map_get_obstacle_level(m, row, col)
-				_ = level
-			}
-		}
-	}
-}
-
-// Render laser beams
-render_laser_beams :: proc(app: ^entities.App_State, cs: f32) {
-	sim := &app.sim
-
-	for &beam in sim.laser_beams {
-		alpha := beam.duration / beam.max_duration
-		color := beam.color
-		color.a = u8(f32(color.a) * alpha)
-
-		// Convert from grid coordinates to screen pixels
-		start_screen_x := beam.start_x * cs + f32(app.camera_offset_x)
-		start_screen_y := beam.start_y * cs + f32(app.camera_offset_y)
-		end_screen_x := beam.end_x * cs + f32(app.camera_offset_x)
-		end_screen_y := beam.end_y * cs + f32(app.camera_offset_y)
-
-		raylib.DrawLineEx(
-			raylib.Vector2{start_screen_x, start_screen_y},
-			raylib.Vector2{end_screen_x, end_screen_y},
-			3.0,
-			color,
-		)
-	}
-}
-
-// Render ice pulses — each is an expanding ring that fades as it grows
-render_ice_pulses :: proc(app: ^entities.App_State, cs: f32) {
-	for &pulse in app.sim.ice_pulses {
-		// Screen center of the tower
-		cx := pulse.x * cs + f32(app.camera_offset_x)
-		cy := pulse.y * cs + f32(app.camera_offset_y)
-
-		radius_px  := pulse.radius * cs
-		// t goes 1→0 (full alpha at birth, transparent when done)
-		t          := pulse.life / pulse.max_life
-		alpha      := u8(t * 210.0)
-
-		ring_thick := max(2.5, cs * 0.09)
-		outer_r    := radius_px
-		inner_r    := max(0.0, outer_r - ring_thick)
-
-		// Faint filled disc — subtle interior glow
-		raylib.DrawCircle(i32(cx), i32(cy), outer_r, raylib.Color{140, 220, 255, alpha / 4})
-
-		// Bright ring edge
-		raylib.DrawRing(
-			raylib.Vector2{cx, cy},
-			inner_r,
-			outer_r,
-			0,
-			360,
-			48,
-			raylib.Color{180, 235, 255, alpha},
-		)
-	}
-}
-
-// Render gameplay elements (enemies, projectiles, effects)
-render_gameplay :: proc(app: ^entities.App_State) {
-	if app.state != .PLAYING && app.state != .PAUSED {
-		return
-	}
-
-	cs := f32(app.settings.cell_size) * app.zoom
-
-	// Render ice pulses (expanding rings, below enemies)
-	render_ice_pulses(app, cs)
-
-	// Render enemies
-	render_enemies(app, cs)
-
-	// Render glow particles (spawn / goal-reach ring effects, above enemies)
-	render_glow_particles(app, cs)
-
-	// Render enemy paths for debugging (if enabled)
-	if app.editor.show_paths {
-		render_enemy_paths(app, cs)
-	}
-
-	// Render projectiles
-	render_projectiles(app, cs)
-
-	// Render explosions
-	render_explosions(app, cs)
-
-	// Render hit particles
-	render_hit_particles(app, cs)
-
-	// Render damage numbers
-	if app.settings.show_damage_numbers {
-		render_damage_numbers(app, cs)
-	}
-}
-
 // Draw a single enemy shape at screen position (cx, cy).
 // size is the radius/half-size in pixels. shadow_offset > 0 draws a drop shadow.
 // Bosses are always drawn as squares; flying non-bosses as triangles; others as circles.
@@ -2915,248 +1920,6 @@ render_enemy_shape :: proc(cx, cy, size: f32, color: raylib.Color, is_flying: bo
 	}
 }
 
-// Render all enemies in the simulation
-render_enemies :: proc(app: ^entities.App_State, cs: f32) {
-	for &enemy in app.sim.enemies {
-		x := enemy.x * cs + f32(app.camera_offset_x)
-		y := enemy.y * cs + f32(app.camera_offset_y)
-
-		size  := entities.enemy_get_size(&enemy) * cs
-		color := entities.enemy_get_color(&enemy)
-		if .INVISIBLE in enemy.flags && enemy.revealed_timer <= 0 {
-			color.a = u8(f32(color.a) * constants.ENEMY_INVISIBLE_ALPHA)
-		}
-		so    := max(f32(2), cs * 0.08)
-		cx    := x + cs / 2
-		cy    := y + cs / 2
-
-		squash := enemy.hit_squash * constants.ENEMY_HIT_SQUASH_AMOUNT
-		render_enemy_shape(cx, cy, size, color, .FLYING in enemy.flags, .BOSS in enemy.flags, so, .ARMORED in enemy.flags, squash)
-
-		// Slow overlay: translucent blue halo when slowed by ice tower
-		if enemy.slow_timer > 0 {
-			pulse := f32(math.abs(math.sin(f64(raylib.GetTime()) * 5.0)))
-			alpha := u8(60.0 + 50.0 * pulse)
-			raylib.DrawCircle(i32(cx), i32(cy), size + max(1.5, cs * 0.07), raylib.Color{100, 200, 255, alpha})
-		}
-
-		// Health bar
-		hp_percent  := enemy.hp / enemy.max_hp
-		hp_bar_w    := cs * 0.6
-		hp_bar_h    := cs * 0.1
-		hp_bar_x    := cx - hp_bar_w / 2
-		hp_bar_y    := y - cs * 0.05
-
-		raylib.DrawRectangle(i32(hp_bar_x), i32(hp_bar_y), i32(hp_bar_w), i32(hp_bar_h), raylib.DARKGRAY)
-
-		if hp_percent > 0.01 {
-			hp_color := raylib.GREEN
-			if hp_percent < 0.3 {
-				hp_color = raylib.Color{200, 50, 50, 255}
-			} else if hp_percent < 0.6 {
-				hp_color = raylib.YELLOW
-			}
-			fill_w := max(hp_bar_w * hp_percent, 1.0)
-			raylib.DrawRectangle(i32(hp_bar_x), i32(hp_bar_y), i32(fill_w), i32(hp_bar_h), hp_color)
-		}
-	}
-}
-
-// Render enemy paths for debugging
-render_enemy_paths :: proc(app: ^entities.App_State, cs: f32) {
-	// Draw paths from spawns
-	for &spawn in app.sim.spawns {
-		if len(spawn.path) < 2 {
-			continue
-		}
-
-		// Draw lines between path nodes
-		for i in 0 ..< len(spawn.path) - 1 {
-			x1 := f32(spawn.path[i].x) * cs + f32(app.camera_offset_x) + cs / 2
-			y1 := f32(spawn.path[i].y) * cs + f32(app.camera_offset_y) + cs / 2
-			x2 := f32(spawn.path[i + 1].x) * cs + f32(app.camera_offset_x) + cs / 2
-			y2 := f32(spawn.path[i + 1].y) * cs + f32(app.camera_offset_y) + cs / 2
-
-			raylib.DrawLine(i32(x1), i32(y1), i32(x2), i32(y2), raylib.YELLOW)
-		}
-
-		// Draw dots at path nodes
-		for node in spawn.path {
-			x := f32(node.x) * cs + f32(app.camera_offset_x) + cs / 2
-			y := f32(node.y) * cs + f32(app.camera_offset_y) + cs / 2
-			raylib.DrawCircle(i32(x), i32(y), cs * 0.15, raylib.GOLD)
-		}
-	}
-
-	// Draw paths for active enemies
-	for &enemy in app.sim.enemies {
-		if len(enemy.path) < 2 {
-			continue
-		}
-
-		// Draw remaining path from current position
-		start_idx := enemy.path_idx
-		if start_idx < 0 {
-			start_idx = 0
-		}
-
-		for i in start_idx ..< i32(len(enemy.path) - 1) {
-			x1 := f32(enemy.path[i].x) * cs + f32(app.camera_offset_x) + cs / 2
-			y1 := f32(enemy.path[i].y) * cs + f32(app.camera_offset_y) + cs / 2
-			x2 := f32(enemy.path[i + 1].x) * cs + f32(app.camera_offset_x) + cs / 2
-			y2 := f32(enemy.path[i + 1].y) * cs + f32(app.camera_offset_y) + cs / 2
-
-			raylib.DrawLine(i32(x1), i32(y1), i32(x2), i32(y2), raylib.Color{255, 255, 0, 128})
-		}
-	}
-}
-
-// Render projectiles
-render_projectiles :: proc(app: ^entities.App_State, cs: f32) {
-	for &proj in app.sim.projectiles {
-		x := proj.x * cs + f32(app.camera_offset_x)
-		y := proj.y * cs + f32(app.camera_offset_y)
-
-		#partial switch proj.type {
-		case .ARCHER:
-			// Flecha: fuste + punta metálica + plumas
-			angle  := proj.angle
-			cos_a  := math.cos(angle)
-			sin_a  := math.sin(angle)
-			perp_x := -sin_a
-			perp_y :=  cos_a
-
-			arrow_len     := cs * 0.42
-			head_len      := cs * 0.16
-			shaft_thick   := cs * 0.06
-			fletch_len    := cs * 0.10
-			fletch_spread := cs * 0.08
-
-			// Puntos del fuste
-			back_x  := x - cos_a * (arrow_len * 0.55)
-			back_y  := y - sin_a * (arrow_len * 0.55)
-			front_x := x + cos_a * (arrow_len * 0.38)
-			front_y := y + sin_a * (arrow_len * 0.38)
-			tip_x   := front_x + cos_a * head_len
-			tip_y   := front_y + sin_a * head_len
-
-			// Fuste (madera)
-			raylib.DrawLineEx(
-				{back_x, back_y},
-				{front_x, front_y},
-				shaft_thick,
-				raylib.Color{160, 110, 55, 255},
-			)
-
-			// Punta metálica — orden CCW en screen-space (y hacia abajo)
-			head_w := cs * 0.09
-			raylib.DrawTriangle(
-				{front_x - perp_x * head_w, front_y - perp_y * head_w},
-				{front_x + perp_x * head_w, front_y + perp_y * head_w},
-				{tip_x, tip_y},
-				raylib.Color{80, 85, 95, 255},
-			)
-
-			// Plumas (dos líneas en la cola)
-			fletch_root_x := back_x + cos_a * fletch_len
-			fletch_root_y := back_y + sin_a * fletch_len
-			fletch_color  := raylib.Color{180, 55, 55, 220}
-			raylib.DrawLineEx(
-				{fletch_root_x, fletch_root_y},
-				{back_x + perp_x * fletch_spread, back_y + perp_y * fletch_spread},
-				shaft_thick * 1.5,
-				fletch_color,
-			)
-			raylib.DrawLineEx(
-				{fletch_root_x, fletch_root_y},
-				{back_x - perp_x * fletch_spread, back_y - perp_y * fletch_spread},
-				shaft_thick * 1.5,
-				fletch_color,
-			)
-		case .CANNON:
-			// Cannonball - smaller gray circle at cannon tip
-			raylib.DrawCircle(i32(x), i32(y), cs * 0.1, constants.COLOR_BLOCK)
-		case .SNIPER:
-			// Bullet - smaller gray circle at cannon tip
-			raylib.DrawCircle(i32(x), i32(y), cs * 0.06, constants.COLOR_BLOCK)
-		case .MISSILE:
-			// Missile - cuerpo + punta cónica
-			px    := x
-			py    := y
-			angle := proj.angle
-			cos_a := math.cos(angle)
-			sin_a := math.sin(angle)
-			perp_x := -sin_a
-			perp_y :=  cos_a
-
-			missile_len   := cs * 0.38
-			missile_thick := cs * 0.10
-			body_color    := raylib.Color{110, 115, 125, 255}
-			tip_color     := raylib.Color{220, 80, 60, 255} // rojo-naranja (ojiva)
-
-			// Cuerpo
-			back_x  := px - cos_a * (missile_len * 0.50)
-			back_y  := py - sin_a * (missile_len * 0.50)
-			front_x := px + cos_a * (missile_len * 0.28)
-			front_y := py + sin_a * (missile_len * 0.28)
-
-			raylib.DrawLineEx(
-				{back_x, back_y},
-				{front_x, front_y},
-				missile_thick,
-				body_color,
-			)
-
-			// Punta (ojiva) — orden CCW en screen-space
-			head_w := missile_thick * 0.65
-			tip_x  := px + cos_a * (missile_len * 0.58)
-			tip_y  := py + sin_a * (missile_len * 0.58)
-
-			raylib.DrawTriangle(
-				{front_x - perp_x * head_w, front_y - perp_y * head_w},
-				{front_x + perp_x * head_w, front_y + perp_y * head_w},
-				{tip_x, tip_y},
-				tip_color,
-			)
-
-		case .MORTAR:
-			// Large dark shell — bigger and slower-looking than a cannonball
-			raylib.DrawCircle(i32(x) + 1, i32(y) + 1, cs * 0.14, raylib.Color{0, 0, 0, 60})
-			raylib.DrawCircle(i32(x), i32(y), cs * 0.13, constants.TOWER_MORTAR_BASE)
-			raylib.DrawCircle(i32(x), i32(y), cs * 0.06, constants.TOWER_MORTAR_STROKE)
-		}
-	}
-}
-
-// Render explosions
-render_explosions :: proc(app: ^entities.App_State, cs: f32) {
-	for &explosion in app.sim.explosions {
-		x := explosion.x * cs + f32(app.camera_offset_x)
-		y := explosion.y * cs + f32(app.camera_offset_y)
-
-		radius := explosion.radius * cs
-		alpha := u8(255 * (explosion.life / explosion.max_life))
-
-		color := raylib.Color{255, 100, 50, alpha}
-
-		raylib.DrawCircle(i32(x + cs / 2), i32(y + cs / 2), radius, color)
-	}
-}
-
-// Render hit particles (chispas de impacto/muerte)
-render_hit_particles :: proc(app: ^entities.App_State, cs: f32) {
-	for &p in app.sim.hit_particles {
-		x := p.x * cs + f32(app.camera_offset_x)
-		y := p.y * cs + f32(app.camera_offset_y)
-
-		alpha := u8(255 * (p.life / p.max_life))
-		color := p.color
-		color.a = alpha
-
-		raylib.DrawCircle(i32(x), i32(y), p.radius * cs, color)
-	}
-}
-
 // Draw text with outline (stroke around the text)
 draw_text_with_outline :: proc(
 	text: cstring,
@@ -3182,38 +1945,6 @@ draw_text_with_outline :: proc(
 	raylib.DrawTextEx(f, text, pos, font_size, spacing, text_color)
 }
 
-// Render damage numbers
-render_damage_numbers :: proc(app: ^entities.App_State, cs: f32) {
-	for &dn in app.sim.damage_numbers {
-		x := dn.x * cs + f32(app.camera_offset_x)
-		y := dn.y * cs + f32(app.camera_offset_y)
-
-		alpha := u8(255 * dn.life)
-		color := dn.color
-		color.a = alpha
-		outline_color := raylib.Color{0, 0, 0, 255}
-		outline_color.a = alpha
-
-		display_value := i32(dn.value + 0.5)
-		if display_value == 0 {
-			continue
-		}
-
-		if dn.is_money {
-			// Número de dinero: "+$X" en amarillo, tamaño fijo ligeramente mayor
-			money_text := fmt.ctprintf("+$%d", display_value)
-			font_size  := cs * 0.32
-			draw_text_with_outline(money_text, {x, y}, font_size, 0, color, outline_color, 1)
-		} else {
-			damage_text := fmt.ctprintf("%d", display_value)
-			font_size := cs * 0.275
-			if dn.is_critical {
-				font_size = cs * 0.55
-			}
-			draw_text_with_outline(damage_text, {x, y}, font_size, 0, color, outline_color, 1)
-		}
-	}
-}
 draw_tower_tile :: proc(
 	x, y: f32,
 	cs: f32,
@@ -3678,30 +2409,6 @@ render_tower :: proc(tower: ^entities.Tower, x, y, cs: f32) {
 	draw_tower_tile(x, y, cs, tower.type, tower.angle, false, tower.recoil)
 }
 
-// Render reticle for selected cell (corner brackets style like JS)
-render_reticle :: proc(x, y, cs: f32, color: raylib.Color) {
-	reticle_size := cs * 0.7
-	reticle_len := cs * 0.15
-	corner_thickness := max(2, cs * 0.04)
-
-	cx := x + cs / 2
-	cy := y + cs / 2
-	rx := cx - reticle_size / 2
-	ry := cy - reticle_size / 2
-
-	// Top-left corner
-	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry)}, raylib.Vector2{f32(rx + reticle_len), f32(ry)}, f32(corner_thickness), color)
-	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry)}, raylib.Vector2{f32(rx), f32(ry + reticle_len)}, f32(corner_thickness), color)
-	// Top-right corner
-	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size - reticle_len), f32(ry)}, raylib.Vector2{f32(rx + reticle_size), f32(ry)}, f32(corner_thickness), color)
-	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size), f32(ry)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_len)}, f32(corner_thickness), color)
-	// Bottom-left corner
-	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry + reticle_size - reticle_len)}, raylib.Vector2{f32(rx), f32(ry + reticle_size)}, f32(corner_thickness), color)
-	raylib.DrawLineEx(raylib.Vector2{f32(rx), f32(ry + reticle_size)}, raylib.Vector2{f32(rx + reticle_len), f32(ry + reticle_size)}, f32(corner_thickness), color)
-	// Bottom-right corner
-	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size - reticle_len)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)}, f32(corner_thickness), color)
-	raylib.DrawLineEx(raylib.Vector2{f32(rx + reticle_size - reticle_len), f32(ry + reticle_size)}, raylib.Vector2{f32(rx + reticle_size), f32(ry + reticle_size)}, f32(corner_thickness), color)
-}
 
 // Versión 3D de render_reticle — mismos 4 brackets de esquina, acostados
 // sobre el plano del suelo (XZ) en vez de en pantalla. `center` es el centro
@@ -3732,297 +2439,6 @@ render_reticle_3d :: proc(center: raylib.Vector3, color: raylib.Color) {
 	line(rx + size - len, rz + size, rx + size, rz + size, y, color)
 }
 
-// =============================================================================
-// Water layer
-// =============================================================================
-
-// Fase 1: renderiza la máscara de agua (rectángulos blancos) en water_shader.mask_tex.
-// Debe llamarse FUERA de cualquier BeginTextureMode activo.
-water_render_mask :: proc(m: ^entities.Map, cs: f32, camera_offset_x, camera_offset_y: i32) {
-	// No llamar water_shader_resize() aquí: la máscara ya tiene el tamaño
-	// correcto (pantalla en el path normal, preview en render_map_preview_to_texture).
-	raylib.BeginTextureMode(water_shader.mask_tex)
-	raylib.ClearBackground(raylib.Color{0, 0, 0, 0})
-	for row in 0 ..< m.height {
-		for col in 0 ..< m.width {
-			if !m.water_grid[row][col] { continue }
-			x := f32(col) * cs + f32(camera_offset_x)
-			y := f32(row) * cs + f32(camera_offset_y)
-			raylib.DrawRectangleRec({x, y, cs, cs}, raylib.WHITE)
-		}
-	}
-	raylib.EndTextureMode()
-}
-
-// Fase 2: aplica el shader de blur+threshold sobre la máscara pre-computada.
-// Dibuja al render target activo (pantalla o una RenderTexture2D de preview).
-water_render_apply :: proc(cam_x: f32 = 0, cam_y: f32 = 0, zoom: f32 = 1.0) {
-	wc := constants.COLOR_WATER
-	ec := constants.COLOR_WATER_EDGE
-	water_color := [4]f32{f32(wc.r)/255, f32(wc.g)/255, f32(wc.b)/255, f32(wc.a)/255}
-	edge_color  := [4]f32{f32(ec.r)/255, f32(ec.g)/255, f32(ec.b)/255, f32(ec.a)/255}
-	texel_size  := [2]f32{1.0 / f32(water_shader.tex_w), 1.0 / f32(water_shader.tex_h)}
-	frame_dt    := min(raylib.GetFrameTime(), constants.WATER_ANIM_MAX_DT)
-	water_shader.anim_time += frame_dt * constants.WATER_ANIM_SPEED
-	t           := water_shader.anim_time
-	cam         := [2]f32{cam_x, cam_y}
-	z           := zoom
-
-	raylib.SetShaderValue(water_shader.shader, water_shader.loc_texel, &texel_size,  .VEC2)
-	raylib.SetShaderValue(water_shader.shader, water_shader.loc_water, &water_color, .VEC4)
-	raylib.SetShaderValue(water_shader.shader, water_shader.loc_edge,  &edge_color,  .VEC4)
-	if water_shader.loc_time >= 0 { raylib.SetShaderValue(water_shader.shader, water_shader.loc_time, &t,    .FLOAT) }
-	if water_shader.loc_cam  >= 0 { raylib.SetShaderValue(water_shader.shader, water_shader.loc_cam,  &cam,  .VEC2)  }
-	if water_shader.loc_zoom >= 0 { raylib.SetShaderValue(water_shader.shader, water_shader.loc_zoom, &z,    .FLOAT) }
-
-	raylib.BeginShaderMode(water_shader.shader)
-	src := raylib.Rectangle{
-		0, f32(water_shader.tex_h),
-		f32(water_shader.tex_w), -f32(water_shader.tex_h),
-	}
-	raylib.DrawTextureRec(water_shader.mask_tex.texture, src, {0, 0}, raylib.WHITE)
-	raylib.EndShaderMode()
-}
-
-// Render de agua completo (máscara + shader). Usado en el camino normal de juego/editor.
-render_water_layer :: proc(m: ^entities.Map, cs: f32, camera_offset_x, camera_offset_y: i32, zoom: f32 = 1.0, for_preview: bool = false) {
-	// En modo preview la máscara ya fue computada antes de entrar al BeginTextureMode.
-	// Solo aplicamos el shader al render target activo (la textura de preview).
-	if for_preview {
-		water_render_apply() // preview: sin transform de cámara
-		return
-	}
-
-	// Verificar que haya agua antes de hacer los dos passes
-	has_water := false
-	for row in 0 ..< m.height {
-		for col in 0 ..< m.width {
-			if m.water_grid[row][col] { has_water = true; break }
-		}
-		if has_water { break }
-	}
-	if !has_water { return }
-
-	// Asegurar que la máscara tenga el tamaño de pantalla antes del render normal
-	water_shader_resize()
-	water_render_mask(m, cs, camera_offset_x, camera_offset_y)
-	water_render_apply(f32(camera_offset_x), f32(camera_offset_y), zoom)
-}
-
-// =============================================================================
-// Bird flock ambient animation
-// =============================================================================
-
-update_bird_flock :: proc(app: ^entities.App_State, dt: f32) {
-	f    := &app.bird_flock
-	zoom := app.zoom
-
-	if f.active {
-		f.anim_time += dt
-
-		// Move in world space — velocity is stored as screen px/sec,
-		// divide by zoom to get world px/sec so apparent screen speed is constant.
-		for i in 0 ..< f.bird_count {
-			f.birds[i].pos.x += f.velocity.x / zoom * dt
-			f.birds[i].pos.y += f.velocity.y / zoom * dt
-		}
-
-		// Deactivate when all birds are off-screen (convert world→screen to check)
-		sw   := f32(raylib.GetScreenWidth())
-		sh   := f32(raylib.GetScreenHeight())
-		cx   := f32(app.camera_offset_x)
-		cy   := f32(app.camera_offset_y)
-		margin := f32(100)
-		all_gone := true
-		for i in 0 ..< f.bird_count {
-			sx := f.birds[i].pos.x * zoom + cx
-			sy := f.birds[i].pos.y * zoom + cy
-			if sx > -margin && sx < sw+margin && sy > -margin && sy < sh+margin {
-				all_gone = false
-				break
-			}
-		}
-		if all_gone {
-			f.active = false
-		}
-	} else {
-		f.spawn_timer -= dt
-		if f.spawn_timer <= 0 {
-			spawn_bird_flock(app)
-		}
-	}
-}
-
-spawn_bird_flock :: proc(app: ^entities.App_State) {
-	f    := &app.bird_flock
-	zoom := app.zoom
-	cam_x := f32(app.camera_offset_x)
-	cam_y := f32(app.camera_offset_y)
-	sw   := f32(raylib.GetScreenWidth())
-	sh   := f32(raylib.GetScreenHeight())
-
-	// World-space screen edges: world = (screen - cam) / zoom
-	w_left   := (-cam_x - 60) / zoom
-	w_right  := (sw - cam_x + 60) / zoom
-	w_top    := (-cam_y - 60) / zoom
-	w_bottom := (sh - cam_y + 60) / zoom
-
-	// Use time as a cheap seed
-	t := u32(raylib.GetTime() * 1000)
-	rng :: proc(seed: ^u32) -> f32 {
-		seed^ = seed^ * 1664525 + 1013904223
-		return f32(seed^ & 0xFFFF) / f32(0xFFFF)
-	}
-
-	// Pick a random edge to spawn from (world coords)
-	edge := t % 4  // 0=top, 1=right, 2=bottom, 3=left
-	r := rng(&t)
-
-	origin: raylib.Vector2
-	target: raylib.Vector2
-	w := w_right - w_left
-	h := w_bottom - w_top
-	switch edge {
-	case 0: // top → bottom
-		origin = {w_left + r * w, w_top}
-		target = {w_left + rng(&t) * w, w_bottom}
-	case 1: // right → left
-		origin = {w_right, w_top + r * h}
-		target = {w_left, w_top + rng(&t) * h}
-	case 2: // bottom → top
-		origin = {w_left + r * w, w_bottom}
-		target = {w_left + rng(&t) * w, w_top}
-	case: // left → right
-		origin = {w_left, w_top + r * h}
-		target = {w_right, w_top + rng(&t) * h}
-	}
-
-	// Direction vector
-	dx := target.x - origin.x
-	dy := target.y - origin.y
-	dist := math.sqrt(dx*dx + dy*dy)
-	if dist < 1 { dist = 1 }
-	dir := raylib.Vector2{dx / dist, dy / dist}
-
-	// Velocity stored as screen px/sec; update divides by zoom to get world px/sec
-	f.velocity = {dir.x * constants.BIRD_SPEED, dir.y * constants.BIRD_SPEED}
-	f.anim_time = 0
-
-	// Bird count
-	count_range := constants.BIRD_COUNT_MAX - constants.BIRD_COUNT_MIN
-	f.bird_count = constants.BIRD_COUNT_MIN + i32(rng(&t) * f32(count_range + 1))
-	if f.bird_count > 12 { f.bird_count = 12 }
-
-	// Scatter in world space (BIRD_SCATTER_RADIUS is in screen px, convert)
-	scatter_world := constants.BIRD_SCATTER_RADIUS / zoom
-	for i in 0 ..< f.bird_count {
-		scatter_x := (rng(&t) - 0.5) * 2 * scatter_world
-		scatter_y := (rng(&t) - 0.5) * 2 * scatter_world
-		f.birds[i] = entities.Bird{
-			pos   = {origin.x + scatter_x, origin.y + scatter_y},
-			phase = rng(&t) * math.PI * 2,
-		}
-	}
-
-	f.active = true
-
-	// Schedule next flock
-	interval_range := constants.BIRD_SPAWN_INTERVAL_MAX - constants.BIRD_SPAWN_INTERVAL_MIN
-	f.spawn_timer = constants.BIRD_SPAWN_INTERVAL_MIN + rng(&t) * interval_range
-}
-
-render_bird_flock :: proc(app: ^entities.App_State) {
-	f := &app.bird_flock
-	if !f.active { return }
-
-	zoom  := app.zoom
-	cam_x := f32(app.camera_offset_x)
-	cam_y := f32(app.camera_offset_y)
-	s     := constants.BIRD_SIZE * zoom   // scale with zoom
-	c     := constants.COLOR_BIRD
-	flap_amp := constants.BIRD_WING_AMP * zoom
-
-	for i in 0 ..< f.bird_count {
-		bird := f.birds[i]
-
-		// World → screen
-		cx := bird.pos.x * zoom + cam_x
-		cy := bird.pos.y * zoom + cam_y
-
-		// Wing-tip vertical oscillation
-		flap := math.sin(f.anim_time * constants.BIRD_FLAP_FREQ + bird.phase) * flap_amp
-
-		// M-shape: two V strokes sharing a center point
-		tip_l  := raylib.Vector2{cx - s,     cy + flap}
-		tip_r  := raylib.Vector2{cx + s,     cy + flap}
-		mid_l  := raylib.Vector2{cx - s*0.5, cy + flap*0.4}
-		mid_r  := raylib.Vector2{cx + s*0.5, cy + flap*0.4}
-		center := raylib.Vector2{cx, cy}
-
-		thick := f32(1.5) * zoom
-		raylib.DrawLineEx(tip_l, mid_l, thick, c)
-		raylib.DrawLineEx(mid_l, center, thick, c)
-		raylib.DrawLineEx(center, mid_r, thick, c)
-		raylib.DrawLineEx(mid_r, tip_r, thick, c)
-	}
-}
-
-// =============================================================================
-// Water lily (nenúfar) — planta sobre tile de agua
-// =============================================================================
-
-render_water_lily :: proc(x, y, cs: f32, row, col: i32) {
-	seed := hash_position(row, col)
-	rng :: proc(s: ^u32) -> f32 {
-		s^ = s^ * 1664525 + 1013904223
-		return f32(s^ & 0xFFFF) / f32(0xFFFF)
-	}
-
-	// Mismo reloj acumulado que las cáusticas del agua (dt clampeado, no
-	// GetTime() de pared — ver "Animación de shaders" en CLAUDE.md), así
-	// los nenúfares derivan en sincro visual con el resto del agua.
-	t := water_shader.anim_time
-
-	// 2-4 lily pads
-	pad_count := 2 + i32(hash_random(row, col, 0) * 3)  // 2..4
-	for i in 0 ..< pad_count {
-		s := seed + u32(i) * 97
-		base_px := x + rng(&s) * cs * 0.70 + cs * 0.15
-		base_py := y + rng(&s) * cs * 0.70 + cs * 0.15
-		pr := cs * (0.09 + rng(&s) * 0.07)  // radius 0.09..0.16 of cs
-
-		// Deriva suave sobre el agua — fase y frecuencia propias por pad (de
-		// su seed) para que no floten todos sincronizados.
-		phase := rng(&s) * 6.2832
-		freq  := 0.5 + rng(&s) * 0.3
-		amp   := cs * 0.05
-		px := base_px + math.cos(t * freq + phase) * amp
-		py := base_py + math.sin(t * freq * 0.8 + phase) * amp * 0.6
-
-		// Pad shadow
-		raylib.DrawCircle(i32(px + 1), i32(py + 1), pr, raylib.Color{0, 0, 0, 40})
-		// Pad fill — verde oscuro
-		raylib.DrawCircle(i32(px), i32(py), pr, raylib.Color{40, 110, 50, 230})
-		// Pad highlight — borde más claro
-		raylib.DrawCircleLines(i32(px), i32(py), pr, raylib.Color{70, 150, 70, 160})
-
-		// 50% chance of a small pink flower on this pad
-		if rng(&s) > 0.5 {
-			fr := cs * (0.016 + rng(&s) * 0.023)  // petal radius 0.016..0.039 of cs
-			fc := raylib.Color{255, 150, 190, 240}  // rosa
-			yc := raylib.Color{255, 230, 80, 255}   // amarillo centro
-			// 5 petals around center
-			for p in 0 ..< 5 {
-				a := f32(p) * 1.2566  // 2π/5
-				fpx := px + math.cos(a) * fr * 1.6
-				fpy := py + math.sin(a) * fr * 1.6
-				raylib.DrawCircle(i32(fpx), i32(fpy), fr, fc)
-			}
-			// Yellow center
-			raylib.DrawCircle(i32(px), i32(py), fr * 0.6, yc)
-		}
-	}
-}
 
 // =============================================================================
 // Airdrop rendering

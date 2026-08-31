@@ -21,17 +21,12 @@ Map :: struct {
 	// Water layer — separate from main grid; rendered below paths
 	water_grid: [constants.GRID_SIZE][constants.GRID_SIZE]bool,
 
-	// Heightmap — valores en [0, 1] por celda, derivados de seed.
-	// Solo se usa para el render del terreno (desniveles sutiles). No afecta gameplay.
+	// Heightmap — valores en [0, 1] por celda, derivados de seed. Da la
+	// altura real del terreno 3D (ver terrain_cache_ensure, systems/rendering.odin,
+	// que lo lee directo CPU-side para los vértices de la malla — no hay
+	// textura GPU intermedia). No afecta gameplay.
 	// Se regenera con map_regenerate_heightmap cuando cambia el seed.
 	heightmap: [constants.GRID_SIZE][constants.GRID_SIZE]f32,
-
-	// GPU heightmap — textura grayscale del heightmap, muestreada con bilinear
-	// filtering por el shader para producir el gradient continuo.
-	// dirty=true → necesita re-upload; valid=true → tex tiene datos GPU.
-	heightmap_tex:       raylib.Texture2D,
-	heightmap_tex_valid: bool,
-	heightmap_tex_dirty: bool,
 
 	// Biome
 	biome: constants.Biome,
@@ -119,7 +114,6 @@ _heightmap_fractal_noise :: proc(x, y: f32, seed: u64, octaves: int) -> f32 {
 
 // Regenera el heightmap entero a partir del seed actual del mapa.
 // Llamar después de map_init, map_load, o cualquier mutación del seed.
-// Marca la textura GPU como dirty para que el render la re-suba en el próximo frame.
 map_regenerate_heightmap :: proc(m: ^Map) {
 	seed_u64 := u64(u32(m.seed)) | (u64(u32(m.seed) ~ 0xA5A5A5A5) << 32)
 	for row in 0 ..< constants.GRID_SIZE {
@@ -128,59 +122,6 @@ map_regenerate_heightmap :: proc(m: ^Map) {
 			fy := f32(row) * constants.HEIGHTMAP_FREQUENCY
 			m.heightmap[row][col] = _heightmap_fractal_noise(fx, fy, seed_u64, constants.HEIGHTMAP_OCTAVES)
 		}
-	}
-	m.heightmap_tex_dirty = true
-}
-
-// Sube el heightmap CPU al GPU como una textura grayscale GRID_SIZE×GRID_SIZE.
-// El filtro bilinear hace que el shader vea valores interpolados entre celdas.
-// Requiere un contexto OpenGL activo — sólo llamar desde el hilo de render.
-// Resetea dirty=false; deja valid=true si tuvo éxito.
-map_upload_heightmap_to_gpu :: proc(m: ^Map) {
-	// Si ya había una textura cargada, descargar antes de re-subir.
-	if m.heightmap_tex_valid {
-		raylib.UnloadTexture(m.heightmap_tex)
-		m.heightmap_tex_valid = false
-	}
-
-	// Cuantizar f32 → u8 para una textura grayscale.
-	pixels: [constants.GRID_SIZE * constants.GRID_SIZE]u8
-	for row in 0 ..< constants.GRID_SIZE {
-		for col in 0 ..< constants.GRID_SIZE {
-			v := m.heightmap[row][col]
-			if v < 0 { v = 0 }
-			if v > 1 { v = 1 }
-			pixels[row * constants.GRID_SIZE + col] = u8(v * 255)
-		}
-	}
-
-	img := raylib.Image{
-		data    = raw_data(pixels[:]),
-		width   = constants.GRID_SIZE,
-		height  = constants.GRID_SIZE,
-		mipmaps = 1,
-		format  = .UNCOMPRESSED_GRAYSCALE,
-	}
-	tex := raylib.LoadTextureFromImage(img)
-	// id == 0 → fallo al subir (típicamente sin contexto GL). Marcar inválido.
-	if tex.id == 0 {
-		m.heightmap_tex_valid = false
-		m.heightmap_tex_dirty = true  // volver a intentar al próximo frame
-		return
-	}
-	raylib.SetTextureFilter(tex, .BILINEAR)
-	raylib.SetTextureWrap(tex, .CLAMP)
-
-	m.heightmap_tex       = tex
-	m.heightmap_tex_valid = true
-	m.heightmap_tex_dirty = false
-}
-
-// Libera la textura GPU del heightmap (si la había).
-map_unload_heightmap_gpu :: proc(m: ^Map) {
-	if m.heightmap_tex_valid {
-		raylib.UnloadTexture(m.heightmap_tex)
-		m.heightmap_tex_valid = false
 	}
 }
 
@@ -191,8 +132,6 @@ map_destroy :: proc(m: ^Map) {
 		delete(k)
 	}
 	delete(m.tile_data)
-	// Liberar la textura GPU del heightmap si fue subida.
-	map_unload_heightmap_gpu(m)
 }
 
 // Get tile at position
