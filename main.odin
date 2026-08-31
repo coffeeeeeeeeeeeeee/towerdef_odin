@@ -301,6 +301,16 @@ app_init :: proc(initial_settings: entities.Settings) {
 	camera_offset_x := i32((screen_width - grid_total_size) / 2)
 	camera_offset_y := i32((screen_height - grid_total_size) / 2)
 
+	// camera_focus por defecto (foco 3D, centrado en el mapa GRID_SIZE×GRID_SIZE
+	// inicial) — sin esto queda en {0,0,0} hasta que algo la centre. PLAYING
+	// siempre corre simulation_fit_camera antes de empezar una run, pero el
+	// editor puede entrar directo sin pasar por ahí; este default evita que la
+	// cámara 3D arranque mirando el origen del mundo en vez del mapa.
+	default_focus := raylib.Vector3{
+		f32(constants.GRID_SIZE) * constants.WORLD_CELL_SIZE * 0.5, 0,
+		f32(constants.GRID_SIZE) * constants.WORLD_CELL_SIZE * 0.5,
+	}
+
 	app = entities.App_State {
 		state          = .MENU,
 		previous_state = .MENU,
@@ -321,6 +331,8 @@ app_init :: proc(initial_settings: entities.Settings) {
 		camera_offset_y       = camera_offset_y,
 		target_camera_offset_x = camera_offset_x,
 		target_camera_offset_y = camera_offset_y,
+		camera_focus          = default_focus,
+		target_camera_focus   = default_focus,
 		selected_tower_r      = -1,
 		selected_tower_c      = -1,
 		current_campaign_node = -1,

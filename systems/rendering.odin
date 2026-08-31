@@ -1139,7 +1139,11 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	COLOR_TARGET_INVALID :: raylib.Color{220, 60, 60, 255}
 
 	// ── Overlays de casillas posibles para reliquias activas con objetivo ──
-	if app.pending_tower_action != .TOWER {
+	// Guard defensivo: pending_tower_action no se resetea al cambiar de
+	// estado (solo al completar/cancelar la acción durante PLAYING), así que
+	// sin el chequeo de estado este loop podría dispararse en EDITOR si
+	// quedó en un valor distinto de .TOWER desde una sesión PLAYING previa.
+	if app.state == .PLAYING && app.pending_tower_action != .TOWER {
 		hover_row, hover_col, hover_valid := input_get_hovered_cell(app)
 		for row in 0 ..< m.height {
 			for col in 0 ..< m.width {
@@ -1236,7 +1240,7 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 		center, top_y := tile_world_top(m, app.selected_tower_r, app.selected_tower_c)
 		render_reticle_3d({center.x, top_y, center.z}, constants.UI_RETICLE_COLOR)
 	}
-	if app.pending_tower_action != .TOWER {
+	if app.state == .PLAYING && app.pending_tower_action != .TOWER {
 		hover_row, hover_col, hover_valid := input_get_hovered_cell(app)
 		if hover_valid {
 			center, top_y := tile_world_top(m, hover_row, hover_col)
@@ -1245,6 +1249,13 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	}
 	if app.selected_obstacle.valid {
 		center, top_y := tile_world_top(m, app.selected_obstacle.row, app.selected_obstacle.col)
+		render_reticle_3d({center.x, top_y, center.z}, constants.UI_RETICLE_COLOR)
+	}
+	// Retículo de celda seleccionada del editor — el ghost-preview 2D viejo
+	// (app.sim.selected_build_tower) es código muerto para EDITOR, que solo
+	// usa app.editor.current_tool; acá solo hace falta el marco de la celda.
+	if app.state == .EDITOR && app.selected_cell.valid {
+		center, top_y := tile_world_top(m, app.selected_cell.row, app.selected_cell.col)
 		render_reticle_3d({center.x, top_y, center.z}, constants.UI_RETICLE_COLOR)
 	}
 
@@ -1449,9 +1460,28 @@ render_gameplay_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	render_projectiles_3d(app, m)
 	render_explosions_3d(app, m)
 	render_hit_particles_3d(app, m)
+	render_airdrop_boxes_3d(app, m)
 	raylib.EndShaderMode()
 
 	render_enemy_status_rings_3d(app, m)
+}
+
+// Caja de airdrop ya aterrizada — cubo real apoyado sobre el terreno (antes
+// era un dibujo pixel-art 2D reproyectado, ver render_airdrops; el resto de
+// las fases del airdrop — avión, estela, paracaídas, ping, indicador de
+// borde — se quedan 2D screen-space a propósito, son overlays "siempre
+// visibles en pantalla", no objetos del mundo).
+render_airdrop_boxes_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+	size := cs * 0.5
+
+	for &drop in app.sim.airdrops {
+		if drop.phase != .BOX_LANDED { continue }
+		center, top_y := tile_world_top(m, drop.target_row, drop.target_col)
+		pos := raylib.Vector3{center.x, top_y + size * 0.5, center.z}
+		raylib.DrawCube(pos, size, size, size, constants.COLOR_AIRDROP_BOX)
+		raylib.DrawCubeWires(pos, size, size, size, constants.COLOR_AIRDROP_BOX_DARK)
+	}
 }
 
 // Barras de vida + números de daño — screen-space, reproyectados con
@@ -1542,72 +1572,48 @@ render_game :: proc(app: ^entities.App_State) {
 	// pantalla, para poder pasarlo por el blur de 2 pasadas + tinte ("vidrio
 	// esmerilado") antes de que se vea. Ver Pause_Blur más arriba.
 	//
-	// Trampa: water_render_mask/path_render_mask hacen su propio
-	// BeginTextureMode interno, y en raylib EndTextureMode() siempre vuelve
-	// al framebuffer por defecto (no soporta anidar) — si corrieran DENTRO
-	// de nuestro BeginTextureMode(capture_tex), todo lo dibujado después se
-	// iría directo a pantalla en vez de a la textura. Por eso se precomputan
-	// ACÁ, afuera, y se le pasa for_preview=true a render_map para que
-	// render_water_layer/render_path_layer solo apliquen la máscara ya
-	// calculada (mismo mecanismo que ya usa render_map_preview_to_texture).
-	// Efecto colateral aceptado: for_preview=true también saltea el overlay
-	// de pasto (grass) — igual queda tapado por el blur+tinte después.
+	// PAUSED ahora comparte el mismo camino 3D que PLAYING/EDITOR (mapa
+	// congelado tal cual quedó, no un snapshot 2D aparte) — ya no hace falta
+	// precomputar water_render_mask/path_render_mask (esa trampa era
+	// específica del render 2D con for_preview=true; el terreno 3D usa un
+	// Model cacheado con las máscaras ya horneadas en las texturas del
+	// material, sin ningún BeginTextureMode propio en el camino de dibujo).
+	// BeginMode3D/EndMode3D corre sin problema dentro de un BeginTextureMode
+	// activo — la trampa de "no anida" es específica de BeginTextureMode.
 	is_paused_glass := app.state == .PAUSED
 	if is_paused_glass {
 		pause_blur_resize()
-		cs := f32(app.settings.cell_size) * app.zoom
-		m  := &app.editor.game_map
-		water_shader_resize()
-		path_shader_resize()
-		water_render_mask(m, cs, app.camera_offset_x, app.camera_offset_y)
-		path_render_mask(m, cs, m.width, m.height, app.camera_offset_x, app.camera_offset_y)
-
 		raylib.BeginTextureMode(pause_blur.capture_tex)
 		raylib.ClearBackground(raylib.BLACK)
 	}
 
-	// Map and gameplay are only visible while actually playing or editing.
-	// In menu/overlay states the nebula is the sole background.
+	// Map and gameplay are only visible while actually playing, editing, or
+	// paused. In menu/overlay states the nebula is the sole background.
 	if app.state == .PLAYING || app.state == .PAUSED || app.state == .EDITOR {
-		// Mapa 3D — paso 4 (ver 3D_RENDER_PLAN.md): solo PLAYING por ahora,
-		// PAUSED/EDITOR se quedan en el camino 2D viejo hasta los pasos
-		// siguientes (glass de pausa, overlays del editor). camera_focus ya
-		// no se hardcodea acá — lo centra simulation_fit_camera al arrancar
-		// la run, y de ahí en más lo mueve input_handle_camera (pan/zoom).
-		// Nota: la retícula de torre/obstáculo seleccionado todavía no se
-		// portó (queda para el paso 5) — no se dibuja en PLAYING hasta
-		// entonces. render_airdrops sigue 2D (fuera de alcance del plan).
-		if app.state == .PLAYING {
-			m := &app.editor.game_map
-			update_camera3d(app)
+		m := &app.editor.game_map
+		update_camera3d(app)
 
-			raylib.ClearBackground(constants.BIOME_COLORS[m.biome].bg)
-			raylib.BeginMode3D(app.camera3d)
-			render_map_3d(app, m)
-			render_tower_ranges_3d(app, m)
-			render_map_objects_3d(app, m)
-			render_gameplay_3d(app, m)
-			raylib.EndMode3D()
-			render_gameplay_screenspace_3d(app, m)
-		} else {
-			render_map(app, &app.editor.game_map, is_paused_glass)
-			render_tower_ranges(app)
-			render_map_objects(app, &app.editor.game_map)
-			render_gameplay(app)
+		raylib.ClearBackground(constants.BIOME_COLORS[m.biome].bg)
+		raylib.BeginMode3D(app.camera3d)
+		render_map_3d(app, m)
+		if app.settings.show_grid {
+			render_grid_lines_3d(app, m)
 		}
+		render_tower_ranges_3d(app, m)
+		render_map_objects_3d(app, m)
+		render_gameplay_3d(app, m)          // no-op en EDITOR: sim.enemies/... vacío fuera de una run
+		raylib.EndMode3D()
+		render_gameplay_screenspace_3d(app, m)  // no-op en EDITOR, misma razón
 		render_airdrops(app)
 	}
 
 	// Pájaros: decoración ambiental 2D pura (líneas en world-px de pantalla,
-	// sin relación con el grid), fuera del alcance de 3D_RENDER_PLAN.md. En
-	// PLAYING se ven "pegados" como un plano flotando sobre el mundo 3D — se
-	// desactivan ahí hasta portarlos (necesitarían posición 3D real +
-	// billboarding). Se mantienen en PAUSED/EDITOR, que siguen 100% 2D.
-	if app.state == .PAUSED || app.state == .EDITOR {
-		update_bird_flock(app, app.delta_time)
-		render_bird_flock(app)
-		// cloud_shader_draw(app)  // desactivado
-	}
+	// sin relación con el grid), fuera del alcance de 3D_RENDER_PLAN.md. Se
+	// ven "pegados" como un plano flotando sobre el mundo 3D — desactivados
+	// en todo estado con cámara 3D (PLAYING, EDITOR y ahora PAUSED también)
+	// hasta portarlos (necesitarían posición 3D real + billboarding). Ya no
+	// queda ningún estado que los dibuje.
+	// cloud_shader_draw(app)  // desactivado
 
 	if is_paused_glass {
 		raylib.EndTextureMode()
@@ -2207,6 +2213,39 @@ render_path_railings :: proc(cs: f32) {
 }
 
 // Render grid lines
+// Líneas de grilla en 3D — cubre PLAYING y EDITOR (mismo toggle general
+// app.settings.show_grid que ya existía en el menú de Settings; PAUSED sigue
+// con la grilla 2D vieja de render_grid_lines, dentro del vidrio esmerilado).
+// Sigue la altura de cada esquina con el mismo criterio de promedio que
+// _terrain_corner (ver terrain_cache_ensure) para que las líneas se apoyen
+// sobre el terreno real en vez de flotar o enterrarse en las pendientes
+// diagonales del mesh.
+render_grid_lines_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+	biome_colors := constants.BIOME_COLORS[m.biome]
+	LIFT :: f32(0.03)  // evita z-fighting contra la superficie del terreno
+
+	for r in 0 ..= m.height {
+		for c in 0 ..= m.width {
+			// _terrain_corner ya devuelve la altura final en unidades de mundo
+			// (la escala se aplica adentro, en _terrain_tile_height_color) —
+			// no volver a multiplicar por WORLD_HEIGHT_SCALE acá.
+			h, _ := _terrain_corner(m, r, c, biome_colors)
+			y := h + LIFT
+			if c < m.width {
+				h2, _ := _terrain_corner(m, r, c + 1, biome_colors)
+				y2 := h2 + LIFT
+				raylib.DrawLine3D({f32(c) * cs, y, f32(r) * cs}, {f32(c + 1) * cs, y2, f32(r) * cs}, constants.COLOR_GRID_LINE)
+			}
+			if r < m.height {
+				h2, _ := _terrain_corner(m, r + 1, c, biome_colors)
+				y2 := h2 + LIFT
+				raylib.DrawLine3D({f32(c) * cs, y, f32(r) * cs}, {f32(c) * cs, y2, f32(r + 1) * cs}, constants.COLOR_GRID_LINE)
+			}
+		}
+	}
+}
+
 render_grid_lines :: proc(app: ^entities.App_State, cs: f32, map_w, map_h: i32) {
 	raylib.BeginBlendMode(.MULTIPLIED)
 	// Vertical lines (one per column boundary)
@@ -3992,11 +4031,38 @@ render_water_lily :: proc(x, y, cs: f32, row, col: i32) {
 render_airdrops :: proc(app: ^entities.App_State) {
 	if app.state != .PLAYING && app.state != .PAUSED { return }
 
-	cs := f32(app.settings.cell_size) * app.zoom
-	ox := f32(app.camera_offset_x)
-	oy := f32(app.camera_offset_y)
+	m := &app.editor.game_map
+
+	// El sistema de airdrops sigue calculando sus posiciones en el espacio
+	// 2D viejo (world px = tile*cell_size, ver airdrop_spawn en
+	// simulation.odin) — nunca se migró a unidades de mundo 3D porque el
+	// avión vuela en línea recta fuera del grid (no tiene sentido en
+	// tiles). Acá se proyecta cada punto a 3D real (world 2D → Vector3 con
+	// una altura fija de vuelo, reproyectado con GetWorldToScreen) en vez
+	// de usar camera_offset_x/y — esa variable ya no se actualiza durante
+	// PLAYING/EDITOR (la mueve camera_focus/camera3d, ver
+	// input_handle_camera_3d), así que quedaba desincronizada del pan/zoom
+	// real apenas el jugador movía la cámara.
+	cs2d        := f32(app.settings.cell_size)
+	scale_to_3d := constants.WORLD_CELL_SIZE / cs2d
+	cs          := f32(app.settings.cell_size) * app.zoom  // tamaños en pantalla, sin cambios (ver damage numbers: misma heurística de font_size*zoom)
+
+	// Altura fija de vuelo del avión en unidades de mundo 3D — no tiene
+	// relación con el heightmap, el avión siempre pasa por encima del mapa.
+	PLANE_ALTITUDE :: f32(3.0)
+
+	project :: proc(app: ^entities.App_State, wx2d, wy2d, scale, altitude: f32) -> raylib.Vector2 {
+		pos := raylib.Vector3{wx2d * scale, altitude, wy2d * scale}
+		return raylib.GetWorldToScreen(pos, app.camera3d)
+	}
 
 	for &drop in app.sim.airdrops {
+		// Posición en pantalla del tile destino — un solo raycast/proyección
+		// reusado por todas las fases que anclan al tile (antes, caja, ping,
+		// indicador de borde). tile_world_top ya da el punto sobre la
+		// superficie real del terreno (heightmap incluido).
+		target_center, _ := tile_world_top(m, drop.target_row, drop.target_col)
+		target_screen := raylib.GetWorldToScreen(target_center, app.camera3d)
 
 		// ── Estela jet (solo mientras el avión está volando) ─────────────────
 		if drop.phase == .PLANE_FLYING && drop.trail_len > 1 {
@@ -4008,8 +4074,8 @@ render_airdrops :: proc(app: ^entities.App_State) {
 				p1 := drop.trail[i1]
 				// Alpha crece de 0 (punta vieja) a 180 (punta reciente)
 				alpha := u8(f32(i) / f32(drop.trail_len) * 180)
-				s0 := raylib.Vector2{p0.x * app.zoom + ox, p0.y * app.zoom + oy}
-				s1 := raylib.Vector2{p1.x * app.zoom + ox, p1.y * app.zoom + oy}
+				s0 := project(app, p0.x, p0.y, scale_to_3d, PLANE_ALTITUDE)
+				s1 := project(app, p1.x, p1.y, scale_to_3d, PLANE_ALTITUDE)
 				thick := max(f32(1), app.zoom * 1.5)
 				raylib.DrawLineEx(s0, s1, thick, raylib.Color{255, 255, 255, alpha})
 			}
@@ -4025,13 +4091,13 @@ render_airdrops :: proc(app: ^entities.App_State) {
 			cos_a := math.cos_f32(angle)
 			sin_a := math.sin_f32(angle)
 
-			// Helper: convierte coordenadas locales (en world units) a screen
+			// Helper: convierte coordenadas locales (en world units 2D) a
+			// screen, proyectando por 3D real en vez de camera_offset_x/y.
 			// lx = eje adelante/atrás, ly = eje izquierda/derecha
-			to_s :: #force_inline proc(pwx, pwy, lx, ly, cos_a, sin_a: f32,
-			                           zoom, ox, oy: f32) -> raylib.Vector2 {
+			to_s :: #force_inline proc(app: ^entities.App_State, pwx, pwy, lx, ly, cos_a, sin_a, scale, altitude: f32) -> raylib.Vector2 {
 				wx := pwx + lx*cos_a - ly*sin_a
 				wy := pwy + lx*sin_a + ly*cos_a
-				return {wx*zoom + ox, wy*zoom + oy}
+				return project(app, wx, wy, scale, altitude)
 			}
 			pwx := drop.plane_x
 			pwy := drop.plane_y
@@ -4041,9 +4107,9 @@ render_airdrops :: proc(app: ^entities.App_State) {
 			//   Nose:    lx=+14,  ly=0
 			//   L-trail: lx=-7,   ly=-11
 			//   R-trail: lx=-7,   ly=+11
-			v_nose  := to_s(pwx, pwy,  14,   0, cos_a, sin_a, z, ox, oy)
-			v_left  := to_s(pwx, pwy,  -7, -11, cos_a, sin_a, z, ox, oy)
-			v_right := to_s(pwx, pwy,  -7,  11, cos_a, sin_a, z, ox, oy)
+			v_nose  := to_s(app, pwx, pwy,  14,   0, cos_a, sin_a, scale_to_3d, PLANE_ALTITUDE)
+			v_left  := to_s(app, pwx, pwy,  -7, -11, cos_a, sin_a, scale_to_3d, PLANE_ALTITUDE)
+			v_right := to_s(app, pwx, pwy,  -7,  11, cos_a, sin_a, scale_to_3d, PLANE_ALTITUDE)
 			// Raylib DrawTriangle: CCW en screen (y↓)
 			raylib.DrawTriangle(v_nose, v_right, v_left, constants.COLOR_AIRDROP_PLANE)
 
@@ -4051,8 +4117,9 @@ render_airdrops :: proc(app: ^entities.App_State) {
 			ang_deg := angle * (180.0 / math.PI)
 			body_w  := f32(28) * z
 			body_h  := f32(4)  * z
+			plane_screen := project(app, drop.plane_x, drop.plane_y, scale_to_3d, PLANE_ALTITUDE)
 			raylib.DrawRectanglePro(
-				{drop.plane_x*z + ox, drop.plane_y*z + oy, body_w, body_h},
+				{plane_screen.x, plane_screen.y, body_w, body_h},
 				{body_w / 2, body_h / 2},
 				ang_deg,
 				raylib.Color{220, 220, 230, 255},
@@ -4066,8 +4133,9 @@ render_airdrops :: proc(app: ^entities.App_State) {
 				// Centro del motor en world space
 				ecx := pwx + (-5)*cos_a - side*sin_a
 				ecy := pwy + (-5)*sin_a + side*cos_a
+				eng_screen := project(app, ecx, ecy, scale_to_3d, PLANE_ALTITUDE)
 				raylib.DrawRectanglePro(
-					{ecx*z + ox, ecy*z + oy, eng_w, eng_h},
+					{eng_screen.x, eng_screen.y, eng_w, eng_h},
 					{eng_w / 2, eng_h / 2},
 					ang_deg,
 					raylib.Color{80, 80, 100, 255},
@@ -4075,8 +4143,9 @@ render_airdrops :: proc(app: ^entities.App_State) {
 				// Llama del motor (pequeño círculo naranja en la tobera)
 				nozzle_cx := pwx + (-9)*cos_a - side*sin_a
 				nozzle_cy := pwy + (-9)*sin_a + side*cos_a
+				nozzle_screen := project(app, nozzle_cx, nozzle_cy, scale_to_3d, PLANE_ALTITUDE)
 				raylib.DrawCircleV(
-					{nozzle_cx*z + ox, nozzle_cy*z + oy},
+					nozzle_screen,
 					f32(2.5) * z,
 					raylib.Color{255, 140, 40, 200},
 				)
@@ -4084,8 +4153,8 @@ render_airdrops :: proc(app: ^entities.App_State) {
 
 		case .BOX_FALLING:
 			// Paracaídas: círculo encogiendo en el tile destino
-			sx := drop.target_wx * app.zoom + ox
-			sy := drop.target_wy * app.zoom + oy
+			sx := target_screen.x
+			sy := target_screen.y
 
 			radius := drop.chute_t * constants.AIRDROP_CHUTE_RADIUS_MAX * cs
 			if radius >= 1 {
@@ -4094,72 +4163,16 @@ render_airdrops :: proc(app: ^entities.App_State) {
 			}
 
 		case .BOX_LANDED:
-			sx  := drop.target_wx * app.zoom + ox
-			sy  := drop.target_wy * app.zoom + oy
-			sz  := cs * 0.66
-			bx  := sx - sz / 2
-			by_ := sy - sz / 2
-
-			// Colores del crate (wood + metal)
-			COL_SHADOW  :: raylib.Color{18, 10, 4, 70}
-			COL_WOOD    :: raylib.Color{178, 136, 68, 255}  // tablas principales
-			COL_WOOD_LT :: raylib.Color{202, 162, 90, 255}  // tabla superior iluminada
-			COL_GAP     :: raylib.Color{138, 100, 42, 255}  // ranuras entre tablas
-			COL_METAL   :: raylib.Color{102, 82, 56, 255}   // correa + soportes de esquina
-
-			soff    := max(f32(1.5), cs * 0.06)
-			rnd     := f32(0.12)
-			seg     := i32(4)
-			plank_h := sz / 3
-
-			// 1. Sombra
-			raylib.DrawRectangleRounded({bx + soff, by_ + soff, sz, sz}, rnd, seg, COL_SHADOW)
-
-			// 2. Cuerpo principal (madera)
-			raylib.DrawRectangleRounded({bx, by_, sz, sz}, rnd, seg, COL_WOOD)
-
-			// 3. Tabla superior más iluminada
-			raylib.DrawRectangleRec({bx + sz*0.06, by_, sz*0.88, plank_h}, COL_WOOD_LT)
-
-			// 4. Ranuras entre tablas (x2)
-			gap_h := max(f32(1), sz * 0.035)
-			raylib.DrawRectangleRec({bx + sz*0.06, by_ + plank_h - gap_h*0.5, sz*0.88, gap_h}, COL_GAP)
-			raylib.DrawRectangleRec({bx + sz*0.06, by_ + 2*plank_h - gap_h*0.5, sz*0.88, gap_h}, COL_GAP)
-
-			// 5. Tablas cruzadas (X) sobre la cara frontal
-			COL_BOARD :: raylib.Color{152, 112, 48, 255}
-			board_w   := max(f32(2), sz * 0.11)
-			board_l   := sz * 1.36   // ligeramente mayor que la diagonal para llegar a esquinas
-			raylib.DrawRectanglePro(
-				{sx, sy, board_l, board_w},
-				{board_l * 0.5, board_w * 0.5},
-				45,
-				COL_BOARD,
-			)
-			raylib.DrawRectanglePro(
-				{sx, sy, board_l, board_w},
-				{board_l * 0.5, board_w * 0.5},
-				-45,
-				COL_BOARD,
-			)
-
-			// 6. Correa metálica horizontal al centro
-			strap_h := max(f32(2), sz * 0.08)
-			raylib.DrawRectangleRec({bx, sy - strap_h*0.5, sz, strap_h}, COL_METAL)
-
-			// 7. Soportes de esquina (4 cuadrados en vértices)
-			bkt     := sz * 0.14
-			bkt_pad := sz * 0.02
-			raylib.DrawRectangleRec({bx + bkt_pad,          by_ + bkt_pad,          bkt, bkt}, COL_METAL)
-			raylib.DrawRectangleRec({bx + sz - bkt - bkt_pad, by_ + bkt_pad,          bkt, bkt}, COL_METAL)
-			raylib.DrawRectangleRec({bx + bkt_pad,          by_ + sz - bkt - bkt_pad, bkt, bkt}, COL_METAL)
-			raylib.DrawRectangleRec({bx + sz - bkt - bkt_pad, by_ + sz - bkt - bkt_pad, bkt, bkt}, COL_METAL)
+			// La caja en sí ahora es geometría 3D real (ver render_airdrop_boxes_3d,
+			// dibujada dentro de BeginMode3D junto con torres/árboles/enemigos) —
+			// acá solo quedan los overlays 2D de "siempre visible en pantalla"
+			// (ping, indicador de borde) más abajo.
 		}
 
 		// ── Ping convergente (siempre visible en pantalla) ─────────────────
 		if (drop.phase == .BOX_FALLING || drop.phase == .BOX_LANDED) && drop.ping_t > 0 {
-			raw_sx := drop.target_wx * app.zoom + ox
-			raw_sy := drop.target_wy * app.zoom + oy
+			raw_sx := target_screen.x
+			raw_sy := target_screen.y
 			sw_f   := f32(raylib.GetScreenWidth())
 			sh_f   := f32(raylib.GetScreenHeight())
 
@@ -4179,8 +4192,8 @@ render_airdrops :: proc(app: ^entities.App_State) {
 
 		// ── Indicador de borde cuando la caja está fuera de pantalla ─────────
 		if drop.phase == .BOX_FALLING || drop.phase == .BOX_LANDED {
-			sx := drop.target_wx * app.zoom + ox
-			sy := drop.target_wy * app.zoom + oy
+			sx := target_screen.x
+			sy := target_screen.y
 			sw := f32(raylib.GetScreenWidth())
 			sh := f32(raylib.GetScreenHeight())
 			PAD :: f32(20)  // distancia desde el borde de pantalla

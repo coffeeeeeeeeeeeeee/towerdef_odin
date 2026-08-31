@@ -741,6 +741,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 		editor_push_undo(app)
 		app.editor.current_biome = constants.Biome(biome_index)
 		app.editor.game_map.biome = constants.Biome(biome_index)
+		terrain_cache_invalidate()
 	}
 
 	// Right-side buttons - laid out from right to left with consistent gap
@@ -802,6 +803,7 @@ render_editor_ui :: proc(app: ^entities.App_State) {
 				delete(app.editor.current_map_name)
 			}
 			app.editor.current_map_name = strings.clone("last_saved.map")
+			simulation_fit_camera(app, f32(raylib.GetScreenWidth()), f32(raylib.GetScreenHeight()))
 			entities.add_toast(app, "Map loaded!", .SUCCESS, 2.0)
 			play_sound(.CONFIRMATION, .UI)
 		} else {
@@ -1220,6 +1222,7 @@ render_map_browser :: proc(app: ^entities.App_State) {
 								play_sound(.ERROR, .UI)
 							}
 						} else {
+							simulation_fit_camera(app, f32(raylib.GetScreenWidth()), f32(raylib.GetScreenHeight()))
 							entities.add_toast(app, fmt.tprintf("Loaded: %s", fname), .SUCCESS, 2.0)
 							play_sound(.CONFIRMATION, .UI)
 						}

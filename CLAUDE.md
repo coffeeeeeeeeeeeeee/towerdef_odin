@@ -448,16 +448,25 @@ internamente hace su propio `BeginTextureMode(...)/EndTextureMode()` (como
 de ese `EndTextureMode()` interno se va derecho a pantalla en vez de a
 `mi_textura` — la captura queda cortada a la mitad, sin error ni warning.
 
-**Fix estándar** (ya usado dos veces: `render_map_preview_to_texture` y
-`Pause_Blur`, ver más abajo): precomputar `water_render_mask`/
+**Fix estándar** (sigue vigente para `render_map_preview_to_texture`, el
+thumbnail 2D del selector de mapas): precomputar `water_render_mask`/
 `path_render_mask` **antes** de entrar al `BeginTextureMode` propio, y
 llamar a `render_map(app, m, for_preview = true)` para que
 `render_water_layer`/`render_path_layer` solo apliquen la máscara ya
 calculada en vez de recomputarla (evitando el `BeginTextureMode` interno).
 Efecto colateral de `for_preview = true`: también saltea el overlay de
 pasto (`render_grass_overlay`) — aceptable si lo que se está capturando va
-a quedar blureado/tintado igual (como el vidrio de pausa), no si necesita
-verse nítido.
+a quedar chico/no necesita verse con el detalle completo.
+
+**`Pause_Blur` (ver más abajo) ya NO pisa esta trampa** — se migró del
+render 2D (`render_map`, con esta trampa) al mismo camino 3D que PLAYING/
+EDITOR (`render_map_3d`), que no hace ningún `BeginTextureMode` propio: el
+terreno es un `Model` cacheado con las máscaras de camino/agua ya horneadas
+en las texturas del material (ver `terrain_cache_ensure`,
+`systems/rendering.odin`), no algo que se recalcule con su propio
+render-a-textura por frame. `BeginMode3D`/`EndMode3D` sí puede correr sin
+problema dentro de un `BeginTextureMode` activo — la trampa de arriba es
+específica de `BeginTextureMode`, no de `BeginMode3D`.
 
 ## Vidrio esmerilado de la pantalla de Pausa (`Pause_Blur`)
 
@@ -468,15 +477,23 @@ texel step para separar las muestras y que el blur se note a simple vista
 (6 texels de radio en una pantalla de 1920px sería casi imperceptible).
 
 Flujo en `render_game` (`systems/rendering.odin`) cuando
-`app.state == .PAUSED`:
-1. Precomputar máscaras de agua/camino (ver trampa de arriba).
-2. `BeginTextureMode(pause_blur.capture_tex)` → el mundo se renderiza ahí
-   en vez de a pantalla, llamando a `render_map(..., for_preview = true)`.
-3. `EndTextureMode()`, restaurar `camera_offset_x/y` (post screen-shake).
-4. `pause_blur_draw()`: pasada horizontal `capture_tex → blur_tex`, pasada
+`app.state == .PAUSED`: PAUSED comparte el mismo bloque de render 3D que
+PLAYING/EDITOR (mapa/torres/enemigos vía `render_map_3d` y compañía, dentro
+de `BeginMode3D`/`EndMode3D`) — lo único distinto es que ese bloque queda
+redirigido a una textura en vez de a pantalla:
+1. `BeginTextureMode(pause_blur.capture_tex)` → todo el bloque 3D
+   (`render_map_3d`, `render_map_objects_3d`, `render_gameplay_3d`, etc.) se
+   renderiza ahí en vez de a pantalla.
+2. `EndTextureMode()`, restaurar `camera_offset_x/y` (post screen-shake).
+3. `pause_blur_draw()`: pasada horizontal `capture_tex → blur_tex`, pasada
    vertical `blur_tex → pantalla`, y encima un rect semitransparente
    (`constants.PAUSE_GLASS_TINT`) — el efecto "vidrio esmerilado".
-5. `render_ui` (el menú de pausa) se dibuja después, sin blur.
+4. `render_ui` (el menú de pausa) se dibuja después, sin blur.
+
+La cámara 3D queda congelada en pausa porque nada mueve `camera_focus`/
+`app.zoom` mientras se está pausado (`input_handle_camera_3d` no corre —
+ver el dispatch de input por estado), no por ningún mecanismo especial de
+`Pause_Blur`.
 
 Se recalcula todo esto **cada frame** mientras está pausado, no se cachea
 un solo capture — el mundo está congelado (`simulation_update` no corre en

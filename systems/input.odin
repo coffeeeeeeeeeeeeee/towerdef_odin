@@ -492,12 +492,18 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 				app.editor.game_map.water_grid[grid_y][grid_x] = true
 			}
 		}
+
+		// La malla 3D del terreno está cacheada (ver terrain_cache_ensure,
+		// systems/rendering.odin) — invalidar en cada frame de pintado para
+		// que el próximo render_map_3d la reconstruya con el tile nuevo.
+		terrain_cache_invalidate()
 	}
 
 	// Right click to erase
 	if raylib.IsMouseButtonPressed(.RIGHT) {
 		editor_push_undo(app)
 		editor_erase_cell(app, grid_y, grid_x)
+		terrain_cache_invalidate()
 	}
 	
 	// Keyboard shortcuts
@@ -579,10 +585,10 @@ is_valid_grid_pos :: proc(app: ^entities.App_State, x, y: i32) -> bool {
 }
 
 // Convert screen coordinates to grid coordinates (accounts for camera offset and zoom).
-// En PLAYING el mapa es 3D (ver 3D_RENDER_PLAN.md) — se resuelve con raycast
-// contra el plano y=0 en vez de la fórmula 2D. PAUSED/EDITOR siguen 2D por ahora.
+// En PLAYING y EDITOR el mapa es 3D (ver 3D_RENDER_PLAN.md) — se resuelve con
+// raycast contra el plano y=0 en vez de la fórmula 2D. PAUSED sigue 2D.
 screen_to_grid :: proc(app: ^entities.App_State, screen_x, screen_y: i32) -> (grid_x, grid_y: i32) {
-	if app.state == .PLAYING {
+	if app.state == .PLAYING || app.state == .EDITOR {
 		return screen_to_grid_3d(app, screen_x, screen_y)
 	}
 	cs := f32(app.settings.cell_size) * app.zoom
@@ -595,7 +601,7 @@ screen_to_grid :: proc(app: ^entities.App_State, screen_x, screen_y: i32) -> (gr
 // (mira hacia arriba, no debería pasar con la cámara fija-isométrica actual)
 // devuelve una celda claramente inválida.
 screen_to_grid_3d :: proc(app: ^entities.App_State, screen_x, screen_y: i32) -> (grid_x, grid_y: i32) {
-	point, ok := raycast_ground_point(app.camera3d, screen_x, screen_y)
+	point, ok := raycast_terrain_point(app, screen_x, screen_y)
 	if !ok {
 		return -1, -1
 	}
@@ -607,6 +613,8 @@ screen_to_grid_3d :: proc(app: ^entities.App_State, screen_x, screen_y: i32) -> 
 
 // Punto donde el rayo desde la cámara hacia (screen_x, screen_y) cruza el
 // plano de suelo y=0. ok=false si el rayo es paralelo o se aleja del plano.
+// Usado solo para pan/zoom-to-cursor (input_handle_camera_3d) — ahí un plano
+// fijo alcanza, no hace falta la precisión de raycast_terrain_point.
 raycast_ground_point :: proc(camera: raylib.Camera3D, screen_x, screen_y: i32) -> (point: raylib.Vector3, ok: bool) {
 	ray := raylib.GetScreenToWorldRay({f32(screen_x), f32(screen_y)}, camera)
 	if ray.direction.y >= -0.0001 {
@@ -614,6 +622,48 @@ raycast_ground_point :: proc(camera: raylib.Camera3D, screen_x, screen_y: i32) -
 	}
 	t := -ray.position.y / ray.direction.y
 	point = ray.position + ray.direction * t
+	ok = true
+	return
+}
+
+// Raycast contra la altura real del terreno (heightmap + agua a nivel fijo),
+// no un plano y=0 puro — un plano fijo desalinea el picking en cualquier
+// tile con desnivel o agua (más notorio ahora que la grilla del editor sigue
+// la altura real del mesh, ver render_grid_lines_3d). Refinamiento
+// iterativo: cada pasada intersecta el rayo contra un plano horizontal a la
+// altura del tile encontrado en la pasada anterior — converge rápido porque
+// la pendiente entre tiles vecinos está acotada (ver _terrain_corner).
+raycast_terrain_point :: proc(app: ^entities.App_State, screen_x, screen_y: i32) -> (point: raylib.Vector3, ok: bool) {
+	m := &app.editor.game_map
+	ray := raylib.GetScreenToWorldRay({f32(screen_x), f32(screen_y)}, app.camera3d)
+	if ray.direction.y >= -0.0001 {
+		return {}, false
+	}
+
+	cs := constants.WORLD_CELL_SIZE
+	biome_colors := constants.BIOME_COLORS[m.biome]
+
+	y := f32(0)
+	for _ in 0 ..< 4 {
+		t := (y - ray.position.y) / ray.direction.y
+		if t < 0 {
+			return {}, false
+		}
+		point = ray.position + ray.direction * t
+
+		col := i32(math.floor(point.x / cs))
+		row := i32(math.floor(point.z / cs))
+		if row < 0 || row >= m.height || col < 0 || col >= m.width {
+			// Fuera del mapa — no hay altura de terreno que consultar, el
+			// último plano probado ya es la mejor aproximación posible.
+			break
+		}
+		next_y, _ := _terrain_tile_height_color(m, row, col, biome_colors)
+		if next_y == y {
+			break  // convergió, no hace falta seguir iterando
+		}
+		y = next_y
+	}
 	ok = true
 	return
 }
@@ -660,6 +710,7 @@ input_process_editor_shortcuts :: proc(app: ^entities.App_State) {
 	if ctrl && raylib.IsKeyPressed(.C) {
 		editor_push_undo(app)
 		entities.map_clear(&app.editor.game_map)
+		terrain_cache_invalidate()
 		entities.add_toast(app, "Map cleared", .INFO, 2.0)
 	}
 
@@ -677,6 +728,7 @@ input_process_editor_shortcuts :: proc(app: ^entities.App_State) {
 		editor_push_undo(app)
 		if entities.map_load(&app.editor.game_map, "last_saved.map") {
 			app.editor.current_biome = app.editor.game_map.biome
+			simulation_fit_camera(app, f32(raylib.GetScreenWidth()), f32(raylib.GetScreenHeight()))
 			entities.add_toast(app, "Map loaded! (Ctrl+O)", .SUCCESS, 2.0)
 		} else {
 			// Roll back the undo push since nothing changed
@@ -751,6 +803,7 @@ editor_undo :: proc(app: ^entities.App_State) {
 	entities.map_snapshot_restore(&app.editor.game_map, &snap)
 	entities.map_snapshot_destroy(&snap)
 	app.editor.current_biome = app.editor.game_map.biome
+	terrain_cache_invalidate()
 	entities.add_toast(app, "Undo", .INFO, 0.8)
 	play_sound(.TICK, .UI)
 }
@@ -773,6 +826,7 @@ editor_redo :: proc(app: ^entities.App_State) {
 	entities.map_snapshot_restore(&app.editor.game_map, &snap)
 	entities.map_snapshot_destroy(&snap)
 	app.editor.current_biome = app.editor.game_map.biome
+	terrain_cache_invalidate()
 	entities.add_toast(app, "Redo", .INFO, 0.8)
 	play_sound(.TICK, .UI)
 }
@@ -807,7 +861,7 @@ tile_to_tower_type :: proc(tile: constants.Tile) -> constants.Tower_Type {
 
 // Handle camera controls (zoom and pan)
 input_handle_camera :: proc(app: ^entities.App_State) {
-	if app.state == .PLAYING {
+	if app.state == .PLAYING || app.state == .EDITOR {
 		input_handle_camera_3d(app)
 		return
 	}
