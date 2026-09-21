@@ -908,17 +908,18 @@ update_enemies :: proc(app: ^entities.App_State, dt: f32) {
 			if sim.relic_stacks[.OVERKILL] > 0 && enemy.hp < 0 {
 				overkill_dmg := -enemy.hp * constants.OVERKILL_RATIO_PER_STACK * f32(sim.relic_stacks[.OVERKILL])
 				victim: ^entities.Enemy = nil
-				best_dist := constants.OVERKILL_RANGE + 1
+				range_sq := constants.OVERKILL_RANGE * constants.OVERKILL_RANGE
+				best_dist_sq := range_sq + 1
 				for j in 0 ..< len(sim.enemies) {
 					if j == i { continue }
 					other := &sim.enemies[j]
 					if other.hp <= 0 { continue }
 					dx := other.x - enemy.x
 					dy := other.y - enemy.y
-					d  := math.sqrt_f32(dx*dx + dy*dy)
-					if d <= constants.OVERKILL_RANGE && d < best_dist {
-						victim    = other
-						best_dist = d
+					d_sq := dx*dx + dy*dy
+					if d_sq <= range_sq && d_sq < best_dist_sq {
+						victim       = other
+						best_dist_sq = d_sq
 					}
 				}
 				if victim != nil {
@@ -1188,8 +1189,8 @@ update_ice_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 		}
 		dx := (enemy.x + 0.5) - (f32(tower.c) + 0.5)
 		dy := (enemy.y + 0.5) - (f32(tower.r) + 0.5)
-		dist := math.sqrt_f32(dx * dx + dy * dy)
-		if dist <= tower.range {
+		dist_sq := dx * dx + dy * dy
+		if dist_sq <= tower.range * tower.range {
 			entities.enemy_apply_slow(&enemy, constants.ICE_SLOW_FACTOR, constants.ICE_SLOW_DURATION)
 
 			// Apply damage per pulse
@@ -1247,7 +1248,7 @@ update_tesla_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 				if &sim.enemies[i] == primary { next_i = i; break }
 			}
 		} else {
-			best_dist := constants.TESLA_CHAIN_RANGE
+			best_dist_sq := constants.TESLA_CHAIN_RANGE * constants.TESLA_CHAIN_RANGE
 			for i in 0 ..< len(sim.enemies) {
 				already := false
 				for j in 0 ..< hit_count {
@@ -1258,11 +1259,11 @@ update_tesla_tower :: proc(app: ^entities.App_State, tower: ^entities.Tower) {
 				if .INVISIBLE in e.flags && e.revealed_timer <= 0 { continue } // TESLA no ve invisibles, salvo SABUESO
 				dx := (e.x + 0.5) - cur_x
 				dy := (e.y + 0.5) - cur_y
-				d  := math.sqrt_f32(dx*dx + dy*dy)
-				if d <= best_dist {
-					best_dist = d
-					next      = e
-					next_i    = i
+				d_sq := dx*dx + dy*dy
+				if d_sq <= best_dist_sq {
+					best_dist_sq = d_sq
+					next         = e
+					next_i       = i
 				}
 			}
 		}
@@ -1342,8 +1343,8 @@ update_enhance_bonuses :: proc(app: ^entities.App_State) {
 			if et.type != .ENHANCE { continue }
 			dx := f32(t.c - et.c)
 			dy := f32(t.r - et.r)
-			dist := math.sqrt_f32(dx * dx + dy * dy)
-			if dist <= et.range {
+			dist_sq := dx * dx + dy * dy
+			if dist_sq <= et.range * et.range {
 				new_bonus += et.level
 			}
 		}
@@ -1481,9 +1482,9 @@ find_target :: proc(app: ^entities.App_State, tower: ^entities.Tower) -> ^entiti
 
 		dx := (enemy.x + 0.5) - (f32(tower.c) + 0.5)
 		dy := (enemy.y + 0.5) - (f32(tower.r) + 0.5)
-		dist := math.sqrt_f32(dx * dx + dy * dy)
+		dist_sq := dx * dx + dy * dy
 
-		if dist <= tower.range {
+		if dist_sq <= tower.range * tower.range {
 			// CANNON, SNIPER, MORTAR cannot target flying enemies
 			// Only ARCHER, MISSILE, LASER, TESLA can target flying enemies
 			can_target_flying :=
@@ -1612,9 +1613,9 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 
 					dx := enemy.x - proj.x
 					dy := enemy.y - proj.y
-					dist := math.sqrt_f32(dx * dx + dy * dy)
+					dist_sq := dx * dx + dy * dy
 
-					if dist <= proj.aoe {
+					if dist_sq <= proj.aoe * proj.aoe {
 						aoe_damage := proj.damage * constants.AOE_DAMAGE_MULTIPLIER
 						if is_crit {
 							aoe_damage *= constants.CRIT_DAMAGE_MULTIPLIER
@@ -1648,16 +1649,17 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 					if proj.target != nil { exclude = proj.target }
 
 					bounce_target : ^entities.Enemy = nil
-					best_dist     := constants.REBOUND_RANGE + 1
+					rebound_range_sq := constants.REBOUND_RANGE * constants.REBOUND_RANGE
+					best_dist_sq     := rebound_range_sq + 1
 					for &enemy in sim.enemies {
 						if &enemy == exclude { continue }
 						if enemy.hp <= 0 { continue }
 						dx := enemy.x - hit_x
 						dy := enemy.y - hit_y
-						d  := math.sqrt_f32(dx*dx + dy*dy)
-						if d <= constants.REBOUND_RANGE && d < best_dist {
+						d_sq := dx*dx + dy*dy
+						if d_sq <= rebound_range_sq && d_sq < best_dist_sq {
 							bounce_target = &enemy
-							best_dist = d
+							best_dist_sq  = d_sq
 						}
 					}
 
@@ -1677,9 +1679,11 @@ update_projectiles :: proc(app: ^entities.App_State, dt: f32) {
 				}
 			}
 
-			// Remove projectile si no rebotó
+			// Remove projectile si no rebotó — unordered: el orden de la
+			// lista no importa (efecto visual independiente), evita el
+			// shift O(n) de ordered_remove.
 			if !bounced {
-				ordered_remove(&sim.projectiles, i)
+				unordered_remove(&sim.projectiles, i)
 			}
 		}
 	}
@@ -1691,7 +1695,7 @@ update_explosions :: proc(app: ^entities.App_State, dt: f32) {
 
 	for i := len(sim.explosions) - 1; i >= 0; i -= 1 {
 		if entities.explosion_update(&sim.explosions[i], dt) {
-			ordered_remove(&sim.explosions, i)
+			unordered_remove(&sim.explosions, i)  // orden no importa, ver update_projectiles
 		}
 	}
 }
@@ -1702,7 +1706,7 @@ update_damage_numbers :: proc(app: ^entities.App_State, dt: f32) {
 
 	for i := len(sim.damage_numbers) - 1; i >= 0; i -= 1 {
 		if entities.damage_number_update(&sim.damage_numbers[i], dt) {
-			ordered_remove(&sim.damage_numbers, i)
+			unordered_remove(&sim.damage_numbers, i)  // orden no importa, ver update_projectiles
 		}
 	}
 }
@@ -1713,7 +1717,7 @@ update_hit_particles :: proc(app: ^entities.App_State, dt: f32) {
 
 	for i := len(sim.hit_particles) - 1; i >= 0; i -= 1 {
 		if entities.hit_particle_update(&sim.hit_particles[i], dt) {
-			ordered_remove(&sim.hit_particles, i)
+			unordered_remove(&sim.hit_particles, i)  // orden no importa, ver update_projectiles
 		}
 	}
 }
@@ -1910,7 +1914,7 @@ update_ice_pulses :: proc(app: ^entities.App_State, dt: f32) {
 	sim := &app.sim
 	for i := len(sim.ice_pulses) - 1; i >= 0; i -= 1 {
 		if entities.ice_pulse_update(&sim.ice_pulses[i], dt) {
-			ordered_remove(&sim.ice_pulses, i)
+			unordered_remove(&sim.ice_pulses, i)  // orden no importa, ver update_projectiles
 		}
 	}
 }
@@ -1921,7 +1925,7 @@ update_laser_beams :: proc(app: ^entities.App_State, dt: f32) {
 
 	for i := len(sim.laser_beams) - 1; i >= 0; i -= 1 {
 		if entities.laser_beam_update(&sim.laser_beams[i], dt) {
-			ordered_remove(&sim.laser_beams, i)
+			unordered_remove(&sim.laser_beams, i)  // orden no importa, ver update_projectiles
 		}
 	}
 }
