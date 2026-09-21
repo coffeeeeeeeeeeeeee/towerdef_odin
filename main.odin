@@ -104,6 +104,10 @@ main :: proc() {
 	systems.shadow_map_init()
 	defer systems.shadow_map_unload()
 
+	// Anillos de brillo de spawn/goal-reach — ver glow_ring_shader en rendering.odin
+	systems.glow_ring_shader_init()
+	defer systems.glow_ring_shader_unload()
+
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
 	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)

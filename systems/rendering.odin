@@ -194,6 +194,35 @@ shadow_map_unload :: proc() {
 	rlgl.UnloadFramebuffer(shadow_map.fbo_id)
 }
 
+// ── Glow ring shader (anillos de spawn/goal-reach) ───────────────────────────
+//
+// Portado del viejo assets/glow_circle.glsl (2D, borrado en la migración a
+// 3D) — ver draw_glow_ring_3d/render_glow_particles_3d. Anillo con falloff
+// gaussiano, no un disco de borde duro como draw_ground_ring.
+glow_ring_shader: raylib.Shader
+
+glow_ring_shader_init :: proc() {
+	glow_ring_shader = raylib.LoadShader("assets/glow_ring.vs", "assets/glow_ring.fs")
+}
+
+glow_ring_shader_unload :: proc() {
+	raylib.UnloadShader(glow_ring_shader)
+}
+
+// Quad chato sobre el plano XZ, UV (0,0)-(1,1) en las esquinas para que el
+// fragment shader arme uv*2-1 ∈ [-1,1] y calcule el anillo centrado. Debe
+// dibujarse dentro de un BeginShaderMode(glow_ring_shader) activo.
+draw_glow_ring_3d :: proc(center: raylib.Vector3, radius: f32, color: raylib.Color) {
+	half := radius * 2.2  // mismo factor que el viejo glow_circle.glsl (quad_half = radius*2.2)
+	rlgl.Begin(rlgl.QUADS)
+	rlgl.Color4ub(color.r, color.g, color.b, color.a)
+	rlgl.TexCoord2f(0, 0); rlgl.Vertex3f(center.x - half, center.y, center.z - half)
+	rlgl.TexCoord2f(0, 1); rlgl.Vertex3f(center.x - half, center.y, center.z + half)
+	rlgl.TexCoord2f(1, 1); rlgl.Vertex3f(center.x + half, center.y, center.z + half)
+	rlgl.TexCoord2f(1, 0); rlgl.Vertex3f(center.x + half, center.y, center.z - half)
+	rlgl.End()
+}
+
 // Sube lightSpaceMatrix + bindea shadow_map.depth_tex como sampler2D en
 // lighting_shader. shadow_map.depth_tex NO es parte de un Material (no
 // hay Model/Mesh detrás, es una textura suelta) — raylib.SetShaderValueTexture
@@ -1772,7 +1801,9 @@ render_laser_beams_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 // dy_start/dy_end vienen en convención screen-space (negativo = arriba) —
 // se invierte el signo para el mundo 3D (arriba = +Y).
 render_glow_particles_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	if len(app.sim.glow_particles) == 0 { return }
 	cs := constants.WORLD_CELL_SIZE
+	raylib.BeginShaderMode(glow_ring_shader)
 	for &p in app.sim.glow_particles {
 		progress := p.t / p.lifetime
 		ease := progress * progress
@@ -1781,8 +1812,16 @@ render_glow_particles_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 		dy_cells := p.dy_start + (p.dy_end - p.dy_start) * ease
 		pos := world_from_centered_grid(m, p.grid_x, p.grid_y)
 		pos.y += -dy_cells * cs + 0.05
-		draw_ground_ring(pos, radius * cs, raylib.Color{255, 255, 255, alpha})
+		// SPAWN: anillos blancos. GOAL_REACH: rojo oscuro — mismo criterio
+		// que el viejo glow_circle.glsl 2D (comentario original: "enemy
+		// spawn = white circles rise; goal reach = dark red circles fall").
+		tint := raylib.Color{255, 255, 255, alpha}
+		if p.kind == .GOAL_REACH {
+			tint = raylib.Color{200, 60, 60, alpha}
+		}
+		draw_glow_ring_3d(pos, radius * cs, tint)
 	}
+	raylib.EndShaderMode()
 }
 
 render_gameplay_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {

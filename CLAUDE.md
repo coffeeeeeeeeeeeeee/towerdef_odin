@@ -841,6 +841,30 @@ ridged noise, que es para "ondulación continua" como las dunas).
 excluyentes entre sí vía `groundMix` en `lighting.fs` (además de excluidos
 de tiles de camino/agua).
 
+## Anillos de brillo de spawn/goal-reach (glow_ring.vs/.fs)
+
+La ráfaga de 4 anillos que sale al aparecer un enemigo (blancos, suben) o al
+llegar al goal (rojo oscuro, caen y se contraen) — no es la ficha de spawn/
+goal en sí (eso siempre fue un disco plano de color sólido, `render_spawn_3d`/
+`render_goal_3d`, sin sombra ni animación, en 2D y en 3D por igual). La
+lógica CPU (`Glow_Particle`, `spawn_glow_particles` en `simulation.odin`, 4
+anillos por evento, `LIFETIME=0.5s`, easing cuadrático) nunca se tocó en la
+migración a 3D — lo que se perdió fue el shader: el viejo `assets/glow_circle.glsl`
+(2D, con falloff gaussiano centrado en `d=0.45` del UV) se borró junto con
+el resto de los shaders 2D-only, y `render_glow_particles_3d` quedó
+dibujando un `draw_ground_ring` de borde duro (`DrawCircle3D`) en su lugar.
+
+`glow_ring.vs`/`glow_ring.fs` portan el mismo cálculo de anillo (mismo
+falloff, mismos números) a una malla 3D real: `draw_glow_ring_3d` dibuja un
+quad chato sobre el plano XZ en modo inmediato de rlgl (`rlgl.Begin(QUADS)`),
+con UV (0,0)-(1,1) en las esquinas para que el fragment shader arme
+`uv*2-1`. El color/alpha (tinte por `kind` + fade-out por vida) se resuelven
+en Odin antes de dibujar y viajan por `fragColor` — el shader no tiene
+uniform de tinte separado. `render_glow_particles_3d` ahora envuelve el
+loop en un único `BeginShaderMode(glow_ring_shader)`/`EndShaderMode`, fuera
+del shader de iluminación (sigue sin normales, mismo criterio que los
+demás rings/líneas).
+
 ## Fondo animado (nebula.glsl)
 
 Activado vía `constants.NEBULA_BACKGROUND_ENABLED :: true` (gatea la
