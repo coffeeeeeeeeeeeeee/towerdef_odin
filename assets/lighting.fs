@@ -15,6 +15,16 @@ uniform vec3 fillDir;
 uniform vec3 fillColor;
 uniform vec3 ambient;
 
+// Especular suave (Blinn-Phong), solo para superficies duras/mojadas —
+// torres (bracket puntual en render_map_objects_3d) y agua (siempre que
+// useTerrainMask+isWater estén activos). La cámara es de ángulo fijo
+// (CAMERA_PITCH_DEG, nunca rota), así que viewDir es una constante más,
+// igual que sunDir/fillDir — no depende de la posición del fragmento.
+uniform vec3 viewDir;          // normalizado, apunta DESDE la superficie HACIA la cámara
+uniform float specularStrength; // 0 por defecto; solo >0 mientras se dibujan torres
+const float SPECULAR_SHININESS = 20.0;   // bajo = brillo ancho/suave, no un glint puntual
+const float SPECULAR_STRENGTH_WATER = 0.35;
+
 // Máscaras del terreno (1 texel por tile, sin filtrar — bordes nítidos).
 // Solo el material del terreno prende useTerrainMask; las formas inmediatas
 // (torres, enemigos, ...) que comparten este shader la dejan en 0 y usan
@@ -437,6 +447,16 @@ void main() {
     float sunDiff = max(dot(n, sunDir), 0.0);
     float fillDiff = max(dot(n, fillDir), 0.0);
     vec3 lit = ambient + sunColor * sunDiff + fillColor * fillDiff;
+
+    // Especular: en terreno solo sobre agua (isWater), en formas inmediatas
+    // (torres) solo mientras specularStrength está prendido desde Odin.
+    float specMask = (useTerrainMask > 0.5) ? isWater * SPECULAR_STRENGTH_WATER : specularStrength;
+    if (specMask > 0.001) {
+        vec3 halfVec = normalize(sunDir + viewDir);
+        float spec = pow(max(dot(n, halfVec), 0.0), SPECULAR_SHININESS) * specMask;
+        lit += vec3(spec);
+    }
+
     // Clamp de seguridad: si las intensidades suman más de 1.0 en algún
     // canal, el color de base se satura a blanco y deja de notarse.
     lit = clamp(lit, 0.0, 1.0);

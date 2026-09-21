@@ -25,7 +25,7 @@ instalar Raylib aparte).
 # Desde la raíz del proyecto
 odin run . -out:towerdef      # compila y corre
 odin build . -out:towerdef    # solo compila
-odin build . -out:towerdef -opt:3   # build de release
+odin build . -out:towerdef -o:speed # build de release
 ```
 
 En Windows es el mismo comando, agregando `.exe` al `-out:`. Las APIs de
@@ -39,19 +39,24 @@ Si el compilador instalado es más nuevo que el último commit del proyecto,
 pueden aparecer errores de compilación por APIs de `core:os` que cambiaron
 de firma. Ver el commit `6f8034f` para un ejemplo de los parches típicos que
 hacen falta (allocator explícito en `read_dir`/`fstat`, `Error` en vez de
-`bool` en `write_entire_file`, etc).
+`bool` en `write_entire_file`, etc). El flag de optimización también cambió
+de nombre en algún punto: `-opt:3` ya no existe, ahora es `-o:speed`
+(opciones: `none`/`minimal`/`size`/`speed`).
 
 ### Cross-compilar a Windows desde Linux
 
 `odin build . -out:towerdef.exe -target:windows_amd64` falla en el paso de
 linkeo: el compilador imprime `Linking for cross compilation for this
 platform is not yet supported (windows amd64)` y aborta, pero **sí** deja
-los `.o` intermedios en `/tmp` (`keep_object_files` se activa
-automáticamente en ese caso) con el prefijo `<out-name>-<paquete>-<hash>.obj`.
-Se puede linkear esos objetos a mano:
+un objeto intermedio (`keep_object_files` se activa automáticamente en ese
+caso). En versiones recientes de Odin es un único `.obj` combinado en la
+raíz del proyecto (`<out-name>.obj`), no uno por paquete en `/tmp` como en
+versiones viejas — revisar cuál aparece antes de armar el comando de link.
+Se puede linkear ese objeto a mano:
 
-1. Limpiar `/tmp/<out-name>*.obj` de builds previos antes de compilar, para
-   no mezclar objetos de dos intentos distintos (los hashes no son
+1. Si el objeto aparece en `/tmp` con prefijo `<out-name>-<paquete>-<hash>.obj`
+   (versiones viejas de Odin), limpiar los de builds previos antes de
+   compilar para no mezclar intentos distintos (los hashes no son
    puramente por contenido).
 2. `sudo apt-get install mingw-w64 lld` — hacen falta el linker `ld.lld`
    (en modo mingw, `-m i386pep`) y los import libs de mingw
@@ -72,19 +77,27 @@ Se puede linkear esos objetos a mano:
      floating point", no se llama, solo debe *existir*).
    - `__chkstk` (probe de stack; mingw solo trae `___chkstk`/`___chkstk_ms`
      con guiones bajos de más — un `jmp ___chkstk_ms` en asm alcanza).
-5. Comando de link (ajustar rutas de gcc/mingw según la versión instalada):
+5. Comando de link (ajustar rutas de gcc/mingw según la versión instalada —
+   en esta máquina existe `13-posix`, no `13-win32`; el `.lib` de Windows de
+   Raylib vive en `vendor/raylib/windows/` **dentro del install de Odin**
+   (`$(odin root)/vendor/raylib/windows/raylibdll.lib`), no en el repo del
+   proyecto):
    ```bash
+   GCCDIR=/usr/lib/gcc/x86_64-w64-mingw32/13-posix
+   RAYWIN=<odin-root>/vendor/raylib/windows
    ld.lld -m i386pep -o towerdef.exe --subsystem windows -e mainCRTStartup \
      /usr/x86_64-w64-mingw32/lib/crt2.o \
-     /usr/lib/gcc/x86_64-w64-mingw32/13-win32/crtbegin.o \
-     /tmp/towerdef*.obj \
+     $GCCDIR/crtbegin.o \
+     towerdef.obj \
      shim_fltused.o shim_chkstk.o \
-     vendor/raylib/windows/raylibdll.lib \
-     -L/usr/lib/gcc/x86_64-w64-mingw32/13-win32 -L/usr/x86_64-w64-mingw32/lib \
+     $RAYWIN/raylibdll.lib \
+     -L$GCCDIR -L/usr/x86_64-w64-mingw32/lib \
      -lmingw32 -lgcc -lgcc_eh -lmoldname -lmingwex -lmsvcrt \
      -lkernel32 -ladvapi32 -lshell32 -luser32 -lgdi32 -lwinmm -lopengl32 -lole32 -lbcrypt \
-     /usr/lib/gcc/x86_64-w64-mingw32/13-win32/crtend.o
+     $GCCDIR/crtend.o
    ```
+   No olvidar copiar `$RAYWIN/raylib.dll` junto al `.exe` al empaquetar —
+   el `.exe` la importa en tiempo de ejecución (ver paso 3).
 6. El `.exe` resultante solo importa DLLs estándar de Windows +
    `raylib.dll` (comprobado con `objdump -p towerdef.exe | grep "DLL Name"`).
    No se probó corriéndolo (no hay Wine/Windows en esta máquina) — si falla
@@ -432,11 +445,20 @@ activo (lo usa `Pause_Blur`, ver más abajo), que es un caso distinto.
 
 Dos detalles visuales que el 2D tenía y no tenían equivalente al migrar se
 portaron a geometría 3D real, ambos en `render_map_objects_3d`:
-- **Rieles de puente** (`render_bridge_railings_3d`): en tiles de PATH
-  sobre agua, un `DrawCube` fino por cada borde que NO conecta con otro
-  tile de camino (mismo criterio de vecinos que el viejo `is_path_like`).
-  El tile en sí ya se ve como camino por la máscara horneada en
-  `terrain_cache`, esto solo agrega la baranda.
+- **Puente** (`render_bridge_3d`, piso + barandas): en tiles de PATH sobre
+  agua, el piso tiene el mismo ancho que la franja de camino embossed en
+  tierra (`PATH_WIDTH_RATIO`) — un cuadrado central más un tablón por cada
+  borde conectado, cada uno llegando justo hasta el borde del tile para
+  empalmar sin hueco con el tablón del tile vecino. Altura: el heightmap del
+  tile **ignorando el flag de agua** (el heightmap sigue teniendo un valor
+  de "tierra" válido debajo de `water_grid`, continuo con los tiles vecinos
+  por construcción del ruido — así el piso queda a nivel con la orilla en
+  vez de a la altura fija y baja de `WORLD_WATER_HEIGHT`), más un `DrawCube`
+  fino de baranda por cada borde que NO conecta con otro tile de camino
+  (mismo criterio de vecinos que `is_path_like`), apoyada sobre el piso. El
+  agua real sigue estando ahí debajo — la malla del terreno no se toca,
+  sigue siendo agua a `WORLD_WATER_HEIGHT` (ver
+  `_terrain_tile_height_color`); el puente es geometría aparte por encima.
 - **Nenúfares** (`render_water_lily_3d`): árboles (`ACCESSORY_TREE`) que
   caen en un tile de agua ya no se dibujan como árbol — en su lugar, 2-4
   discos chatos (`DrawCylinder` muy bajo, raylib no tiene un círculo 3D
@@ -449,6 +471,59 @@ matchea en `app.sim.towers` — cuando no hay uno (EDITOR, o el preview de un
 mapa que no tiene una simulación asociada) cae a un fallback: forma
 genérica a partir del tipo de tile (`tile_to_tower_type` +
 `draw_tower_shape_3d`), igual criterio que ya usaba el render 2D viejo.
+
+### Camino "embossed" (hundido) — malla subdividida + desplazamiento en el VS
+
+El camino no es solo color: la malla del terreno se genera subdividida
+(`TERRAIN_MESH_SUBDIV` sub-quads por tile, `_terrain_corner_lerp` interpola
+bilinealmente entre las 4 esquinas de `_terrain_corner` — sin camino cerca,
+esto no cambia la forma del terreno, solo la hace más densa) y
+`lighting.vs` hunde los vértices de una franja angosta (ancho
+`PATH_WIDTH_RATIO`) restando `pathMaskTexel`/`pathEmbossDepth *
+texture(texture0, uv).r` de `vertexPosition.y`, con la normal reperturbada
+por diferencia central de la misma máscara (si no, la pared tallada se ve
+"pintada" en vez de con relieve real). La máscara (`texture0`, slot ALBEDO)
+ya no es 1 texel/tile con `POINT` — es supersampleada
+(`PATH_MASK_SUBDIV` texels/tile, `BILINEAR`) y su forma de franja/cruz la
+calcula `_path_strip_mask` en CPU (distancia del punto a los segmentos
+centro-de-tile → punto-medio-de-cada-borde-conectado, mismo criterio
+`is_path_like` que `render_bridge_3d` — PATH/SPAWN/GOAL cuentan
+todos como camino, así que la franja hundida atraviesa entera la casilla de
+spawn y la de meta también). Un solo dato (`texture0`)
+sirve para pintar `pathColor` en el fragment shader **y** para hundir en el
+vertex shader — eso es intencional, no hay dos máscaras separadas.
+
+Un tile de camino sobre agua (puente) queda excluido del hundimiento
+(`texture1`, la máscara de agua, actúa de guard en el VS) — el agua ya está
+a su propia altura fija (`WORLD_WATER_HEIGHT`) y el puente debe quedar a
+nivel de sus rieles, no tallado.
+
+**Trampa:** `texture0`/`texture1` se declaran también en `lighting.vs` (no
+solo en el `.fs`) para poder samplearlas ahí — `useTerrainMask` gatea el
+hundimiento igual que ya gatea el color, así que formas inmediatas
+(torres/enemigos) que comparten el shader nunca se hunden aunque su
+material no tenga bindeada ninguna de las dos texturas.
+
+**Trampa ya pisada:** unir las distancias a cada brazo de la cruz con `min()`
+deja una cresta dura donde dos campos de distancia empatan (la bisectriz del
+ángulo en curvas/T) — la normal recalculada por diferencia central pega un
+salto ahí y desde ciertos ángulos de cámara se ve como un pliegue raro en la
+esquina. Se probó "smooth minimum" (smin polinómico, IQ) para redondear esa
+unión y **empeoró**: al encadenar smin sobre 3-4 segmentos (tiles T/cruz) el
+hundimiento se cava de más, cada combinación sucesiva profundiza otro poco.
+La solución que quedó es más simple y predecible: un blur en cruz (centro +
+4 vecinos ortogonales, sin diagonales) aplicado a la textura de máscara ya
+rasterizada (`terrain_cache_ensure`, justo antes de subirla a GPU) —
+emprolija la cresta en la imagen en vez de tocar el campo de distancia
+analítico, con una caja más chica que un 3x3 completo para no difuminar de
+más el resto del borde.
+
+**Spawn y goal se hunden con el camino** — la plataforma (`render_spawn_3d`/
+`render_goal_3d`) se planta con `tile_world_top`, que no sabe nada del
+hundimiento (es CPU, el hundimiento es puramente del shader). Para que no
+quede flotando sobre la malla hundida, `_path_emboss_offset(m, row, col)`
+recalcula cuánto baja el CENTRO del tile (mismo `_path_strip_mask` evaluado
+en `u=v=0.5`, con guard de agua) y se lo resta a la `y` antes de dibujar.
 
 ## Vidrio esmerilado de la pantalla de Pausa (`Pause_Blur`)
 
@@ -483,6 +558,73 @@ pausa) así que el resultado es idéntico frame a frame, pero cachear traería
 complejidad de invalidación (resize de ventana, etc.) sin beneficio real:
 redirigir el render normal a una textura + 2 pasadas de blur no es más caro
 que lo que ya se dibuja hoy en pantalla.
+
+## Iluminación 3D — especular, sombras de contacto, ciclo día/noche
+
+Modelo base sigue siendo Lambertiano simple (`3D_RENDER_PLAN.md`), pero ya
+no es 100% estático:
+
+- **Valores base** (`LIGHT_SUN_DIR`/`LIGHT_SUN_COLOR`/`LIGHT_FILL_DIR`/
+  `LIGHT_FILL_COLOR`/`LIGHT_AMBIENT` en `constants.odin`) centralizan lo que
+  antes eran literales sueltos en `lighting_shader_init`. Estos 5 valores
+  ahora también son el keyframe `.NOON` del ciclo día/noche (ver abajo) — no
+  son solo "el valor fijo", son "el valor de referencia al mediodía".
+- **Especular suave** (`viewDir`/`specularStrength` en `lighting.fs`): solo
+  torres (bracket puntual alrededor de su draw en `render_map_objects_3d`,
+  vía `LIGHT_SPECULAR_STRENGTH_TOWER`) y agua (siempre activo mientras
+  `useTerrainMask`+`isWater`, multiplicador fijo `SPECULAR_STRENGTH_WATER`
+  dentro del shader). `viewDir` es una constante (cámara de ángulo fijo,
+  nunca rota) derivada del mismo `CAMERA_PITCH_DEG` que usa
+  `camera3d_for_focus` — si ese ángulo cambia, el especular se recalcula
+  solo en el próximo `lighting_shader_init`.
+- **Sombras de contacto** (`draw_contact_shadow_3d`): discos finos sin
+  iluminar (mismo patrón que los pads de nenúfar y los rings de estado),
+  dibujados en pre-passes ANTES de cada `BeginShaderMode` — uno nuevo en
+  `render_map_objects_3d` para torres/árboles(no sobre agua)/bloques, y uno
+  (`render_enemy_contact_shadows_3d`) en el pre-pass sin iluminar que ya
+  existía en `render_gameplay_3d`. Se omiten `.FLYING` (v1).
+- **Ciclo día/noche**: `DAY_NIGHT_KEYFRAMES` (4 fases —
+  DAWN/NOON/DUSK/NIGHT, `constants.odin`) interpoladas linealmente en
+  `day_night_sample` (`rendering.odin`), evaluadas cada frame en
+  `render_map_3d`. Rompe a propósito la asunción original de "sunDir/
+  sunColor/fillColor/ambient se setean una vez en init y no cambian" — se
+  actualizan por `SetShaderValue` cada frame. Acumulador
+  `lighting_shader.day_night_anim_time`, dt-clampeado, mismo patrón que
+  dune/caustics/grass, pero gateado a `app.state == .PLAYING` (el preview
+  de miniatura de mapa fuerza `.EDITOR` temporalmente, así que ya queda
+  excluido sin código extra). Sin toggle en Settings — siempre activo,
+  `DAY_NIGHT_CYCLE_SPEED` bajo a propósito (~6-7 min por ciclo completo).
+  El especular (arriba) se recalcula solo frame a frame porque `halfVec`
+  depende de `sunDir` en el fragment shader, no de un valor cacheado — pero
+  su intensidad no fue re-chequeada contra los keyframes NIGHT/DUSK más
+  oscuros/saturados, solo contra NOON.
+
+**Trampa real (no la de arriba) — `raylib.DrawCylinder`/`DrawCylinderEx` no
+tienen normal real:** el comentario de `lighting.vs` sobre "locations
+explícitas" solo resuelve que el atributo de normal aterrice en el slot
+correcto (2) — nunca garantizó que `rlgl` tuviera un valor *distinto por
+vértice* ahí adentro. `raylib.DrawCylinder`/`DrawCylinderEx` (a diferencia
+de `DrawCube`, que sí llama `rlNormal3f` por cara) no llaman `rlNormal3f`
+en absoluto: el atributo de normal que le llega al shader es el que haya
+quedado de la última llamada a `rlNormal3f` en TODO el frame — constante
+para el objeto entero. Efecto visible: el cuerpo/cañón de las torres (las
+únicas formas del juego dibujadas con `DrawCylinder`/`DrawCylinderEx` bajo
+el shader de iluminación) se veían como una silueta plana de un solo tono,
+sin gradiente de luz/sombra, en vez de un cilindro tallado. Fix: dos
+helpers nuevos en `rendering.odin` (`draw_cylinder_lit_3d` para el cuerpo,
+`draw_cylinder_ex_lit_3d` para el cañón) que dibujan la misma geometría a
+mano vía `rlgl.Begin/Normal3f/Vertex3f/End`, con normal radial real por
+vértice (más plana en las tapas). `draw_tower_shape_3d` los usa en vez de
+`raylib.DrawCylinder`/`DrawCylinderEx`. **No se tocó nada más** — el resto
+de los `DrawCylinder` del proyecto (nenúfares, sombras de contacto,
+spawn/goal, proyectiles, árboles/bloques que usan `DrawCube`) no se
+corrigieron: o están fuera del shader de iluminación (no les importa la
+normal) o son formas chicas/finas donde la falta de normal real no se nota
+a simple vista. Si en algún momento se nota lo mismo en otro objeto bajo
+`BeginShaderMode(lighting_shader...)` — confirmado que `DrawCube` sí llama
+`rlNormal3f` por cara (no tiene este problema); no se verificó `DrawSphere`
+(usada por enemigos) — el mismo patrón de helpers manuales por `rlgl`
+aplicaría si hiciera falta.
 
 ## Overlays de bioma del terreno 3D (dunas, roca, pasto, cáusticas)
 

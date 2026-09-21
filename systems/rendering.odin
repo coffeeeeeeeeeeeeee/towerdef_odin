@@ -6,6 +6,7 @@ import "core:fmt"
 import "core:math"
 import "core:math/linalg"
 import "vendor:raylib"
+import "vendor:raylib/rlgl"
 
 // ── Nebula background shader ──────────────────────────────────────────────────
 
@@ -246,8 +247,12 @@ Lighting_Shader :: struct {
 	loc_fill_dir:    i32,
 	loc_fill_color:  i32,
 	loc_ambient:     i32,
+	loc_view_dir:    i32,  // constante, cámara de ángulo fijo — ver lighting_shader_init
+	loc_specular_strength: i32,  // 0 por defecto; bracket puntual alrededor del draw de torres
 	loc_use_mask:    i32,  // 1.0 solo mientras se dibuja el terreno (ver render_map_3d)
 	loc_path_color:  i32,
+	loc_path_emboss_depth: i32,  // profundidad fija del hundimiento — ver PATH_EMBOSS_DEPTH
+	loc_path_mask_texel:   i32,  // tamaño de un texel de la máscara de camino, para el gradiente central en el VS
 	loc_water_color:      i32,
 	loc_water_edge_color: i32,
 	loc_dune_seed:    i32,
@@ -268,6 +273,7 @@ Lighting_Shader :: struct {
 	dune_anim_time:     f32,  // acumulado con dt clampeado, no reloj de pared — ver render_map_3d
 	caustics_anim_time: f32,
 	grass_anim_time:    f32,
+	day_night_anim_time: f32,  // idem, gateado a app.state == .PLAYING — ver render_map_3d
 }
 
 lighting_shader: Lighting_Shader
@@ -281,8 +287,12 @@ lighting_shader_init :: proc() {
 		loc_fill_dir     = raylib.GetShaderLocation(s, "fillDir"),
 		loc_fill_color   = raylib.GetShaderLocation(s, "fillColor"),
 		loc_ambient      = raylib.GetShaderLocation(s, "ambient"),
+		loc_view_dir     = raylib.GetShaderLocation(s, "viewDir"),
+		loc_specular_strength = raylib.GetShaderLocation(s, "specularStrength"),
 		loc_use_mask     = raylib.GetShaderLocation(s, "useTerrainMask"),
 		loc_path_color   = raylib.GetShaderLocation(s, "pathColor"),
+		loc_path_emboss_depth = raylib.GetShaderLocation(s, "pathEmbossDepth"),
+		loc_path_mask_texel   = raylib.GetShaderLocation(s, "pathMaskTexel"),
 		loc_water_color      = raylib.GetShaderLocation(s, "waterColor"),
 		loc_water_edge_color = raylib.GetShaderLocation(s, "waterEdgeColor"),
 		loc_dune_seed    = raylib.GetShaderLocation(s, "duneSeed"),
@@ -305,22 +315,32 @@ lighting_shader_init :: proc() {
 	// Luz "sol" alineada con el ángulo de la cámara isométrica (arriba-
 	// adelante), luz de relleno tenue del lado opuesto para que las caras en
 	// sombra no queden negro puro. Direccionales, fijas — no cambian en
-	// runtime.
-	// Intensidades pensadas para que ambient + sol + relleno sumen ~1.0 en la
-	// cara mejor iluminada (el techo del terreno, que mira casi derecho al
-	// sol) — antes sumaban >1.3 y saturaban a blanco, tapando el color de
-	// bioma por completo sin importar cuál estuviera activo.
-	sun_dir := linalg.normalize(raylib.Vector3{0.45, 1.0, 0.3})
-	sun_color := raylib.Vector3{0.55, 0.53, 0.48}
-	fill_dir := linalg.normalize(raylib.Vector3{-0.35, 0.4, -0.5})
-	fill_color := raylib.Vector3{0.12, 0.14, 0.18}
-	ambient := raylib.Vector3{0.45, 0.45, 0.5}
+	// runtime. Valores centralizados en constants.odin (LIGHT_*) — ver esa
+	// sección para la disciplina de "sumar ~1.0 en la cara mejor iluminada".
+	sun_dir := linalg.normalize(constants.LIGHT_SUN_DIR)
+	sun_color := constants.LIGHT_SUN_COLOR
+	fill_dir := linalg.normalize(constants.LIGHT_FILL_DIR)
+	fill_color := constants.LIGHT_FILL_COLOR
+	ambient := constants.LIGHT_AMBIENT
 
 	raylib.SetShaderValue(s, lighting_shader.loc_sun_dir, &sun_dir, .VEC3)
 	raylib.SetShaderValue(s, lighting_shader.loc_sun_color, &sun_color, .VEC3)
 	raylib.SetShaderValue(s, lighting_shader.loc_fill_dir, &fill_dir, .VEC3)
 	raylib.SetShaderValue(s, lighting_shader.loc_fill_color, &fill_color, .VEC3)
 	raylib.SetShaderValue(s, lighting_shader.loc_ambient, &ambient, .VEC3)
+
+	// Dirección cámara fija (nunca rota) → viewDir es una constante, igual
+	// que sunDir/fillDir. Mismo ángulo que usa camera3d_for_focus, para que
+	// si CAMERA_PITCH_DEG cambia algún día el especular se ajuste solo.
+	pitch_rad := constants.CAMERA_PITCH_DEG * math.RAD_PER_DEG
+	view_dir := linalg.normalize(raylib.Vector3{0, math.sin(pitch_rad), math.cos(pitch_rad)})
+	raylib.SetShaderValue(s, lighting_shader.loc_view_dir, &view_dir, .VEC3)
+
+	// Apagado por defecto — solo se prende puntualmente alrededor del draw
+	// de torres (ver render_map_objects_3d). El agua tiene su propio
+	// multiplicador fijo dentro del shader (SPECULAR_STRENGTH_WATER).
+	specular_off := f32(0)
+	raylib.SetShaderValue(s, lighting_shader.loc_specular_strength, &specular_off, .FLOAT)
 
 	// Color de agua fijo (no depende del bioma, a diferencia de pathColor)
 	// — se setea una sola vez acá en vez de en terrain_cache_ensure.
@@ -336,6 +356,12 @@ lighting_shader_init :: proc() {
 	// este shader vía BeginShaderMode nunca deben mezclar color de camino.
 	use_mask_off := f32(0)
 	raylib.SetShaderValue(s, lighting_shader.loc_use_mask, &use_mask_off, .FLOAT)
+
+	// Profundidad del hundimiento del camino — fija, no depende del mapa
+	// (a diferencia de pathMaskTexel, que sí depende del tamaño del mapa y
+	// se setea en terrain_cache_ensure).
+	emboss_depth := constants.PATH_EMBOSS_DEPTH
+	raylib.SetShaderValue(s, lighting_shader.loc_path_emboss_depth, &emboss_depth, .FLOAT)
 }
 
 lighting_shader_unload :: proc() {
@@ -349,13 +375,12 @@ lighting_shader_unload :: proc() {
 // del desnivel sale sola: si dos tiles vecinos tienen distinta altura, la
 // arista que comparten interpola linealmente entre ambas.
 //
-// El color de camino se resuelve aparte, con una textura-máscara (1 texel
-// por tile, filtro POINT = bordes nítidos) sampleada en el fragment shader
-// — así el límite del camino queda nítido pese a que la malla es continua
-// (si fuera solo color de vértice, se difuminaría en cada arista
-// compartida). "Área construible" y "no-camino" son el mismo dato en este
-// juego (todo lo que no es camino se puede construir), así que una sola
-// máscara alcanza para las dos cosas que pedía el usuario.
+// El camino se resuelve con una textura-máscara supersampleada (varios
+// texels por tile, filtro BILINEAR, ver _path_strip_mask) sampleada tanto en
+// el vertex shader (hunde el terreno en una franja angosta — "embossed",
+// PATH_EMBOSS_DEPTH) como en el fragment shader (pathColor, mix con el color
+// de bioma). El mismo dato sirve para las dos cosas: dónde pintar y cuánto
+// hundir son literalmente el mismo valor [0,1].
 Terrain_Cache :: struct {
 	model:          raylib.Model,
 	path_mask_tex:  raylib.Texture2D,
@@ -428,6 +453,80 @@ _terrain_corner :: proc(m: ^entities.Map, r, c: i32, biome_colors: constants.Bio
 	return sum_h / n, sum_c / n
 }
 
+// Altura/color interpolados bilinealmente dentro del tile (row,col), en un
+// punto fraccional (u,v) en [0,1]×[0,1] — u=0/v=0 es la esquina (row,col),
+// u=1/v=1 es (row+1,col+1). Usa las mismas 4 esquinas de _terrain_corner que
+// ya arma el mesh sin subdividir, así que en u,v ∈ {0,1} da exactamente lo
+// mismo que antes — la subdivisión no cambia el terreno, solo lo hace más
+// denso para poder tallar el camino (ver terrain_cache_ensure).
+_terrain_corner_lerp :: proc(m: ^entities.Map, row, col: i32, u, v: f32, biome_colors: constants.Biome_Colors) -> (h: f32, color: [3]f32) {
+	h_tl, c_tl := _terrain_corner(m, row, col, biome_colors)
+	h_tr, c_tr := _terrain_corner(m, row, col + 1, biome_colors)
+	h_bl, c_bl := _terrain_corner(m, row + 1, col, biome_colors)
+	h_br, c_br := _terrain_corner(m, row + 1, col + 1, biome_colors)
+
+	h_top := h_tl + (h_tr - h_tl) * u
+	h_bot := h_bl + (h_br - h_bl) * u
+	h = h_top + (h_bot - h_top) * v
+
+	c_top := c_tl + (c_tr - c_tl) * u
+	c_bot := c_bl + (c_br - c_bl) * u
+	color = c_top + (c_bot - c_top) * v
+	return
+}
+
+// Máscara del camino "embossed": valor [0,1] en un punto fraccional (u,v)
+// dentro del tile (row,col) — 1.0 sobre la línea central de la franja de
+// camino (ancho PATH_WIDTH_RATIO), con falloff suave hacia 0 en el borde.
+// Se usa tanto para pintar pathColor como para el hundimiento (lighting.vs)
+// — un solo dato para las dos cosas. La franja se modela como segmentos
+// centro-del-tile → punto-medio-de-cada-borde-conectado (forma de cruz),
+// reusando el mismo criterio PATH/SPAWN/GOAL que render_bridge_3d
+// y obstacle_bar_dims para decidir qué vecinos "cuentan" como camino.
+_path_strip_mask :: proc(m: ^entities.Map, row, col: i32, u, v: f32) -> f32 {
+	is_path_like :: proc(m: ^entities.Map, r, c: i32) -> bool {
+		if r < 0 || r >= m.height || c < 0 || c >= m.width { return false }
+		t := m.grid[r][c]
+		return t == .PATH || t == .SPAWN || t == .GOAL
+	}
+	if !is_path_like(m, row, col) { return 0 }
+
+	dist_to_segment :: proc(p, a, b: raylib.Vector2) -> f32 {
+		ab := b - a
+		denom := linalg.dot(ab, ab)
+		t: f32 = 0
+		if denom > 0 { t = clamp(linalg.dot(p - a, ab) / denom, 0, 1) }
+		closest := a + ab * t
+		return linalg.length(p - closest)
+	}
+
+	p := raylib.Vector2{u - 0.5, v - 0.5}
+	center := raylib.Vector2{0, 0}
+	half_width := f32(constants.PATH_WIDTH_RATIO) * 0.5
+
+	best := f32(1e9)
+	found := false
+	if is_path_like(m, row - 1, col) { best = min(best, dist_to_segment(p, center, {0, -0.5})); found = true }
+	if is_path_like(m, row + 1, col) { best = min(best, dist_to_segment(p, center, {0, 0.5}));  found = true }
+	if is_path_like(m, row, col - 1) { best = min(best, dist_to_segment(p, center, {-0.5, 0})); found = true }
+	if is_path_like(m, row, col + 1) { best = min(best, dist_to_segment(p, center, {0.5, 0}));  found = true }
+	d := best if found else linalg.length(p - center)
+
+	soft := constants.PATH_EDGE_SOFTNESS * half_width
+	return 1.0 - math.smoothstep(half_width - soft, half_width + soft, d)
+}
+
+// Cuánto hay que bajar un objeto plantado en el CENTRO de un tile para que
+// se apoye sobre la malla ya hundida (spawn/goal, ver render_map_objects_3d)
+// — el vértice-centro no existe como tal en la malla (la subdivisión cae en
+// múltiplos de 1/TERRAIN_MESH_SUBDIV), pero _path_strip_mask en (0.5, 0.5)
+// da exactamente el mismo valor que interpola el shader ahí. Sin agua de por
+// medio (bridge), igual que el guard de lighting.vs.
+_path_emboss_offset :: proc(m: ^entities.Map, row, col: i32) -> f32 {
+	if m.water_grid[row][col] { return 0 }
+	return _path_strip_mask(m, row, col, 0.5, 0.5) * constants.PATH_EMBOSS_DEPTH
+}
+
 terrain_cache_ensure :: proc(m: ^entities.Map) {
 	if terrain_cache.valid { return }
 
@@ -443,26 +542,40 @@ terrain_cache_ensure :: proc(m: ^entities.Map) {
 	biome_colors := constants.BIOME_COLORS[m.biome]
 	cs := constants.WORLD_CELL_SIZE
 
-	// world_corner: posición de mundo (X,Z) + altura promediada de la
-	// esquina de grilla (r,c). uv mapea 1:1 a la textura-máscara del camino.
-	world_corner :: proc(m: ^entities.Map, r, c: i32, biome_colors: constants.Biome_Colors, cs: f32) -> (pos: raylib.Vector3, uv: raylib.Vector2, color: raylib.Color) {
-		h, col3 := _terrain_corner(m, r, c, biome_colors)
-		pos = {f32(c) * cs, h, f32(r) * cs}
-		uv = {f32(c) / f32(m.width), f32(r) / f32(m.height)}
+	// sub_vertex: posición de mundo (X,Z) + altura interpolada bilinealmente
+	// del punto (su,sv en [0,SUBDIV]) dentro del tile (row,col). uv mapea 1:1
+	// a la textura-máscara del camino. La malla se subdivide (en vez de un
+	// solo quad por tile) para poder tallar una franja angosta de camino
+	// hundida dentro del tile — ver _path_strip_mask y lighting.vs. En las
+	// esquinas del tile (su/sv en {0,SUBDIV}) da exactamente lo mismo que la
+	// vieja world_corner, así que el terreno sin camino no cambia de forma.
+	SUBDIV :: constants.TERRAIN_MESH_SUBDIV
+	sub_vertex :: proc(m: ^entities.Map, row, col, su, sv: i32, biome_colors: constants.Biome_Colors, cs: f32) -> (pos: raylib.Vector3, uv: raylib.Vector2, color: raylib.Color) {
+		u := f32(su) / f32(SUBDIV)
+		v := f32(sv) / f32(SUBDIV)
+		h, col3 := _terrain_corner_lerp(m, row, col, u, v, biome_colors)
+		wc := f32(col) + u
+		wr := f32(row) + v
+		pos = {wc * cs, h, wr * cs}
+		uv = {wc / f32(m.width), wr / f32(m.height)}
 		color = raylib.Color{u8(col3.r), u8(col3.g), u8(col3.b), 255}
 		return
 	}
 
 	for row in 0 ..< m.height {
 		for col in 0 ..< m.width {
-			p_tl, uv_tl, c_tl := world_corner(m, row, col, biome_colors, cs)
-			p_tr, uv_tr, c_tr := world_corner(m, row, col + 1, biome_colors, cs)
-			p_bl, uv_bl, c_bl := world_corner(m, row + 1, col, biome_colors, cs)
-			p_br, uv_br, c_br := world_corner(m, row + 1, col + 1, biome_colors, cs)
+			for sv in i32(0) ..< SUBDIV {
+				for su in i32(0) ..< SUBDIV {
+					p_tl, uv_tl, c_tl := sub_vertex(m, row, col, su,     sv,     biome_colors, cs)
+					p_tr, uv_tr, c_tr := sub_vertex(m, row, col, su + 1, sv,     biome_colors, cs)
+					p_bl, uv_bl, c_bl := sub_vertex(m, row, col, su,     sv + 1, biome_colors, cs)
+					p_br, uv_br, c_br := sub_vertex(m, row, col, su + 1, sv + 1, biome_colors, cs)
 
-			// 2 triángulos por tile, CCW visto desde +Y en ambos.
-			_terrain_push_tri(&positions, &normals, &texcoords, &colors, p_tl, p_bl, p_tr, uv_tl, uv_bl, uv_tr, c_tl, c_bl, c_tr)
-			_terrain_push_tri(&positions, &normals, &texcoords, &colors, p_tr, p_bl, p_br, uv_tr, uv_bl, uv_br, c_tr, c_bl, c_br)
+					// 2 triángulos por sub-quad, CCW visto desde +Y en ambos.
+					_terrain_push_tri(&positions, &normals, &texcoords, &colors, p_tl, p_bl, p_tr, uv_tl, uv_bl, uv_tr, c_tl, c_bl, c_tr)
+					_terrain_push_tri(&positions, &normals, &texcoords, &colors, p_tr, p_bl, p_br, uv_tr, uv_bl, uv_br, c_tr, c_bl, c_br)
+				}
+			}
 		}
 	}
 
@@ -488,27 +601,68 @@ terrain_cache_ensure :: proc(m: ^entities.Map) {
 	model := raylib.LoadModelFromMesh(mesh)
 	model.materials[0].shader = lighting_shader.shader
 
-	// Textura-máscara de camino: 1 texel por tile, R8, POINT filter (sin
-	// blur — el límite del camino tiene que quedar nítido). 255 = tile de
-	// camino, 0 = resto del mapa (agua incluida — el agua ya tiene su color
-	// propio vía vertex color, la máscara no la toca).
-	mask_pixels := make([]u8, int(m.width) * int(m.height))
+	// Textura-máscara de camino: supersampleada (PATH_MASK_SUBDIV texels por
+	// tile en cada eje), R8, BILINEAR filter — a diferencia de la vieja
+	// versión de 1 texel/tile + POINT, acá el valor de cada texel es la
+	// franja angosta de _path_strip_mask (1.0 en el centro del camino,
+	// falloff suave hacia 0 en el borde), así que hace falta blur real para
+	// que el borde de la franja se vea suave. Este mismo dato pinta
+	// pathColor (lighting.fs) Y hunde el terreno (lighting.vs) — ver
+	// PATH_EMBOSS_DEPTH.
+	mask_w := m.width * constants.PATH_MASK_SUBDIV
+	mask_h := m.height * constants.PATH_MASK_SUBDIV
+	mask_pixels := make([]u8, int(mask_w) * int(mask_h))
 	defer delete(mask_pixels)
-	for row in 0 ..< m.height {
-		for col in 0 ..< m.width {
-			v: u8 = 255 if m.grid[row][col] == .PATH else 0
-			mask_pixels[row * m.width + col] = v
+	for ty in 0 ..< mask_h {
+		row := ty / constants.PATH_MASK_SUBDIV
+		v := (f32(ty % constants.PATH_MASK_SUBDIV) + 0.5) / f32(constants.PATH_MASK_SUBDIV)
+		for tx in 0 ..< mask_w {
+			col := tx / constants.PATH_MASK_SUBDIV
+			u := (f32(tx % constants.PATH_MASK_SUBDIV) + 0.5) / f32(constants.PATH_MASK_SUBDIV)
+			mask_val := _path_strip_mask(m, row, col, u, v)
+			mask_pixels[ty * mask_w + tx] = u8(clamp(mask_val, 0, 1) * 255)
 		}
 	}
+
+	// Blur en cruz (centro + 4 vecinos ortogonales, sin diagonales — caja
+	// más chica que un 3x3 completo) en espacio de texel. En curvas/T, el
+	// min() de arriba entre las distancias a cada brazo del camino deja una
+	// cresta dura donde dos campos empatan — la normal del VS sale de
+	// diferencias finitas de esta misma textura, así que ese escalón se
+	// traduce en un pliegue raro visible desde ciertos ángulos de cámara.
+	// Emprolijar acá, en la imagen ya rasterizada, es más predecible que
+	// redondear el campo de distancia analítico (probado y revertido:
+	// "smooth minimum" sobre 3-4 segmentos combinados en cadena termina
+	// hundiendo de más, empeora en vez de mejorar).
+	{
+		blurred := make([]u8, len(mask_pixels))
+		defer delete(blurred)
+		OFFSETS := [5][2]i32{{0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1}}
+		for ty in 0 ..< mask_h {
+			for tx in 0 ..< mask_w {
+				sum := 0
+				n := 0
+				for off in OFFSETS {
+					sx, sy := tx + off[0], ty + off[1]
+					if sx < 0 || sx >= mask_w || sy < 0 || sy >= mask_h { continue }
+					sum += int(mask_pixels[sy * mask_w + sx])
+					n += 1
+				}
+				blurred[ty * mask_w + tx] = u8(sum / n)
+			}
+		}
+		copy(mask_pixels, blurred)
+	}
+
 	mask_img := raylib.Image{
 		data    = raw_data(mask_pixels),
-		width   = m.width,
-		height  = m.height,
+		width   = mask_w,
+		height  = mask_h,
 		mipmaps = 1,
 		format  = .UNCOMPRESSED_GRAYSCALE,
 	}
 	mask_tex := raylib.LoadTextureFromImage(mask_img)
-	raylib.SetTextureFilter(mask_tex, .POINT)
+	raylib.SetTextureFilter(mask_tex, .BILINEAR)
 	raylib.SetTextureWrap(mask_tex, .CLAMP)
 	model.materials[0].maps[raylib.MaterialMapIndex.ALBEDO].texture = mask_tex
 
@@ -554,6 +708,8 @@ terrain_cache_ensure :: proc(m: ^entities.Map) {
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_dune_density, &dune_density, .FLOAT)
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_dune_color, &dune_color, .VEC3)
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_map_size, &map_size, .VEC2)
+	path_mask_texel := raylib.Vector2{1.0 / f32(mask_w), 1.0 / f32(mask_h)}
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_path_mask_texel, &path_mask_texel, .VEC2)
 	lighting_shader.dune_anim_time = 0
 	lighting_shader.caustics_anim_time = 0
 	lighting_shader.grass_anim_time = 0
@@ -587,6 +743,29 @@ terrain_cache_ensure :: proc(m: ^entities.Map) {
 // Terreno del mapa: malla continua cacheada (ver terrain_cache_ensure),
 // desniveles diagonales reales, color de camino nítido vía textura-máscara,
 // iluminada con Lighting_Shader. Reemplaza a render_map para los estados 3D.
+// Interpola linealmente entre las 2 fases vecinas de DAY_NIGHT_KEYFRAMES
+// según `t` (en "fases", no segundos — ver DAY_NIGHT_CYCLE_SPEED). Las
+// direcciones se devuelven sin normalizar; normalizar en el caller antes de
+// subirlas al shader (mismo criterio que sun_dir/fill_dir en
+// lighting_shader_init).
+day_night_sample :: proc(t: f32) -> constants.Day_Night_Values {
+	PHASE_COUNT :: len(constants.Day_Night_Phase)
+	local := math.mod_f32(t, f32(PHASE_COUNT))
+	if local < 0 { local += f32(PHASE_COUNT) }
+	i0 := int(local)
+	i1 := (i0 + 1) % PHASE_COUNT
+	frac := local - f32(i0)
+	a := constants.DAY_NIGHT_KEYFRAMES[constants.Day_Night_Phase(i0)]
+	b := constants.DAY_NIGHT_KEYFRAMES[constants.Day_Night_Phase(i1)]
+	return constants.Day_Night_Values{
+		sun_dir    = linalg.lerp(a.sun_dir, b.sun_dir, frac),
+		sun_color  = linalg.lerp(a.sun_color, b.sun_color, frac),
+		fill_dir   = linalg.lerp(a.fill_dir, b.fill_dir, frac),
+		fill_color = linalg.lerp(a.fill_color, b.fill_color, frac),
+		ambient    = linalg.lerp(a.ambient, b.ambient, frac),
+	}
+}
+
 render_map_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	terrain_cache_ensure(m)
 
@@ -600,6 +779,24 @@ render_map_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_dune_time, &lighting_shader.dune_anim_time, .FLOAT)
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_caustics_time, &lighting_shader.caustics_anim_time, .FLOAT)
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_grass_time, &lighting_shader.grass_anim_time, .FLOAT)
+
+	// Ciclo día/noche — solo avanza durante una partida (PLAYING); el
+	// preview de miniatura de mapa fuerza app.state = .EDITOR, así que ya
+	// queda excluido sin código extra. sunDir/sunColor/fillDir/fillColor/
+	// ambient pasan de "se setean una vez en init" a "se actualizan cada
+	// frame" — dejan de ser los LIGHT_* fijos de constants.odin salvo en
+	// NOON, que es justamente ese valor.
+	if app.state == .PLAYING {
+		lighting_shader.day_night_anim_time += frame_dt * constants.DAY_NIGHT_CYCLE_SPEED
+	}
+	dn := day_night_sample(lighting_shader.day_night_anim_time)
+	dn_sun_dir := linalg.normalize(dn.sun_dir)
+	dn_fill_dir := linalg.normalize(dn.fill_dir)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_sun_dir, &dn_sun_dir, .VEC3)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_sun_color, &dn.sun_color, .VEC3)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_fill_dir, &dn_fill_dir, .VEC3)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_fill_color, &dn.fill_color, .VEC3)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_ambient, &dn.ambient, .VEC3)
 
 	on := f32(1)
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_use_mask, &on, .FLOAT)
@@ -620,12 +817,129 @@ tile_world_top :: proc(m: ^entities.Map, row, col: i32) -> (center: raylib.Vecto
 // Cuerpo (cilindro) + cañón orientado por `angle` (mismo ángulo 2D que ya usa
 // el juego: atan2(dz, dx) sobre el plano XZ) — usado tanto por torres reales
 // como por el ghost de construcción. `alpha` permite semitransparencia (ghost).
-draw_tower_shape_3d :: proc(base: raylib.Vector3, cs: f32, angle, recoil: f32, color: raylib.Color, alpha: u8 = 255) {
+// `has_barrel` lo apaga para hielo/potenciador — no apuntan a un blanco como
+// las torres de daño directo, no tiene sentido que tengan cañón.
+// raylib.DrawCylinder()/DrawCylinderEx() no llaman rlNormal3f — el atributo
+// de normal que le llega al shader es el que haya quedado de la última
+// llamada a rlNormal3f en TODO el frame (constante, no varía por vértice),
+// así que bajo un shader de iluminación por normal el objeto entero queda
+// con una sola intensidad de luz: se ve como una silueta plana de un solo
+// tono en vez de una forma tallada. El fix de "locations explícitas" en
+// lighting.vs (ver comentario ahí) solo garantiza que ESE valor constante
+// aterrice en el atributo correcto — nunca resolvió que el valor variara.
+// Estos dos helpers dibujan la misma geometría a mano vía rlgl, con
+// rlNormal3f real por vértice (radial en el cuerpo, plana en las tapas),
+// para que las torres (lo único donde esto se nota a simple vista) se vean
+// sombreadas de verdad. El resto de los DrawCylinder del proyecto
+// (nenúfares, sombras de contacto, spawn/goal, proyectiles) quedan como
+// estaban — están fuera del shader de iluminación o son demasiado chicos/
+// finos como para que la falta de normal se note.
+draw_cylinder_lit_3d :: proc(base: raylib.Vector3, radius, height: f32, sides: i32, color: raylib.Color) {
+	rlgl.Begin(rlgl.TRIANGLES)
+	rlgl.Color4ub(color.r, color.g, color.b, color.a)
+
+	step := 2 * math.PI / f32(sides)
+	for i in 0 ..< sides {
+		a0 := f32(i) * step
+		a1 := f32(i + 1) * step
+		x0, z0 := math.sin(a0), math.cos(a0)
+		x1, z1 := math.sin(a1), math.cos(a1)
+
+		bl := base + raylib.Vector3{x0 * radius, 0, z0 * radius}
+		br := base + raylib.Vector3{x1 * radius, 0, z1 * radius}
+		tr := base + raylib.Vector3{x1 * radius, height, z1 * radius}
+		tl := base + raylib.Vector3{x0 * radius, height, z0 * radius}
+
+		rlgl.Normal3f(x0, 0, z0); rlgl.Vertex3f(bl.x, bl.y, bl.z)
+		rlgl.Normal3f(x1, 0, z1); rlgl.Vertex3f(br.x, br.y, br.z)
+		rlgl.Normal3f(x1, 0, z1); rlgl.Vertex3f(tr.x, tr.y, tr.z)
+
+		rlgl.Normal3f(x0, 0, z0); rlgl.Vertex3f(bl.x, bl.y, bl.z)
+		rlgl.Normal3f(x1, 0, z1); rlgl.Vertex3f(tr.x, tr.y, tr.z)
+		rlgl.Normal3f(x0, 0, z0); rlgl.Vertex3f(tl.x, tl.y, tl.z)
+	}
+
+	// Tapa superior — plana, normal (0,1,0). La inferior no hace falta:
+	// nunca queda visible, apoyada sobre el tile.
+	rlgl.Normal3f(0, 1, 0)
+	top := base + raylib.Vector3{0, height, 0}
+	for i in 0 ..< sides {
+		a0 := f32(i) * step
+		a1 := f32(i + 1) * step
+		p0 := base + raylib.Vector3{math.sin(a0) * radius, height, math.cos(a0) * radius}
+		p1 := base + raylib.Vector3{math.sin(a1) * radius, height, math.cos(a1) * radius}
+		rlgl.Vertex3f(top.x, top.y, top.z)
+		rlgl.Vertex3f(p0.x, p0.y, p0.z)
+		rlgl.Vertex3f(p1.x, p1.y, p1.z)
+	}
+
+	rlgl.End()
+}
+
+// Igual que arriba, pero entre dos puntos arbitrarios y con radio propio en
+// cada extremo (cono) — usado por el cañón. La normal ignora la leve
+// inclinación del cono por el cambio de radio (aproximación radial pura);
+// con radios tan parecidos (0.08cs → 0.06cs) el error es imperceptible.
+draw_cylinder_ex_lit_3d :: proc(start_pos, end_pos: raylib.Vector3, start_radius, end_radius: f32, sides: i32, color: raylib.Color) {
+	axis := end_pos - start_pos
+	axis_len := linalg.length(axis)
+	if axis_len < 0.0001 { return }
+	dir := axis / axis_len
+
+	up_ref := raylib.Vector3{0, 1, 0}
+	if math.abs(linalg.dot(dir, up_ref)) > 0.99 {
+		up_ref = raylib.Vector3{1, 0, 0}
+	}
+	right := linalg.normalize(linalg.cross(dir, up_ref))
+	up := linalg.cross(right, dir)
+
+	rlgl.Begin(rlgl.TRIANGLES)
+	rlgl.Color4ub(color.r, color.g, color.b, color.a)
+
+	step := 2 * math.PI / f32(sides)
+	for i in 0 ..< sides {
+		a0 := f32(i) * step
+		a1 := f32(i + 1) * step
+		radial0 := right * math.cos(a0) + up * math.sin(a0)
+		radial1 := right * math.cos(a1) + up * math.sin(a1)
+
+		bl := start_pos + radial0 * start_radius
+		br := start_pos + radial1 * start_radius
+		tr := end_pos + radial1 * end_radius
+		tl := end_pos + radial0 * end_radius
+
+		rlgl.Normal3f(radial0.x, radial0.y, radial0.z); rlgl.Vertex3f(bl.x, bl.y, bl.z)
+		rlgl.Normal3f(radial1.x, radial1.y, radial1.z); rlgl.Vertex3f(br.x, br.y, br.z)
+		rlgl.Normal3f(radial1.x, radial1.y, radial1.z); rlgl.Vertex3f(tr.x, tr.y, tr.z)
+
+		rlgl.Normal3f(radial0.x, radial0.y, radial0.z); rlgl.Vertex3f(bl.x, bl.y, bl.z)
+		rlgl.Normal3f(radial1.x, radial1.y, radial1.z); rlgl.Vertex3f(tr.x, tr.y, tr.z)
+		rlgl.Normal3f(radial0.x, radial0.y, radial0.z); rlgl.Vertex3f(tl.x, tl.y, tl.z)
+	}
+
+	// Tapa del extremo (boca del cañón) — normal = dirección del eje.
+	rlgl.Normal3f(dir.x, dir.y, dir.z)
+	for i in 0 ..< sides {
+		a0 := f32(i) * step
+		a1 := f32(i + 1) * step
+		p0 := end_pos + (right * math.cos(a0) + up * math.sin(a0)) * end_radius
+		p1 := end_pos + (right * math.cos(a1) + up * math.sin(a1)) * end_radius
+		rlgl.Vertex3f(end_pos.x, end_pos.y, end_pos.z)
+		rlgl.Vertex3f(p0.x, p0.y, p0.z)
+		rlgl.Vertex3f(p1.x, p1.y, p1.z)
+	}
+
+	rlgl.End()
+}
+
+draw_tower_shape_3d :: proc(base: raylib.Vector3, cs: f32, angle, recoil: f32, color: raylib.Color, alpha: u8 = 255, has_barrel: bool = true) {
 	c := color
 	c.a = alpha
 	body_r := cs * 0.32
 	body_h := cs * 0.45
-	raylib.DrawCylinder(base, body_r, body_r, body_h, 12, c)
+	draw_cylinder_lit_3d(base, body_r, body_h, 24, c)
+
+	if !has_barrel { return }
 
 	dir := raylib.Vector3{math.cos(angle), 0, math.sin(angle)}
 	recoil_pull := recoil * cs * constants.TOWER_RECOIL_DISTANCE_RATIO
@@ -633,7 +947,12 @@ draw_tower_shape_3d :: proc(base: raylib.Vector3, cs: f32, angle, recoil: f32, c
 	start := raylib.Vector3{base.x, base.y + body_h * 0.75, base.z}
 	end := start + dir * barrel_len
 	barrel := raylib.Color{40, 40, 40, alpha}
-	raylib.DrawCylinderEx(start, end, cs * 0.08, cs * 0.06, 8, barrel)
+	draw_cylinder_ex_lit_3d(start, end, cs * 0.08, cs * 0.06, 16, barrel)
+}
+
+// Tipos que no apuntan/disparan un proyectil hacia un blanco — no llevan cañón.
+tower_type_has_barrel :: proc(t: constants.Tower_Type) -> bool {
+	return t != .ICE && t != .ENHANCE
 }
 
 render_tower_3d :: proc(tower: ^entities.Tower, m: ^entities.Map) {
@@ -641,7 +960,7 @@ render_tower_3d :: proc(tower: ^entities.Tower, m: ^entities.Map) {
 	cs := constants.WORLD_CELL_SIZE
 	base := raylib.Vector3{f32(tower.c) * cs + cs * 0.5, top_y, f32(tower.r) * cs + cs * 0.5}
 	color := constants.TOWER_SPECS[tower.type].color
-	draw_tower_shape_3d(base, cs, tower.angle, tower.recoil, color)
+	draw_tower_shape_3d(base, cs, tower.angle, tower.recoil, color, 255, tower_type_has_barrel(tower.type))
 }
 
 render_spawn_3d :: proc(center: raylib.Vector3) {
@@ -716,15 +1035,23 @@ render_obstacles_3d :: proc(m: ^entities.Map, map_w, map_h: i32) {
 // (pathColor sobre la altura fija de agua, ver lighting.fs) — esto solo
 // agrega la baranda en los bordes que NO conectan con otro tile de camino
 // (bordes "abiertos" del puente), igual criterio de vecinos que antes.
-render_bridge_railings_3d :: proc(m: ^entities.Map) {
+// Puente (piso + barandas) para tiles de PATH sobre agua. El tile-puente es
+// agua a altura FIJA en la malla del terreno (ver _terrain_tile_height_color
+// — sin tocar, sigue siendo agua de verdad debajo), así que un puente que no
+// se hunda necesita piso propio dibujado por encima, a nivel de la tierra
+// circundante — se usa el heightmap del tile COMO SI no tuviera agua
+// (water_grid es solo una capa visual encima; el heightmap sigue teniendo un
+// valor de "tierra" válido ahí debajo, y es continuo con los tiles vecinos
+// por construcción del ruido — así el piso queda a nivel con la orilla en
+// vez de a la altura plana y baja del agua).
+render_bridge_3d :: proc(m: ^entities.Map) {
 	cs         := constants.WORLD_CELL_SIZE
 	path_width := cs * constants.PATH_WIDTH_RATIO
 	rail_t     := cs * constants.BRIDGE_RAILING_THICK
 	rail_h     := cs * 0.18
-	color      := constants.COLOR_BRIDGE_RAILING
-	// El tile-puente es agua a altura FIJA (ver _terrain_tile_height_color) —
-	// no el heightmap, así que la baranda se apoya en WORLD_WATER_HEIGHT.
-	deck_y := constants.WORLD_WATER_HEIGHT + rail_h*0.5
+	rail_color := constants.COLOR_BRIDGE_RAILING
+	deck_thick := cs * constants.BRIDGE_DECK_THICK
+	deck_color := constants.COLOR_BRIDGE_DECK
 
 	is_path_like :: proc(m: ^entities.Map, r, c: i32) -> bool {
 		if r < 0 || r >= m.height || c < 0 || c >= m.width { return false }
@@ -738,17 +1065,40 @@ render_bridge_railings_3d :: proc(m: ^entities.Map) {
 			cx := f32(col) * cs + cs*0.5
 			cz := f32(row) * cs + cs*0.5
 
+			// Piso: mismo ancho que la franja de camino embossed en tierra
+			// (path_width), no el tile entero — un cuadrado central más un
+			// tablón por cada borde conectado, llegando justo hasta el borde
+			// del tile (half) para empalmar sin hueco con el tablón del
+			// tile vecino (que arranca ahí mismo desde su propio centro).
+			half := cs * 0.5
+			deck_top := m.heightmap[row][col] * constants.WORLD_HEIGHT_SCALE
+			deck_y_pos := deck_top - deck_thick*0.5
+			raylib.DrawCube({cx, deck_y_pos, cz}, path_width, deck_thick, path_width, deck_color)
+			if is_path_like(m, row - 1, col) {
+				raylib.DrawCube({cx, deck_y_pos, cz - half*0.5}, path_width, deck_thick, half, deck_color)
+			}
+			if is_path_like(m, row + 1, col) {
+				raylib.DrawCube({cx, deck_y_pos, cz + half*0.5}, path_width, deck_thick, half, deck_color)
+			}
+			if is_path_like(m, row, col - 1) {
+				raylib.DrawCube({cx - half*0.5, deck_y_pos, cz}, half, deck_thick, path_width, deck_color)
+			}
+			if is_path_like(m, row, col + 1) {
+				raylib.DrawCube({cx + half*0.5, deck_y_pos, cz}, half, deck_thick, path_width, deck_color)
+			}
+
+			deck_y := deck_top + rail_h*0.5
 			if !is_path_like(m, row - 1, col) {
-				raylib.DrawCube({cx, deck_y, cz - path_width*0.5}, path_width, rail_h, rail_t, color)
+				raylib.DrawCube({cx, deck_y, cz - path_width*0.5}, path_width, rail_h, rail_t, rail_color)
 			}
 			if !is_path_like(m, row + 1, col) {
-				raylib.DrawCube({cx, deck_y, cz + path_width*0.5}, path_width, rail_h, rail_t, color)
+				raylib.DrawCube({cx, deck_y, cz + path_width*0.5}, path_width, rail_h, rail_t, rail_color)
 			}
 			if !is_path_like(m, row, col - 1) {
-				raylib.DrawCube({cx - path_width*0.5, deck_y, cz}, rail_t, rail_h, path_width, color)
+				raylib.DrawCube({cx - path_width*0.5, deck_y, cz}, rail_t, rail_h, path_width, rail_color)
 			}
 			if !is_path_like(m, row, col + 1) {
-				raylib.DrawCube({cx + path_width*0.5, deck_y, cz}, rail_t, rail_h, path_width, color)
+				raylib.DrawCube({cx + path_width*0.5, deck_y, cz}, rail_t, rail_h, path_width, rail_color)
 			}
 		}
 	}
@@ -811,6 +1161,31 @@ render_water_lily_3d :: proc(center: raylib.Vector3, row, col: i32) {
 // DrawCircle3D acostado sobre el plano XZ.
 draw_ground_ring :: proc(center: raylib.Vector3, radius: f32, color: raylib.Color) {
 	raylib.DrawCircle3D(center, radius, {1, 0, 0}, 90, color)
+}
+
+// Sombra de contacto falsa (AO barato): disco fino, sin iluminar, apenas
+// despegado del suelo — mismo patrón que los pads de nenúfar
+// (render_water_lily_3d) y los rings sin iluminar de abajo. Se dibuja fuera
+// de cualquier BeginShaderMode, igual que ellos.
+draw_contact_shadow_3d :: proc(ground_pos: raylib.Vector3, radius: f32) {
+	// Falloff de pobre — DrawCylinder es un disco de borde nítido, no hay
+	// gradiente real sin pasar por un shader/textura propios. Se aproxima
+	// con 3 capas concéntricas decrecientes en radio y alpha (cuadrático,
+	// para que el borde se sienta más suave que un degradé lineal) — el
+	// disco duro de una sola capa se veía como una mancha recortada, no
+	// como sombra.
+	base := constants.COLOR_CONTACT_SHADOW
+	LAYERS :: 3
+	pos := ground_pos
+	for i in 0 ..< LAYERS {
+		t := f32(i) / f32(LAYERS - 1)  // 0 (afuera) .. 1 (adentro)
+		r := radius * (1.0 - 0.4 * t)
+		fall := (1.0 - t) * (1.0 - t)
+		c := base
+		c.a = u8(f32(base.a) * (1.0 - fall * 0.7))
+		pos.y = ground_pos.y + constants.CONTACT_SHADOW_Y_OFFSET + f32(i) * 0.001
+		raylib.DrawCylinder(pos, r, r, constants.CONTACT_SHADOW_THICKNESS, 20, c)
+	}
 }
 
 render_tower_ranges_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
@@ -907,6 +1282,33 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 		}
 	}
 
+	// ── Sombras de contacto (AO falso) ── — pre-pass sin iluminar, ANTES del
+	// BeginShaderMode de abajo, mismo criterio que los rings/líneas: sin
+	// normales, no pasan por el shader de iluminación. Se salta SPAWN/GOAL
+	// (ya son discos planos) y puentes/obstáculos (geometría fina).
+	{
+		cs := constants.WORLD_CELL_SIZE
+		for row in 0 ..< m.height {
+			for col in 0 ..< m.width {
+				tile := m.grid[row][col]
+				center, top_y := tile_world_top(m, row, col)
+				surface := raylib.Vector3{center.x, top_y, center.z}
+
+				#partial switch tile {
+				case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
+				     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
+					draw_contact_shadow_3d(surface, cs * 0.32 * constants.CONTACT_SHADOW_RADIUS_RATIO)
+				case .ACCESSORY_TREE:
+					if !m.water_grid[row][col] {
+						draw_contact_shadow_3d(surface, cs * 0.34 * constants.CONTACT_SHADOW_RADIUS_RATIO)
+					}
+				case .ACCESSORY_BLOCK:
+					draw_contact_shadow_3d(surface, cs * 0.375 * constants.CONTACT_SHADOW_RADIUS_RATIO)
+				}
+			}
+		}
+	}
+
 	// ── Objetos del mapa ── (formas sólidas con normal — se iluminan; los
 	// rings/reticles/overlays de arriba y abajo se quedan con el shader
 	// default a propósito, ver Lighting_Shader).
@@ -921,6 +1323,11 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 			#partial switch tile {
 			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
 			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
+				// Especular suave prendido solo mientras se dibuja la torre —
+				// ver SPECULAR_STRENGTH_WATER en lighting.fs para el agua,
+				// que no necesita este bracket (siempre activo vía isWater).
+				tower_spec := constants.LIGHT_SPECULAR_STRENGTH_TOWER
+				raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_specular_strength, &tower_spec, .FLOAT)
 				found := false
 				for &tower in app.sim.towers {
 					if tower.r == row && tower.c == col {
@@ -937,12 +1344,18 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 					// draw_tower_tile) pero con la primitiva 3D.
 					tower_type := tile_to_tower_type(tile)
 					color := constants.TOWER_SPECS[tower_type].color
-					draw_tower_shape_3d(surface, constants.WORLD_CELL_SIZE, 0, 0, color)
+					draw_tower_shape_3d(surface, constants.WORLD_CELL_SIZE, 0, 0, color, 255, tower_type_has_barrel(tower_type))
 				}
+				tower_spec_off := f32(0)
+				raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_specular_strength, &tower_spec_off, .FLOAT)
 			case .SPAWN:
-				render_spawn_3d(surface)
+				sunk := surface
+				sunk.y -= _path_emboss_offset(m, row, col)
+				render_spawn_3d(sunk)
 			case .GOAL:
-				render_goal_3d(surface)
+				sunk := surface
+				sunk.y -= _path_emboss_offset(m, row, col)
+				render_goal_3d(sunk)
 			case .ACCESSORY_TREE:
 				if m.water_grid[row][col] {
 					// La malla del terreno promedia la altura por ESQUINA
@@ -974,7 +1387,7 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	}
 
 	render_obstacles_3d(m, m.width, m.height)
-	render_bridge_railings_3d(m)
+	render_bridge_3d(m)
 	raylib.EndShaderMode()
 
 	// ── Retículas (torre/obstáculo seleccionado, hover en modo acción) ──
@@ -1014,7 +1427,7 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 		} else {
 			tower_type := tile_to_tower_type(app.sim.selected_build_tower)
 			spec := constants.TOWER_SPECS[tower_type]
-			draw_tower_shape_3d(surface, cs, 0, 0, spec.color, 160)
+			draw_tower_shape_3d(surface, cs, 0, 0, spec.color, 160, tower_type_has_barrel(tower_type))
 			ring := raylib.Vector3{surface.x, surface.y + 0.02, surface.z}
 			draw_ground_ring(ring, spec.range * cs, constants.TOWER_RANGE_PREVIEW)
 			if spec.aoe > 0 {
@@ -1080,6 +1493,21 @@ render_enemies_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 			center := raylib.Vector3{pos.x, pos.y + size_y, pos.z}
 			raylib.DrawSphereEx(center, size_xz, 10, 10, color)
 		}
+	}
+}
+
+// Sombras de contacto (AO falso) bajo enemigos — sin iluminar, mismo
+// criterio que los rings de estado. Se omiten los .FLYING (v1 — sombra fija
+// en el suelo bajo una unidad voladora desentonaría más que ayudar).
+render_enemy_contact_shadows_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	cs := constants.WORLD_CELL_SIZE
+	for &enemy in app.sim.enemies {
+		if .FLYING in enemy.flags { continue }
+		pos := world_from_raw_grid(m, enemy.x, enemy.y)
+		size := entities.enemy_get_size(&enemy) * cs
+		squash := enemy.hit_squash * constants.ENEMY_HIT_SQUASH_AMOUNT
+		size_xz := size * (1 + squash)
+		draw_contact_shadow_3d(pos, size_xz * constants.CONTACT_SHADOW_RADIUS_RATIO)
 	}
 }
 
@@ -1195,6 +1623,7 @@ render_gameplay_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	render_ice_pulses_3d(app, m)
 	render_glow_particles_3d(app, m)
 	render_laser_beams_3d(app, m)
+	render_enemy_contact_shadows_3d(app, m)
 
 	// Formas sólidas — iluminadas.
 	raylib.BeginShaderMode(lighting_shader.shader)
@@ -1288,7 +1717,10 @@ render_game :: proc(app: ^entities.App_State) {
 	ui_blocks_clear()
 	raylib.ClearBackground(raylib.BLACK)
 
-	if constants.NEBULA_BACKGROUND_ENABLED &&
+	// En DEVELOPER se apaga el shader del vórtice detrás de los paneles —
+	// molesta durante el desarrollo (distrae/cuesta rendimiento en cada
+	// recarga), sin motivo para tenerlo prendido fuera de una build final.
+	if constants.NEBULA_BACKGROUND_ENABLED && !constants.DEVELOPER &&
 		(app.state == .MENU ||
 		app.state == .RUN_COMPLETE ||
 		app.state == .CAMPAIGN_MAP ||

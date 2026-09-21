@@ -721,8 +721,11 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 				hovered_idx = i
 			}
 
-			// Click sobre nodo disponible → lanzar run
-			if hovered && unlocked && raylib.IsMouseButtonPressed(.LEFT) {
+			// Click sobre nodo disponible → lanzar run. En DEVELOPER, además,
+			// cualquier nodo bloqueado — para poder jugar cualquier mapa de
+			// la campaña sin tener que desbloquearlo primero.
+			playable := unlocked || constants.DEVELOPER
+			if hovered && playable && raylib.IsMouseButtonPressed(.LEFT) {
 				launch_campaign_node(app, i32(i))
 			}
 		}

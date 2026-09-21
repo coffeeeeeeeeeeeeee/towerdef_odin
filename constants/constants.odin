@@ -36,6 +36,14 @@ Game_State :: enum {
 	LIBRARY,        // biblioteca de cartas: catálogo de torres/reliquias por rareza
 }
 
+// Fases del ciclo día/noche — ver DAY_NIGHT_KEYFRAMES y render_map_3d.
+Day_Night_Phase :: enum {
+	DAWN,
+	NOON,
+	DUSK,
+	NIGHT,
+}
+
 // Rareza de carta — afecta probabilidad de aparición en tienda y precio
 Card_Rarity :: enum {
 	COMMON,
@@ -164,7 +172,94 @@ camera_distance_from_zoom :: proc(zoom: f32) -> f32 {
 	return CAMERA_DISTANCE_MAX + (CAMERA_DISTANCE_MIN - CAMERA_DISTANCE_MAX) * t
 }
 
+// ── Iluminación 3D ───────────────────────────────────────────────────────
+// Modelo Lambertiano simple: sol direccional fijo + relleno tenue del lado
+// opuesto + ambient constante. Sin especular, sin sombras proyectadas — ver
+// 3D_RENDER_PLAN.md. Intensidades pensadas para que ambient + sol + relleno
+// sumen ~1.0 en la cara mejor iluminada — si suman más satura a blanco y
+// tapa el color de bioma, si suman mucho menos todo se ve chato/oscuro.
+LIGHT_SUN_DIR    :: raylib.Vector3{0.45, 1.0, 0.3}
+LIGHT_SUN_COLOR  :: raylib.Vector3{0.62, 0.59, 0.51}  // +contraste vs. el valor original (0.55,0.53,0.48)
+LIGHT_FILL_DIR   :: raylib.Vector3{-0.35, 0.4, -0.5}
+LIGHT_FILL_COLOR :: raylib.Vector3{0.12, 0.14, 0.18}
+LIGHT_AMBIENT    :: raylib.Vector3{0.40, 0.40, 0.45}  // -contraste vs. el valor original (0.45,0.45,0.5)
+
+// Especular suave (Blinn-Phong), solo torres/agua — ver lighting.fs. El
+// agua usa su propio multiplicador fijo (SPECULAR_STRENGTH_WATER, dentro
+// del shader) porque siempre está activo vía isWater; las torres necesitan
+// un valor en Odin porque se prende puntualmente alrededor de su draw
+// (render_map_objects_3d).
+LIGHT_SPECULAR_STRENGTH_TOWER :: f32(0.2)
+
+// Ciclo día/noche: interpola linealmente entre estas 4 fases (ver
+// Day_Night_Phase), reemplazando el uso "fijo" de LIGHT_* de arriba (que
+// ahora solo sirven como valor de NOON / referencia visual). Gateado a
+// app.state == .PLAYING, tiempo acumulado con dt clampeado — mismo patrón
+// que dune/caustics/grass, ver render_map_3d.
+//
+// Valores de arranque, pensados para tunear al ojo (no hay forma de
+// verificar esto compilando):
+// - NOON == la base retocada de arriba (LIGHT_SUN_DIR, etc).
+// - DAWN/DUSK: sol más horizontal, tinte cálido/rosado.
+// - NIGHT: ambient+sol bajo pero sin llegar a negro puro (evita el mismo
+//   problema que "sumar >1.0 satura a blanco", pero al revés).
+Day_Night_Values :: struct {
+	sun_dir, fill_dir:                    raylib.Vector3,
+	sun_color, fill_color, ambient: raylib.Vector3,
+}
+
+DAY_NIGHT_KEYFRAMES := [Day_Night_Phase]Day_Night_Values {
+	.DAWN = {
+		sun_dir    = {0.75, 0.55, 0.25},
+		sun_color  = {0.65, 0.45, 0.35},
+		fill_dir   = {-0.35, 0.4, -0.5},
+		fill_color = {0.15, 0.15, 0.22},
+		ambient    = {0.38, 0.34, 0.32},
+	},
+	.NOON = {
+		sun_dir    = LIGHT_SUN_DIR,
+		sun_color  = LIGHT_SUN_COLOR,
+		fill_dir   = LIGHT_FILL_DIR,
+		fill_color = LIGHT_FILL_COLOR,
+		ambient    = LIGHT_AMBIENT,
+	},
+	.DUSK = {
+		sun_dir    = {-0.55, 0.45, 0.4},
+		sun_color  = {0.60, 0.38, 0.42},
+		fill_dir   = {0.35, 0.4, -0.4},
+		fill_color = {0.14, 0.15, 0.24},
+		ambient    = {0.36, 0.32, 0.36},
+	},
+	.NIGHT = {
+		sun_dir    = {0.2, 0.9, 0.15},
+		sun_color  = {0.20, 0.22, 0.30},
+		fill_dir   = {-0.35, 0.4, -0.5},
+		fill_color = {0.08, 0.09, 0.14},
+		ambient    = {0.16, 0.17, 0.24},
+	},
+}
+
+// Velocidad del ciclo — un valor bajo porque es ambientación lenta, no un
+// efecto rápido. En unidades de "fases por segundo real" (4 fases por
+// ciclo completo), gateado a PLAYING.
+DAY_NIGHT_CYCLE_SPEED :: f32(0.01)
+
+// Sombra de contacto falsa (AO barato) bajo torres/árboles/bloques/
+// enemigos — disco plano sin iluminar, ver draw_contact_shadow_3d.
+COLOR_CONTACT_SHADOW        :: raylib.Color{0, 0, 0, 45}  // alpha del centro — draw_contact_shadow_3d compone 3 capas hacia afuera, más tenues
+CONTACT_SHADOW_THICKNESS    :: f32(0.02)
+CONTACT_SHADOW_Y_OFFSET     :: f32(0.01)
+CONTACT_SHADOW_RADIUS_RATIO :: f32(1.3)  // fracción del tamaño del objeto, mismo criterio que el ring de .ARMORED (1.1×)
+
 PATH_WIDTH_RATIO :: 0.4  // Path draw width as a fraction of cell size
+
+// Camino "embossed" en el terreno 3D: el mesh se subdivide para poder tallar
+// una franja angosta (no el tile completo) que se hunde hacia el centro del
+// camino, con paredes suaves. Ver terrain_cache_ensure en rendering.odin.
+TERRAIN_MESH_SUBDIV :: 6                 // sub-quads por tile en cada eje
+PATH_MASK_SUBDIV    :: 16                // texels por tile en cada eje de la máscara de camino
+PATH_EMBOSS_DEPTH   :: f32(0.10)         // profundidad del hundimiento, unidades de mundo
+PATH_EDGE_SOFTNESS  :: f32(0.02)         // fracción del medio-ancho usada para el falloff del borde
 
 // =============================================================================
 // Tower specs
@@ -700,6 +795,8 @@ GRASS_ANIM_SPEED :: f32(1.0)
 COLOR_BRIDGE_RAILING  :: raylib.Color{ 80,  75,  70, 255}  // Barandas de cemento oscuro
 BRIDGE_RAILING_THICK  :: f32(0.07)                          // Grosor de baranda como fracción del tile
 BRIDGE_RAILING_SEGS   :: i32(4)                             // Segmentos para las puntas redondeadas
+COLOR_BRIDGE_DECK     :: raylib.Color{135, 135, 130, 255}  // Piso del puente, cemento gris (igual familia que COLOR_BRIDGE_RAILING)
+BRIDGE_DECK_THICK     :: f32(0.10)                          // Espesor del piso como fracción del tile
 
 // =============================================================================
 // Bird flock

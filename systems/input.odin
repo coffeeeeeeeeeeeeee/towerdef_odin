@@ -15,8 +15,10 @@ input_handle :: proc(app: ^entities.App_State) {
 		app.console.cmd_input.focused = app.console.open
 	}
 
-	// No mover la cámara mientras el browser de mapas está abierto en el editor
-	if !(app.state == .EDITOR && app.editor.show_map_browser) {
+	// No mover la cámara mientras el browser de mapas está abierto en el
+	// editor, ni mientras el shop está abierto (overlay de PLAYING, no un
+	// app.state propio — ver app.sim.shop.active).
+	if !(app.state == .EDITOR && app.editor.show_map_browser) && !app.sim.shop.active {
 		input_handle_camera(app)
 	}
 	
@@ -317,6 +319,12 @@ case .GARDENER:
 	}
 	if raylib.IsKeyPressed(.TWO) {
 		simulation_set_speed(app, 2.0)
+	}
+
+	// Grid toggle — mismo settings.show_grid que ya usa el editor (ver
+	// input_handle_editor), así que queda en sync entre los dos estados.
+	if raylib.IsKeyPressed(.G) {
+		app.settings.show_grid = !app.settings.show_grid
 	}
 
 	// ── Developer hotkeys (compiled out when DEVELOPER == false) ─────────────
