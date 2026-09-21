@@ -100,6 +100,10 @@ main :: proc() {
 	defer systems.lighting_shader_unload()
 	defer systems.terrain_cache_invalidate()
 
+	// Shadow mapping (sombra proyectada real) — ver Shadow_Map en rendering.odin
+	systems.shadow_map_init()
+	defer systems.shadow_map_unload()
+
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
 	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)

@@ -141,6 +141,85 @@ pause_blur_draw :: proc() {
 	raylib.DrawRectangle(0, 0, pause_blur.tex_w, pause_blur.tex_h, constants.PAUSE_GLASS_TINT)
 }
 
+// ── Shadow mapping (sombra proyectada real) ──────────────────────────────────
+//
+// Depth pre-pass desde el punto de vista del sol: se dibuja la escena (solo
+// los casters — ver render_shadow_depth_pass) con un shader mínimo que
+// únicamente escribe profundidad, a una textura de profundidad muestreable
+// (no un RenderTexture2D común — ese trae un COLOR texture + un depth
+// RENDERBUFFER, no muestreable como textura; hace falta el camino de bajo
+// nivel de rlgl: LoadTextureDepth + LoadFramebuffer + FramebufferAttach).
+// lighting.fs después muestrea esa textura (PCF manual, sin sampler de
+// comparación por hardware en estos bindings) para saber si un fragmento
+// está tapado del sol por otro objeto.
+Shadow_Map :: struct {
+	depth_shader: raylib.Shader,    // assets/shadow_depth.vs/.fs — solo posición, sin color
+	fbo_id:       u32,
+	depth_tex:    raylib.Texture2D, // wrapeado a mano desde rlgl.LoadTextureDepth
+	view:         raylib.Matrix,    // recalculada cada frame en render_shadow_depth_pass
+	proj:         raylib.Matrix,
+	valid:        bool,             // false si el FBO no quedó completo — el juego sigue sin sombra en vez de crashear
+}
+
+shadow_map: Shadow_Map
+
+shadow_map_init :: proc() {
+	s := raylib.LoadShader("assets/shadow_depth.vs", "assets/shadow_depth.fs")
+	shadow_map.depth_shader = s
+
+	res := constants.SHADOW_MAP_RESOLUTION
+	tex_id := rlgl.LoadTextureDepth(res, res, false)
+	shadow_map.depth_tex = raylib.Texture2D{
+		id       = tex_id,
+		width    = res,
+		height   = res,
+		mipmaps  = 1,
+		format   = .UNCOMPRESSED_R32, // cosmético — solo se usa el .id para bindear a mano, ver shadow_map_bind_for_sampling
+	}
+
+	shadow_map.fbo_id = rlgl.LoadFramebuffer()
+	rlgl.EnableFramebuffer(shadow_map.fbo_id)
+	rlgl.FramebufferAttach(shadow_map.fbo_id, tex_id, i32(rlgl.FramebufferAttachType.DEPTH), i32(rlgl.FramebufferAttachTextureType.TEXTURE2D), 0)
+	ok := rlgl.FramebufferComplete(shadow_map.fbo_id)
+	if !ok {
+		fmt.println("WARNING: shadow map FBO incompleto — el juego sigue sin sombras proyectadas")
+	}
+	rlgl.DisableFramebuffer()
+	shadow_map.valid = ok
+}
+
+shadow_map_unload :: proc() {
+	raylib.UnloadShader(shadow_map.depth_shader)
+	rlgl.UnloadTexture(shadow_map.depth_tex.id)
+	rlgl.UnloadFramebuffer(shadow_map.fbo_id)
+}
+
+// Sube lightSpaceMatrix + bindea shadow_map.depth_tex como sampler2D en
+// lighting_shader. shadow_map.depth_tex NO es parte de un Material (no
+// hay Model/Mesh detrás, es una textura suelta) — raylib.SetShaderValueTexture
+// no sirve para este caso (ver la trampa documentada en CLAUDE.md sobre
+// colisión de texture units con el material del terreno). El patrón
+// correcto, calcado del ejemplo oficial de raylib (shaders_shadowmap.c):
+// elegir un texture unit propio y fijo, bindear la textura ahí con
+// rlgl.ActiveTextureSlot/EnableTexture, y subir el UNIFORM SAMPLER2D como
+// un entero (el índice de unidad), no como una Texture2D.
+shadow_map_bind_for_sampling :: proc() {
+	// proj*view, NO view*proj — para transformar un punto mundo hay que
+	// aplicar view PRIMERO (mundo→vista) y proj DESPUÉS (vista→clip):
+	// (proj*view)*p = proj*(view*p). El orden contrario aplicaba proj a
+	// coordenadas de mundo directamente, lo cual no tiene sentido — daba
+	// un clip.z gigante y fuera de [-1,1] para TODO fragmento, sin
+	// importar dónde estuviera parado. Verificado a mano con un caso real
+	// (ver CLAUDE.md, sección de shadow mapping) antes de aplicar el fix.
+	light_space := shadow_map.proj * shadow_map.view
+	raylib.SetShaderValueMatrix(lighting_shader.shader, lighting_shader.loc_light_space_matrix, light_space)
+
+	slot := constants.SHADOW_MAP_TEXTURE_SLOT
+	rlgl.ActiveTextureSlot(slot)
+	rlgl.EnableTexture(shadow_map.depth_tex.id)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_shadow_map, &slot, .INT)
+}
+
 // ── Cloud layer shader ───────────────────────────────────────────────────────
 
 Cloud_Shader :: struct {
@@ -270,6 +349,10 @@ Lighting_Shader :: struct {
 	loc_rock_alpha:    i32,
 	loc_rock_density:  i32,
 	loc_rock_color:    i32,
+	loc_light_space_matrix: i32,  // sombra proyectada real — ver render_shadow_depth_pass
+	loc_shadow_map:         i32,
+	loc_shadow_bias:        i32,  // fijo, seteado una vez en init desde constants.SHADOW_DEPTH_BIAS
+	loc_shadow_min_factor:  i32,  // idem, constants.SHADOW_MIN_FACTOR
 	dune_anim_time:     f32,  // acumulado con dt clampeado, no reloj de pared — ver render_map_3d
 	caustics_anim_time: f32,
 	grass_anim_time:    f32,
@@ -310,6 +393,10 @@ lighting_shader_init :: proc() {
 		loc_rock_alpha    = raylib.GetShaderLocation(s, "rockAlpha"),
 		loc_rock_density  = raylib.GetShaderLocation(s, "rockDensity"),
 		loc_rock_color    = raylib.GetShaderLocation(s, "rockColor"),
+		loc_light_space_matrix = raylib.GetShaderLocation(s, "lightSpaceMatrix"),
+		loc_shadow_map          = raylib.GetShaderLocation(s, "shadowMap"),
+		loc_shadow_bias         = raylib.GetShaderLocation(s, "shadowDepthBias"),
+		loc_shadow_min_factor   = raylib.GetShaderLocation(s, "shadowMinFactor"),
 	}
 
 	// Luz "sol" alineada con el ángulo de la cámara isométrica (arriba-
@@ -341,6 +428,13 @@ lighting_shader_init :: proc() {
 	// multiplicador fijo dentro del shader (SPECULAR_STRENGTH_WATER).
 	specular_off := f32(0)
 	raylib.SetShaderValue(s, lighting_shader.loc_specular_strength, &specular_off, .FLOAT)
+
+	// Sombra proyectada real — bias/piso fijos, ajustables sin tocar el
+	// .fs (ver constants.SHADOW_DEPTH_BIAS/SHADOW_MIN_FACTOR).
+	shadow_bias := constants.SHADOW_DEPTH_BIAS
+	shadow_min_factor := constants.SHADOW_MIN_FACTOR
+	raylib.SetShaderValue(s, lighting_shader.loc_shadow_bias, &shadow_bias, .FLOAT)
+	raylib.SetShaderValue(s, lighting_shader.loc_shadow_min_factor, &shadow_min_factor, .FLOAT)
 
 	// Color de agua fijo (no depende del bioma, a diferencia de pathColor)
 	// — se setea una sola vez acá en vez de en terrain_cache_ensure.
@@ -766,6 +860,148 @@ day_night_sample :: proc(t: f32) -> constants.Day_Night_Values {
 	}
 }
 
+// Matriz vista×proyección ortográfica del "sol", centrada en el mapa
+// actual (no en la cámara del jugador — el mapa tiene una extensión de
+// mundo fija, GRID_SIZE como tope, independiente del zoom/pan). `sun_dir`
+// ya normalizado — mismo vector que sube render_map_3d como uniform
+// sunDir. El caller compone `proj * view` (NO `view * proj`) para
+// transformar un punto de mundo — ver la nota en shadow_map_bind_for_sampling,
+// ese orden invertido fue justo el bug que hizo que no se viera ninguna
+// sombra la primera vez.
+shadow_light_matrix :: proc(m: ^entities.Map, sun_dir: raylib.Vector3) -> (view, proj: raylib.Matrix) {
+	wcs := constants.WORLD_CELL_SIZE
+	center := raylib.Vector3{f32(m.width) * wcs * 0.5, 0.5, f32(m.height) * wcs * 0.5}
+	// sun_dir apunta DESDE la superficie HACIA el sol (misma convención que
+	// lighting.fs) — el ojo de la cámara-luz tiene que ubicarse EN esa
+	// dirección desde el centro (arriba, del lado del sol) para mirar hacia
+	// abajo al mapa; con el signo invertido la "luz" quedaba del lado
+	// opuesto al sol real y el depth pass no producía sombras utilizables.
+	eye := center + sun_dir * constants.SHADOW_LIGHT_DISTANCE
+	view = raylib.MatrixLookAt(eye, center, {0, 1, 0})
+
+	// El frustum ortográfico se ajusta al AABB real del mundo (todo el
+	// ancho/alto del mapa, Y desde bien debajo del terreno hasta arriba
+	// del caster más alto — el terreno tiene su propio desplazamiento
+	// hacia abajo cerca del camino, PATH_EMBOSS_DEPTH, así que el margen
+	// de abajo tiene que cubrir eso también), NO un half-extent isotrópico
+	// basado solo en la diagonal X/Z: para un sol con componente horizontal
+	// grande (DAWN/DUSK) la proyección del mapa sobre los ejes de la
+	// cámara-luz NO es un círculo, es un rectángulo estirado que un
+	// half-extent isotrópico subestima — las esquinas del mapa quedaban
+	// literalmente afuera del frustum y no aparecía ninguna sombra ahí.
+	// Se proyectan los 8 vértices del AABB a espacio de la cámara-luz
+	// (Vector3Transform con `view`) y se toma el min/max real de esas 8
+	// proyecciones para los 6 planos del frustum.
+	w := f32(m.width) * wcs
+	h := f32(m.height) * wcs
+	min_x, min_y, min_z := f32(math.F32_MAX), f32(math.F32_MAX), f32(math.F32_MAX)
+	max_x, max_y, max_z := -f32(math.F32_MAX), -f32(math.F32_MAX), -f32(math.F32_MAX)
+	for cx in ([2]f32{0, w}) {
+		for cz in ([2]f32{0, h}) {
+			for cy in ([2]f32{constants.SHADOW_WORLD_Y_MIN, constants.SHADOW_WORLD_Y_MAX}) {
+				vs := raylib.Vector3Transform(raylib.Vector3{cx, cy, cz}, view)
+				min_x = min(min_x, vs.x)
+				max_x = max(max_x, vs.x)
+				min_y = min(min_y, vs.y)
+				max_y = max(max_y, vs.y)
+				// Espacio de vista de raylib: la cámara mira hacia -Z, así
+				// que la distancia real hacia adelante es -vs.z.
+				dist := -vs.z
+				min_z = min(min_z, dist)
+				max_z = max(max_z, dist)
+			}
+		}
+	}
+	margin := constants.SHADOW_FRUSTUM_MARGIN
+	near := max(constants.SHADOW_NEAR_PLANE, min_z - margin)
+	far := max_z + margin
+	proj = raylib.MatrixOrtho(min_x - margin, max_x + margin, min_y - margin, max_y + margin, near, far)
+	return
+}
+
+// Depth pre-pass: dibuja los casters (torres, árboles en tierra, bloques +
+// barras de obstáculo, puente, enemigos) con shadow_map.depth_shader en vez
+// de lighting_shader.shader, a la textura de profundidad de shadow_map.
+// El terreno NO es caster (solo receptor, ver lighting.fs) — evita
+// duplicar el hundimiento del camino embossed acá. Reusa exactamente los
+// mismos procs de dibujo que render_map_objects_3d/render_gameplay_3d —
+// mismo geometría, shader distinto (el bind de BeginShaderMode es lo único
+// que cambia qué uniform "mvp" recibe cada draw).
+render_shadow_depth_pass :: proc(app: ^entities.App_State, m: ^entities.Map, sun_dir: raylib.Vector3) {
+	if !shadow_map.valid { return }
+	shadow_map.view, shadow_map.proj = shadow_light_matrix(m, sun_dir)
+
+	res := constants.SHADOW_MAP_RESOLUTION
+	rlgl.EnableFramebuffer(shadow_map.fbo_id)
+	rlgl.Viewport(0, 0, res, res)
+	rlgl.ClearScreenBuffers()
+
+	// Mismo manejo de matrices que raylib.BeginMode3D/EndMode3D por dentro
+	// — imprescindible, NO alcanza con Set*+restaurar el framebuffer/
+	// viewport al final. rlSetMatrixProjection escribe directo sobre el
+	// mismo storage que apila rlPushMatrix en modo PROJECTION, así que
+	// push-antes/pop-después deja la proyección 2D de pantalla intacta
+	// para el resto del frame (UI incluida). El modelview no se apila —
+	// mismo criterio que EndMode3D, que siempre vuelve a identidad en vez
+	// de "restaurar" (el modo 2D no tiene cámara, es identidad siempre).
+	// Sin este push/pop, la proyección ortográfica de la sombra quedaba
+	// pisada para el resto del frame y la UI 2D se renderizaba con las
+	// coordenadas equivocadas — se veía como si hubiera desaparecido.
+	rlgl.DrawRenderBatchActive()
+	rlgl.MatrixMode(rlgl.PROJECTION)
+	rlgl.PushMatrix()
+	rlgl.SetMatrixProjection(shadow_map.proj)
+	rlgl.MatrixMode(rlgl.MODELVIEW)
+	rlgl.SetMatrixModelview(shadow_map.view)
+	rlgl.EnableDepthTest()
+
+	raylib.BeginShaderMode(shadow_map.depth_shader)
+	for row in 0 ..< m.height {
+		for col in 0 ..< m.width {
+			tile := m.grid[row][col]
+			center, top_y := tile_world_top(m, row, col)
+			surface := raylib.Vector3{center.x, top_y, center.z}
+
+			#partial switch tile {
+			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
+			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
+				found := false
+				for &tower in app.sim.towers {
+					if tower.r == row && tower.c == col {
+						render_tower_3d(&tower, m)
+						found = true
+						break
+					}
+				}
+				if !found {
+					tower_type := tile_to_tower_type(tile)
+					draw_tower_shape_3d(surface, constants.WORLD_CELL_SIZE, 0, 0, raylib.WHITE, 255, tower_type_has_barrel(tower_type))
+				}
+			case .ACCESSORY_TREE:
+				if !m.water_grid[row][col] {
+					render_tree_3d(surface, m.biome)
+				}
+			case .ACCESSORY_BLOCK:
+				blk_level := entities.map_get_obstacle_level(m, row, col)
+				render_block_3d(surface, m.biome, blk_level)
+			}
+		}
+	}
+	render_obstacles_3d(m, m.width, m.height)
+	render_bridge_3d(m)
+	render_enemies_3d(app, m)
+	raylib.EndShaderMode()
+
+	rlgl.DrawRenderBatchActive()
+	rlgl.MatrixMode(rlgl.PROJECTION)
+	rlgl.PopMatrix()      // restaura la proyección 2D de pantalla que había antes
+	rlgl.MatrixMode(rlgl.MODELVIEW)
+	rlgl.LoadIdentity()   // vuelve a identidad — mismo criterio que EndMode3D
+
+	rlgl.DisableFramebuffer()
+	rlgl.Viewport(0, 0, raylib.GetRenderWidth(), raylib.GetRenderHeight())
+}
+
 render_map_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	terrain_cache_ensure(m)
 
@@ -1163,31 +1399,6 @@ draw_ground_ring :: proc(center: raylib.Vector3, radius: f32, color: raylib.Colo
 	raylib.DrawCircle3D(center, radius, {1, 0, 0}, 90, color)
 }
 
-// Sombra de contacto falsa (AO barato): disco fino, sin iluminar, apenas
-// despegado del suelo — mismo patrón que los pads de nenúfar
-// (render_water_lily_3d) y los rings sin iluminar de abajo. Se dibuja fuera
-// de cualquier BeginShaderMode, igual que ellos.
-draw_contact_shadow_3d :: proc(ground_pos: raylib.Vector3, radius: f32) {
-	// Falloff de pobre — DrawCylinder es un disco de borde nítido, no hay
-	// gradiente real sin pasar por un shader/textura propios. Se aproxima
-	// con 3 capas concéntricas decrecientes en radio y alpha (cuadrático,
-	// para que el borde se sienta más suave que un degradé lineal) — el
-	// disco duro de una sola capa se veía como una mancha recortada, no
-	// como sombra.
-	base := constants.COLOR_CONTACT_SHADOW
-	LAYERS :: 3
-	pos := ground_pos
-	for i in 0 ..< LAYERS {
-		t := f32(i) / f32(LAYERS - 1)  // 0 (afuera) .. 1 (adentro)
-		r := radius * (1.0 - 0.4 * t)
-		fall := (1.0 - t) * (1.0 - t)
-		c := base
-		c.a = u8(f32(base.a) * (1.0 - fall * 0.7))
-		pos.y = ground_pos.y + constants.CONTACT_SHADOW_Y_OFFSET + f32(i) * 0.001
-		raylib.DrawCylinder(pos, r, r, constants.CONTACT_SHADOW_THICKNESS, 20, c)
-	}
-}
-
 render_tower_ranges_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	cs := constants.WORLD_CELL_SIZE
 	if app.settings.show_tower_range {
@@ -1277,33 +1488,6 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 
 				if hovered && !drew_target {
 					draw_action_target_3d(surface, COLOR_TARGET_INVALID, 40)
-				}
-			}
-		}
-	}
-
-	// ── Sombras de contacto (AO falso) ── — pre-pass sin iluminar, ANTES del
-	// BeginShaderMode de abajo, mismo criterio que los rings/líneas: sin
-	// normales, no pasan por el shader de iluminación. Se salta SPAWN/GOAL
-	// (ya son discos planos) y puentes/obstáculos (geometría fina).
-	{
-		cs := constants.WORLD_CELL_SIZE
-		for row in 0 ..< m.height {
-			for col in 0 ..< m.width {
-				tile := m.grid[row][col]
-				center, top_y := tile_world_top(m, row, col)
-				surface := raylib.Vector3{center.x, top_y, center.z}
-
-				#partial switch tile {
-				case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
-				     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
-					draw_contact_shadow_3d(surface, cs * 0.32 * constants.CONTACT_SHADOW_RADIUS_RATIO)
-				case .ACCESSORY_TREE:
-					if !m.water_grid[row][col] {
-						draw_contact_shadow_3d(surface, cs * 0.34 * constants.CONTACT_SHADOW_RADIUS_RATIO)
-					}
-				case .ACCESSORY_BLOCK:
-					draw_contact_shadow_3d(surface, cs * 0.375 * constants.CONTACT_SHADOW_RADIUS_RATIO)
 				}
 			}
 		}
@@ -1496,21 +1680,6 @@ render_enemies_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	}
 }
 
-// Sombras de contacto (AO falso) bajo enemigos — sin iluminar, mismo
-// criterio que los rings de estado. Se omiten los .FLYING (v1 — sombra fija
-// en el suelo bajo una unidad voladora desentonaría más que ayudar).
-render_enemy_contact_shadows_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
-	cs := constants.WORLD_CELL_SIZE
-	for &enemy in app.sim.enemies {
-		if .FLYING in enemy.flags { continue }
-		pos := world_from_raw_grid(m, enemy.x, enemy.y)
-		size := entities.enemy_get_size(&enemy) * cs
-		squash := enemy.hit_squash * constants.ENEMY_HIT_SQUASH_AMOUNT
-		size_xz := size * (1 + squash)
-		draw_contact_shadow_3d(pos, size_xz * constants.CONTACT_SHADOW_RADIUS_RATIO)
-	}
-}
-
 render_enemy_status_rings_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	cs := constants.WORLD_CELL_SIZE
 	for &enemy in app.sim.enemies {
@@ -1623,7 +1792,6 @@ render_gameplay_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	render_ice_pulses_3d(app, m)
 	render_glow_particles_3d(app, m)
 	render_laser_beams_3d(app, m)
-	render_enemy_contact_shadows_3d(app, m)
 
 	// Formas sólidas — iluminadas.
 	raylib.BeginShaderMode(lighting_shader.shader)
@@ -1742,6 +1910,19 @@ render_game :: proc(app: ^entities.App_State) {
 		app.camera_offset_y += i32(math.cos(t * 43.0) * amt)
 	}
 
+	// Shadow mapping: el depth pre-pass usa su propio framebuffer (Enable/
+	// DisableFramebuffer de rlgl, no BeginTextureMode) — tiene que completar
+	// ANTES de que arranque el BeginTextureMode de pause_blur más abajo, si
+	// no, el DisableFramebuffer del shadow pass pisaría el framebuffer del
+	// blur en vez de dejarlo activo. Por eso va acá afuera, no "justo antes
+	// de BeginMode3D" como el resto del bloque 3D.
+	if app.state == .PLAYING || app.state == .PAUSED || app.state == .EDITOR {
+		m := &app.editor.game_map
+		dn_sun_dir := linalg.normalize(day_night_sample(lighting_shader.day_night_anim_time).sun_dir)
+		render_shadow_depth_pass(app, m, dn_sun_dir)
+		shadow_map_bind_for_sampling()
+	}
+
 	// Pausa: el mundo se redirige a una textura en vez de dibujarse directo a
 	// pantalla, para poder pasarlo por el blur de 2 pasadas + tinte ("vidrio
 	// esmerilado") antes de que se vea. Ver Pause_Blur más arriba.
@@ -1853,6 +2034,14 @@ render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 	app.sim.towers          = nil
 	app.state               = .EDITOR
 	app.selected_cell.valid = false
+
+	// Mismo shadow pass que render_game — una vez por preview generado, no
+	// por frame, así que el costo es irrelevante. Tiene que completar antes
+	// del BeginTextureMode de abajo (mismo motivo que en render_game: el
+	// framebuffer propio del shadow pass no debe pisar el del preview_tex).
+	dn_sun_dir := linalg.normalize(day_night_sample(lighting_shader.day_night_anim_time).sun_dir)
+	render_shadow_depth_pass(app, m, dn_sun_dir)
+	shadow_map_bind_for_sampling()
 
 	raylib.BeginTextureMode(app.editor.browser.preview_tex)
 	raylib.ClearBackground(constants.BIOME_COLORS[m.biome].bg)

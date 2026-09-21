@@ -105,13 +105,14 @@ render_ui :: proc(app: ^entities.App_State) {
 
 	// FPS counter - bottom left with UI margin padding using custom font (skip in editor mode)
 	if app.settings.show_fps && app.state != .EDITOR {
+		s := constants.ui_scale()
 		fps_text := fmt.tprintf("FPS: %d", raylib.GetFPS())
 		screen_height := raylib.GetScreenHeight()
-		fps_font_size := f32(20)
+		fps_font_size := 20 * s
 		raylib.DrawTextEx(
 			constants.game_fonts.regular,
 			strings.clone_to_cstring(fps_text, context.temp_allocator),
-			{f32(constants.UI_MARGIN_X), f32(screen_height - constants.UI_MARGIN_Y - 20)},
+			{constants.UI_MARGIN_X * s, f32(screen_height) - constants.UI_MARGIN_Y * s - fps_font_size},
 			fps_font_size,
 			0,
 			raylib.WHITE,

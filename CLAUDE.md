@@ -25,8 +25,33 @@ instalar Raylib aparte).
 # Desde la raíz del proyecto
 odin run . -out:towerdef      # compila y corre
 odin build . -out:towerdef    # solo compila
-odin build . -out:towerdef -o:speed # build de release
+odin build . -out:towerdef -o:speed # build de release (dev, con checks — ver abajo)
 ```
+
+### Build de release real (shippear a itch, `constants.DEVELOPER :: false`)
+
+Además de `-o:speed`, sumar los flags que desactivan los checks en runtime
+— la wiki de Odin (`Compiler-Flags`) documenta un ~20% de mejora combinando
+los tres. **Usar solo junto con `DEVELOPER :: false`**: mientras se itera
+con `DEVELOPER :: true` estos checks valen la pena (un bounds-check roto
+tira panic legible en vez de corromper memoria en silencio), así que no
+conviene meterlos en el comando de build "de dev" de arriba.
+
+```bash
+odin build . -out:towerdef -o:speed -disable-assert -no-bounds-check -no-type-assert
+```
+
+- `-disable-assert`: saca la generación de código de `assert()` (define
+  `ODIN_DISABLE_ASSERT`).
+- `-no-bounds-check`: sin bounds-check en accesos a arrays/slices/etc en
+  todo el programa.
+- `-no-type-assert`: sin chequeo en type assertions (`x.(T)`).
+
+Ninguno de los tres está probado a fondo contra este juego todavía — antes
+de shippear un build con estos flags conviene una pasada de smoke-test
+normal (jugar una run completa, entrar a todos los estados) para confirmar
+que no hay ningún bug latente que dependía de un panic temprano para
+notarse.
 
 En Windows es el mismo comando, agregando `.exe` al `-out:`. Las APIs de
 `core:os` usadas en el proyecto (`read_entire_file_from_path`, `read_dir`,
@@ -559,7 +584,7 @@ complejidad de invalidación (resize de ventana, etc.) sin beneficio real:
 redirigir el render normal a una textura + 2 pasadas de blur no es más caro
 que lo que ya se dibuja hoy en pantalla.
 
-## Iluminación 3D — especular, sombras de contacto, ciclo día/noche
+## Iluminación 3D — especular, sombras de contacto, ciclo día/noche, sombra proyectada
 
 Modelo base sigue siendo Lambertiano simple (`3D_RENDER_PLAN.md`), pero ya
 no es 100% estático:
@@ -577,12 +602,6 @@ no es 100% estático:
   nunca rota) derivada del mismo `CAMERA_PITCH_DEG` que usa
   `camera3d_for_focus` — si ese ángulo cambia, el especular se recalcula
   solo en el próximo `lighting_shader_init`.
-- **Sombras de contacto** (`draw_contact_shadow_3d`): discos finos sin
-  iluminar (mismo patrón que los pads de nenúfar y los rings de estado),
-  dibujados en pre-passes ANTES de cada `BeginShaderMode` — uno nuevo en
-  `render_map_objects_3d` para torres/árboles(no sobre agua)/bloques, y uno
-  (`render_enemy_contact_shadows_3d`) en el pre-pass sin iluminar que ya
-  existía en `render_gameplay_3d`. Se omiten `.FLYING` (v1).
 - **Ciclo día/noche**: `DAY_NIGHT_KEYFRAMES` (4 fases —
   DAWN/NOON/DUSK/NIGHT, `constants.odin`) interpoladas linealmente en
   `day_night_sample` (`rendering.odin`), evaluadas cada frame en
@@ -598,6 +617,162 @@ no es 100% estático:
   depende de `sunDir` en el fragment shader, no de un valor cacheado — pero
   su intensidad no fue re-chequeada contra los keyframes NIGHT/DUSK más
   oscuros/saturados, solo contra NOON.
+- **Sombra proyectada real (shadow mapping)** — reemplazó a las sombras de
+  contacto falsas que hubo antes (`draw_contact_shadow_3d`, discos planos
+  sin dirección bajo torres/árboles/bloques/enemigos — eliminadas). `Shadow_Map` (`rendering.odin`):
+  depth pre-pass desde el punto de vista del sol, a una textura de
+  profundidad muestreable creada a mano vía el camino de bajo nivel de
+  `rlgl` (`LoadTextureDepth` + `LoadFramebuffer` + `FramebufferAttach`) —
+  `raylib.LoadRenderTexture` normal NO sirve para esto, su adjunto de
+  profundidad es un renderbuffer, no una textura sampleable.
+  `shadow_light_matrix` arma una cámara ortográfica centrada en el mapa
+  actual (no en la cámara del jugador — el mapa tiene extensión de mundo
+  fija) siguiendo el `sunDir` del ciclo día/noche, recalculada cada frame
+  (mismo criterio que `Pause_Blur`: no vale la complejidad de cachear e
+  invalidar para un mapa de este tamaño). `render_shadow_depth_pass`
+  dibuja los casters — torres, árboles en tierra, bloques/barras de
+  obstáculo, puente, enemigos — con `assets/shadow_depth.vs/.fs` (shader
+  mínimo, solo transforma posición) en vez de `lighting_shader.shader`,
+  reusando exactamente los mismos procs de dibujo (`render_tower_3d`,
+  `render_tree_3d`, etc. — geometría idéntica, shader distinto). El
+  terreno **no** proyecta sombra (solo la recibe) — es la única malla con
+  desplazamiento de vértices (el hundimiento del camino embossed), así que
+  excluirlo como caster evita duplicar esa lógica en el shader de
+  profundidad. `lighting.vs` computa `fragPosLightSpace` DESPUÉS del
+  hundimiento del camino, para que la sombra caiga alineada con la franja
+  ya tallada. `lighting.fs` hace PCF manual 3×3 (no hay sampler de
+  comparación por hardware en estos bindings) y el factor de sombra solo
+  atenúa el término de **sol** de la fórmula de luz, nunca ambient/fill —
+  un fragmento en sombra plena no baja de `SHADOW_MIN_FACTOR` de sol
+  (nunca negro puro, misma disciplina que el keyframe NIGHT).
+  `SHADOW_DEPTH_BIAS` es el valor a tunear a ojo si aparece "acné" (bias
+  chico) o "peter-panning"/sombra despegada de la base (bias grande) —
+  ajustar de a un síntoma por vez, tiran en direcciones opuestas.
+  **Trampa de orden**: el `EnableFramebuffer`/`DisableFramebuffer` del
+  shadow pass (nivel `rlgl`, no `BeginTextureMode`) tiene que completar
+  ANTES de que arranque el `BeginTextureMode` de `Pause_Blur` — si no, el
+  `DisableFramebuffer` del shadow pass pisa el framebuffer del blur en vez
+  de dejarlo activo. Por eso el pase de sombra en `render_game` está
+  *afuera* del bloque que arma `is_paused_glass`, no "justo antes de
+  `BeginMode3D`" como el resto del pipeline 3D. `render_map_preview_to_texture`
+  (miniatura de mapa) también corre su propio shadow pass, una vez por
+  preview generado (no por frame) — costo irrelevante.
+  **Trampa ya pisada — se rompió la UI la primera vez**: `rlgl.SetMatrixProjection`/
+  `SetMatrixModelview` (usados para armar la cámara ortográfica de la luz)
+  escriben directo sobre el mismo storage interno que usa
+  `raylib.BeginMode3D`/`EndMode3D` para su propia cámara — la primera
+  versión de `render_shadow_depth_pass` los llamaba sin guardar/restaurar
+  nada, así que después de terminar el pase de sombra quedaba pisada la
+  proyección 2D de pantalla (la que usa toda la UI) con la ortográfica de
+  la luz por el resto del frame — la interfaz se "desaparecía" (en
+  realidad se dibujaba, pero proyectada con la matriz equivocada). Fix:
+  `render_shadow_depth_pass` ahora hace exactamente el mismo manejo de
+  matrices que `BeginMode3D`/`EndMode3D` hacen internamente —
+  `rlMatrixMode(PROJECTION)` + `PushMatrix` antes de `SetMatrixProjection`,
+  `PopMatrix` después (la proyección SÍ se apila); el modelview NO se
+  apila, se resetea a identidad después (mismo criterio que `EndMode3D`,
+  que tampoco restaura un modelview previo — el modo 2D siempre usa
+  identidad). Cualquier código nuevo que toque `rlgl.SetMatrixProjection`/
+  `SetMatrixModelview` fuera de `BeginMode3D` tiene que replicar este mismo
+  patrón, si no la UI se rompe de la misma forma.
+  **Trampa ya pisada — no se veía ninguna sombra proyectada**: en
+  `shadow_light_matrix`, el ojo de la cámara-luz se calculaba como
+  `center - sun_dir * SHADOW_LIGHT_DISTANCE`. `sun_dir` sigue la misma
+  convención que `lighting.fs` documenta para `sunDir` — apunta DESDE la
+  superficie HACIA el sol (arriba) — así que el ojo tiene que ubicarse
+  `center + sun_dir * distancia` (del lado del sol, mirando hacia abajo al
+  mapa), no restando. Con el signo invertido la "luz" quedaba del lado
+  opuesto al sol real, apuntando en la dirección equivocada — el depth
+  pass seguía compilando y corriendo sin error, pero no producía ninguna
+  sombra utilizable sobre el terreno. Ojo con este mismo error de signo si
+  se toca `sun_dir`/`sunDir` en cualquier código nuevo — la convención
+  "apunta HACIA el sol" es fácil de invertir sin que nada lo marque en
+  compilación.
+  **Segunda trampa del mismo bug — seguía sin verse sombra tras arreglar el
+  signo**: `shadow_map.depth_tex` no es parte de un `Material` (es una
+  textura suelta, creada a mano vía `rlgl.LoadTextureDepth`) —
+  `raylib.SetShaderValueTexture` NO sirve para bindearla como uniform
+  `sampler2D` en este caso (a diferencia de `texture0`/`texture1` del
+  terreno, que SÍ van vía `material.maps[...]` y por eso raylib los rebindea
+  solo en cada `DrawModel`). Usar `SetShaderValueTexture` para `shadowMap`
+  competía por texture units con esos maps del terreno — compilaba y
+  corría sin error, pero terminaba leyendo la textura equivocada (o una
+  unidad que `DrawModel` pisaba después), dando profundidad sin sentido y
+  cero sombra visible. Fix, calcado del ejemplo oficial de raylib
+  (`shaders_shadowmap.c`): `shadow_map_bind_for_sampling` elige un texture
+  slot propio y fijo (`constants.SHADOW_MAP_TEXTURE_SLOT`, `10` — el
+  terreno ya usa 0/1), lo bindea a mano con
+  `rlgl.ActiveTextureSlot`/`EnableTexture`, y sube el uniform como un
+  **entero** (`SetShaderValue(..., .INT)`, el índice de unidad), no como
+  una `Texture2D`. Cualquier textura suelta (no de un `Material`) que se
+  necesite samplear desde un shader propio en este proyecto debe seguir
+  este mismo patrón, no `SetShaderValueTexture`.
+  **Tercera trampa del mismo bug — seguía sin verse sombra en las esquinas
+  del mapa (y a veces en todo el mapa, según la fase del ciclo día/noche)**:
+  `shadow_light_matrix` armaba el frustum ortográfico con un `half_extent`
+  isotrópico (mismo radio en las 4 direcciones, basado solo en la diagonal
+  X/Z del mapa). Eso alcanza cuando el sol está casi vertical (NOON), pero
+  para un ángulo con componente horizontal grande (DAWN/DUSK, las fases con
+  más "sombra larga") la proyección del mapa sobre los ejes de la
+  cámara-luz NO es un círculo — es un rectángulo estirado, y un
+  half-extent isotrópico subestima el ancho real: las esquinas del mapa
+  (a veces zonas enteras, según qué tan oblicuo esté el sol en ese momento)
+  quedaban literalmente afuera del frustum ortográfico y no había ningún
+  dato de profundidad ahí — cero sombra, sin ningún error. Fix: en vez de
+  un radio fijo, `shadow_light_matrix` proyecta los 8 vértices del AABB
+  real del mundo (todo el ancho/alto del mapa, Y desde `SHADOW_WORLD_Y_MIN`
+  hasta `SHADOW_WORLD_Y_MAX` — rango pensado para cubrir tanto el
+  hundimiento del camino embossed como el caster más alto) a espacio de la
+  cámara-luz vía `raylib.Vector3Transform(corner, view)`, y arma los 6
+  planos del frustum (`MatrixOrtho` + near/far) con el min/max real de esas
+  8 proyecciones. Cualquier frustum de cámara calculado a mano en este
+  proyecto (no solo de sombra) debería preferir este método — un
+  half-extent/radio fijo solo es válido si la orientación de la cámara no
+  cambia, y acá sí cambia (con el sol en movimiento).
+  **Cuarta trampa del mismo bug — la de raíz, la que hacía que
+  `shadowDebugView` (F9) diera magenta en TODA la pantalla**: el orden de
+  composición `light_space := shadow_map.view * shadow_map.proj` estaba
+  invertido. Para transformar un punto de MUNDO a espacio de la luz hace
+  falta aplicar `view` primero (mundo→vista) y `proj` después
+  (vista→clip): `clip = proj*(view*punto) = (proj*view)*punto`. Con
+  `view*proj` en cambio se computa `view*(proj*punto)` — proj aplicado
+  primero a un punto que todavía está en espacio de MUNDO, sin sentido
+  matemático. Se verificó a mano con un caso real (centro del mapa,
+  `view_z=-30` exacto — confirmado con una transformación de `view` sola,
+  por separado) y con un script standalone (no el juego) que probó las
+  dos composiciones posibles: `view*proj` daba `clip.z≈-40` (muy afuera de
+  `[-1,1]`) mientras que `proj*view` daba `clip.z≈0.045` (adentro,
+  correcto). El script también confirmó que **`raylib.MatrixOrtho` en sí
+  nunca fue el problema** — con el orden correcto (`proj*view`) da
+  exactamente el mismo resultado que una matriz ortográfica armada a mano
+  con la fórmula estándar de OpenGL; una hipótesis anterior (revertida)
+  había sospechado de una inconsistencia entre `MatrixOrtho`/`MatrixLookAt`
+  que en realidad no existe. **Antes de aceptar una hipótesis sobre una
+  función de raylib/linalg "que no hace lo que dice", verificarla con un
+  script standalone de pocas líneas** (como
+  `/tmp/.../ortho_test_dir/ortho_test.odin` de esta sesión, ya descartable)
+  en vez de solo derivarla a mano — ahorra exactamente este tipo de vuelta
+  en U. Esto explica por qué las tres trampas anteriores (signo del sol,
+  texture unit, half-extent isotrópico) eran todas reales y necesarias,
+  pero ninguna alcanzaba sola — esta era la que de verdad impedía ver
+  cualquier sombra, exactamente en el mismo lugar (`shadow_map_bind_for_sampling`)
+  donde ya se habían corregido las otras.
+  **Herramientas de debug usadas para encontrar esto, ya sacadas del
+  código** una vez confirmado el fix: la tecla F9 (mostraba
+  `shadow_factor()`/profundidad cruda en vez del color final — magenta =
+  fuera del frustum de luz, gris = adentro), el recuadro en la esquina con
+  el contenido crudo de `shadow_map.depth_tex`, y el `fmt.println` que
+  imprimía la profundidad esperada del centro del mapa. Si hace falta
+  volver a diagnosticar algo parecido, el patrón que funcionó fue: (1)
+  visualizar la textura de profundidad cruda para confirmar que el depth
+  pass en sí genera datos con sentido, (2) visualizar `shadow_factor()`
+  como color plano para separar "problema en el cálculo de sombra" de
+  "problema en cómo se mezcla con el resto de la iluminación", y (3) un
+  `fmt.println` puntual con un caso numérico concreto (no solo mirar
+  código) para confirmar o descartar una hipótesis de matriz antes de
+  tocar nada — así se encontró que el bug real era el orden `proj*view`
+  vs `view*proj`, no las dos hipótesis anteriores (que también eran reales
+  pero no alcanzaban solas).
 
 **Trampa real (no la de arriba) — `raylib.DrawCylinder`/`DrawCylinderEx` no
 tienen normal real:** el comentario de `lighting.vs` sobre "locations

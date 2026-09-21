@@ -29,6 +29,14 @@ uniform float useTerrainMask;
 uniform float pathEmbossDepth;
 uniform vec2  pathMaskTexel;
 
+// Sombra proyectada real — matriz vista×proyección ortográfica del sol
+// (ver shadow_light_matrix en rendering.odin). Se calcula con la posición
+// YA desplazada por el hundimiento del camino de arriba, para que la
+// sombra que cae sobre un tile de camino no quede desalineada del tallado
+// visible.
+uniform mat4 lightSpaceMatrix;
+out vec4 fragPosLightSpace;
+
 out vec3 fragNormal;
 out vec4 fragColor;
 out vec2 fragTexCoord;
@@ -67,5 +75,6 @@ void main() {
     fragNormal = n;
     fragColor = vertexColor;
     fragTexCoord = vertexTexCoord;
+    fragPosLightSpace = lightSpaceMatrix * vec4(pos, 1.0);
     gl_Position = mvp * vec4(pos, 1.0);
 }

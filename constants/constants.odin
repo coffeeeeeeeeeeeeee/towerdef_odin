@@ -244,12 +244,27 @@ DAY_NIGHT_KEYFRAMES := [Day_Night_Phase]Day_Night_Values {
 // ciclo completo), gateado a PLAYING.
 DAY_NIGHT_CYCLE_SPEED :: f32(0.01)
 
-// Sombra de contacto falsa (AO barato) bajo torres/árboles/bloques/
-// enemigos — disco plano sin iluminar, ver draw_contact_shadow_3d.
-COLOR_CONTACT_SHADOW        :: raylib.Color{0, 0, 0, 45}  // alpha del centro — draw_contact_shadow_3d compone 3 capas hacia afuera, más tenues
-CONTACT_SHADOW_THICKNESS    :: f32(0.02)
-CONTACT_SHADOW_Y_OFFSET     :: f32(0.01)
-CONTACT_SHADOW_RADIUS_RATIO :: f32(1.3)  // fracción del tamaño del objeto, mismo criterio que el ring de .ARMORED (1.1×)
+// Sombra proyectada real (shadow mapping) — depth pre-pass desde el punto
+// de vista del sol, muestreado en lighting.fs. Reemplazó a las sombras de
+// contacto falsas (discos planos sin dirección) que había antes — ver
+// render_shadow_depth_pass/shadow_light_matrix en rendering.odin.
+SHADOW_MAP_RESOLUTION :: i32(2048)
+// Slot de textura fijo para bindear shadow_map.depth_tex a mano (no es
+// parte de un Material, así que raylib.SetShaderValueTexture no sirve acá
+// — ver la trampa documentada en CLAUDE.md). 10 porque el terreno ya usa
+// las unidades 0/1 (texture0=camino, texture1=agua, vía material.maps) y
+// nada más en el proyecto toca unidades de textura a mano.
+SHADOW_MAP_TEXTURE_SLOT :: i32(10)
+SHADOW_LIGHT_DISTANCE :: f32(30.0)
+SHADOW_NEAR_PLANE     :: f32(0.1)  // piso de seguridad — el near real sale del AABB proyectado, ver shadow_light_matrix
+SHADOW_FRUSTUM_MARGIN :: f32(1.0)
+// Rango vertical del mundo a cubrir por el frustum de sombra — desde bien
+// debajo del terreno (cubre el hundimiento del camino embossed,
+// PATH_EMBOSS_DEPTH) hasta arriba del caster más alto (jefes ~size_y*2).
+SHADOW_WORLD_Y_MIN :: f32(-1.0)
+SHADOW_WORLD_Y_MAX :: f32(4.0)
+SHADOW_DEPTH_BIAS     :: f32(0.0015)  // ajustar a ojo — subir si hay "acné", bajar si la sombra se despega de la base ("peter-panning")
+SHADOW_MIN_FACTOR     :: f32(0.35)    // piso: fracción de sol que sobrevive incluso en sombra plena, nunca negro puro
 
 PATH_WIDTH_RATIO :: 0.4  // Path draw width as a fraction of cell size
 

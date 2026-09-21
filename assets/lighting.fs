@@ -3,17 +3,45 @@
 in vec3 fragNormal;
 in vec4 fragColor;
 in vec2 fragTexCoord;
+in vec4 fragPosLightSpace;
 
 out vec4 finalColor;
 
-// Iluminación simple: sol direccional fijo + luz de relleno tenue (para que
-// las caras en sombra no queden negro puro) + ambient constante. Sin
-// especular, sin sombras proyectadas — ver 3D_RENDER_PLAN.md.
+// Iluminación: sol direccional (día/noche móvil) + luz de relleno tenue
+// (para que las caras en sombra no queden negro puro) + ambient constante,
+// más especular suave y sombra proyectada real — ver 3D_RENDER_PLAN.md
+// para la decisión original de "simple", y CLAUDE.md para las extensiones.
 uniform vec3 sunDir;   // normalizado, apunta DESDE la superficie HACIA el sol
 uniform vec3 sunColor;
 uniform vec3 fillDir;
 uniform vec3 fillColor;
 uniform vec3 ambient;
+
+// Sombra proyectada real (shadow mapping) — depth pre-pass desde el sol,
+// ver render_shadow_depth_pass en rendering.odin. Solo atenúa el término
+// de SOL de la fórmula de luz de abajo, nunca ambient/fill — un fragmento
+// en sombra sigue recibiendo luz ambiente, nunca queda negro puro (mismo
+// criterio que ya se usó para el keyframe NIGHT del día/noche). PCF manual
+// 3x3 — no hay sampler de comparación por hardware en estos bindings.
+uniform sampler2D shadowMap;
+uniform float shadowDepthBias;  // fijo, ver constants.SHADOW_DEPTH_BIAS
+uniform float shadowMinFactor;  // piso — fracción de sol que sobrevive en sombra plena
+
+float shadow_factor() {
+    vec3 proj = fragPosLightSpace.xyz / fragPosLightSpace.w;
+    proj = proj * 0.5 + 0.5;  // NDC [-1,1] -> espacio de textura [0,1]
+    if (proj.z > 1.0) return 1.0;  // fuera del far plane de la luz — sin dato, full sol
+    float lit = 0.0;
+    vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0));
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            float closest = texture(shadowMap, proj.xy + vec2(x, y) * texel).r;
+            lit += (proj.z - shadowDepthBias > closest) ? 0.0 : 1.0;
+        }
+    }
+    lit /= 9.0;
+    return mix(shadowMinFactor, 1.0, lit);
+}
 
 // Especular suave (Blinn-Phong), solo para superficies duras/mojadas —
 // torres (bracket puntual en render_map_objects_3d) y agua (siempre que
@@ -446,7 +474,8 @@ void main() {
     vec3 n = normalize(fragNormal);
     float sunDiff = max(dot(n, sunDir), 0.0);
     float fillDiff = max(dot(n, fillDir), 0.0);
-    vec3 lit = ambient + sunColor * sunDiff + fillColor * fillDiff;
+    float sf = shadow_factor();
+    vec3 lit = ambient + sunColor * sunDiff * sf + fillColor * fillDiff;
 
     // Especular: en terreno solo sobre agua (isWater), en formas inmediatas
     // (torres) solo mientras specularStrength está prendido desde Odin.

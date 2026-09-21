@@ -15,6 +15,14 @@ input_handle :: proc(app: ^entities.App_State) {
 		app.console.cmd_input.focused = app.console.open
 	}
 
+	// F9: mostrar/ocultar el contador de FPS (siempre, en cualquier estado)
+	// — mismo settings.show_fps que ya controla el toggle en el menú de
+	// Settings, así que quedan en sync entre los dos (ver
+	// render_ui/menus.odin, que ya lo suprime en EDITOR).
+	if raylib.IsKeyPressed(.F9) {
+		app.settings.show_fps = !app.settings.show_fps
+	}
+
 	// No mover la cámara mientras el browser de mapas está abierto en el
 	// editor, ni mientras el shop está abierto (overlay de PLAYING, no un
 	// app.state propio — ver app.sim.shop.active).
