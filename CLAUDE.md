@@ -584,6 +584,43 @@ complejidad de invalidación (resize de ventana, etc.) sin beneficio real:
 redirigir el render normal a una textura + 2 pasadas de blur no es más caro
 que lo que ya se dibuja hoy en pantalla.
 
+## Control de cámara 3D — sin paneo, rotación con botón central
+
+`camera3d_for_focus` (`rendering.odin`) toma `focus`/`zoom`/`yaw`. El
+`yaw` es lo único nuevo: rota la cámara alrededor de `focus` en el eje Y,
+ángulo de inclinación (`CAMERA_PITCH_DEG`) siempre fijo. En `yaw=0` da
+exactamente la misma posición que la cámara vieja (antes de que existiera
+rotación) — es el caso de regresión a no romper si se toca esta función.
+
+**No hay paneo.** `app.camera_focus` ya no se mueve en vivo — queda fijo
+en lo que establecen `simulation_fit_camera` (`systems/simulation.odin`) y
+`default_focus` (`main.odin`) al cargar/ajustar un mapa (ambos calculan el
+centro del mapa). Los únicos controles de cámara en el mapa 3D son:
+scroll = zoom (sin cambios, zoom-to-cursor incluido), botón central + drag
+= rotación (`app.camera_yaw`, `CAMERA_ORBIT_SENSITIVITY` en
+`constants.odin`). `input_handle_camera_orbit` (`systems/input.odin`)
+resuelve la rotación y se llama tanto desde `input_handle_camera_3d`
+(PLAYING/EDITOR) como desde `input_handle_paused` (PAUSED no pasa por
+`input_handle_camera_3d`, así que necesita su propia llamada).
+
+`camera_yaw` no tiene lerp/target a diferencia de `camera_focus`/`zoom` —
+responde 1:1 al drag, no hay una versión "suavizada" que perseguir cada
+frame.
+
+**Por qué el botón central y no el derecho** (el pedido original era
+click derecho + drag): el derecho ya dispara varias acciones de un solo
+click en este proyecto (cancelar acción/torre seleccionada en
+PLAYING/PAUSED, borrar celda en EDITOR, vender carta/torre en los menús —
+todas vía `IsMouseButtonPressed(.RIGHT)`, que dispara en el mismo frame en
+que se aprieta, antes de que se pueda saber si va a haber drag) — usarlo
+para rotación hubiera necesitado distinguir click de drag en los 5 sitios
+que ya lo usan. El botón central no tiene ninguna acción de un solo click
+en el proyecto (solo tenía paneo, que se sacó), así que no hace falta
+nada de eso: cualquier movimiento con el botón apretado rota, sin
+threshold ni tracking de estado extra. Si en algún momento se le agrega
+una acción de click al botón central, ahí sí hay que revisar
+`input_handle_camera_orbit` para que no dispare junto con un drag.
+
 ## Iluminación 3D — especular, sombras de contacto, ciclo día/noche, sombra proyectada
 
 Modelo base sigue siendo Lambertiano simple (`3D_RENDER_PLAN.md`), pero ya
@@ -598,10 +635,11 @@ no es 100% estático:
   torres (bracket puntual alrededor de su draw en `render_map_objects_3d`,
   vía `LIGHT_SPECULAR_STRENGTH_TOWER`) y agua (siempre activo mientras
   `useTerrainMask`+`isWater`, multiplicador fijo `SPECULAR_STRENGTH_WATER`
-  dentro del shader). `viewDir` es una constante (cámara de ángulo fijo,
-  nunca rota) derivada del mismo `CAMERA_PITCH_DEG` que usa
-  `camera3d_for_focus` — si ese ángulo cambia, el especular se recalcula
-  solo en el próximo `lighting_shader_init`.
+  dentro del shader). `viewDir` es un uniform **por frame** (ya no una
+  constante — la cámara rota, ver "Control de cámara 3D" más arriba),
+  calculado en `render_map_3d` como
+  `normalize(app.camera3d.position - app.camera3d.target)`. `lighting_shader_init`
+  solo resuelve `loc_view_dir`, no sube ningún valor.
 - **Ciclo día/noche**: `DAY_NIGHT_KEYFRAMES` (4 fases —
   DAWN/NOON/DUSK/NIGHT, `constants.odin`) interpoladas linealmente en
   `day_night_sample` (`rendering.odin`), evaluadas cada frame en

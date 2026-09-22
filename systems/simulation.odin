@@ -2272,6 +2272,7 @@ simulation_fit_camera :: proc(app: ^entities.App_State, screen_w, screen_h: f32)
 	focus := raylib.Vector3{f32(m.width) * wcs * 0.5, 0, f32(m.height) * wcs * 0.5}
 	app.camera_focus        = focus
 	app.target_camera_focus = focus
+	app.camera_yaw          = 0  // cada mapa arranca con la vista canónica, no la rotación de la sesión anterior
 
 	// Invalida la malla cacheada del terreno — se reconstruye lazily en el
 	// próximo frame de PLAYING (terrain_cache_ensure) para el mapa actual.

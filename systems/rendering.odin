@@ -312,17 +312,20 @@ cloud_shader_draw :: proc(app: ^entities.App_State) {
 // ── Mapa 3D (Camera3D fija-isométrica) ──────────────────────────────────────
 // Ver 3D_RENDER_PLAN.md.
 
-// Construye una Camera3D a partir de un foco (punto de mundo mirado) y un
-// zoom, con el ángulo de inclinación fijo (CAMERA_PITCH_DEG) — no rota nunca,
-// solo "top-down inclinado". zoom alto = cámara más cerca (ver
-// constants.camera_distance_from_zoom).
-camera3d_for_focus :: proc(focus: raylib.Vector3, zoom: f32) -> raylib.Camera3D {
+// Construye una Camera3D a partir de un foco (punto de mundo mirado), un
+// zoom y un yaw (rotación alrededor del foco, radianes) — ángulo de
+// inclinación fijo (CAMERA_PITCH_DEG), solo el yaw gira la vista alrededor
+// del eje Y. zoom alto = cámara más cerca (ver
+// constants.camera_distance_from_zoom). En yaw=0 da exactamente la misma
+// posición que la cámara fija de antes (sin(0)=0, cos(0)=1).
+camera3d_for_focus :: proc(focus: raylib.Vector3, zoom: f32, yaw: f32) -> raylib.Camera3D {
 	pitch_rad := constants.CAMERA_PITCH_DEG * math.RAD_PER_DEG
 	dist := constants.camera_distance_from_zoom(zoom)
+	horizontal_dist := dist * math.cos(pitch_rad)
 	offset := raylib.Vector3{
-		0,
+		horizontal_dist * math.sin(yaw),
 		dist * math.sin(pitch_rad),
-		dist * math.cos(pitch_rad),
+		horizontal_dist * math.cos(yaw),
 	}
 	return raylib.Camera3D{
 		position   = focus + offset,
@@ -333,10 +336,10 @@ camera3d_for_focus :: proc(focus: raylib.Vector3, zoom: f32) -> raylib.Camera3D 
 	}
 }
 
-// Deriva app.camera3d a partir del estado actual de app.camera_focus/zoom —
+// Deriva app.camera3d a partir del estado actual de app.camera_focus/zoom/yaw —
 // llamar una vez por frame antes de dibujar/pickear el mundo 3D.
 update_camera3d :: proc(app: ^entities.App_State) {
-	app.camera3d = camera3d_for_focus(app.camera_focus, app.zoom)
+	app.camera3d = camera3d_for_focus(app.camera_focus, app.zoom, app.camera_yaw)
 }
 
 // ── Iluminación 3D (shader real con normales) ───────────────────────────────
@@ -355,7 +358,7 @@ Lighting_Shader :: struct {
 	loc_fill_dir:    i32,
 	loc_fill_color:  i32,
 	loc_ambient:     i32,
-	loc_view_dir:    i32,  // constante, cámara de ángulo fijo — ver lighting_shader_init
+	loc_view_dir:    i32,  // uniform por frame, la cámara rota — ver render_map_3d
 	loc_specular_strength: i32,  // 0 por defecto; bracket puntual alrededor del draw de torres
 	loc_use_mask:    i32,  // 1.0 solo mientras se dibuja el terreno (ver render_map_3d)
 	loc_path_color:  i32,
@@ -445,12 +448,10 @@ lighting_shader_init :: proc() {
 	raylib.SetShaderValue(s, lighting_shader.loc_fill_color, &fill_color, .VEC3)
 	raylib.SetShaderValue(s, lighting_shader.loc_ambient, &ambient, .VEC3)
 
-	// Dirección cámara fija (nunca rota) → viewDir es una constante, igual
-	// que sunDir/fillDir. Mismo ángulo que usa camera3d_for_focus, para que
-	// si CAMERA_PITCH_DEG cambia algún día el especular se ajuste solo.
-	pitch_rad := constants.CAMERA_PITCH_DEG * math.RAD_PER_DEG
-	view_dir := linalg.normalize(raylib.Vector3{0, math.sin(pitch_rad), math.cos(pitch_rad)})
-	raylib.SetShaderValue(s, lighting_shader.loc_view_dir, &view_dir, .VEC3)
+	// viewDir ya NO se sube acá — la cámara ahora rota (botón central +
+	// drag), así que dejó de ser una constante. Se recalcula cada frame en
+	// render_map_3d a partir de app.camera3d. loc_view_dir queda resuelto
+	// acá igual, solo se movió la subida del valor.
 
 	// Apagado por defecto — solo se prende puntualmente alrededor del draw
 	// de torres (ver render_map_objects_3d). El agua tiene su propio
@@ -1062,6 +1063,12 @@ render_map_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_fill_dir, &dn_fill_dir, .VEC3)
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_fill_color, &dn.fill_color, .VEC3)
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_ambient, &dn.ambient, .VEC3)
+
+	// viewDir por frame — la cámara ahora rota (botón central + drag), ya
+	// no es la constante fija de antes. Sin gate de estado: también hace
+	// falta en EDITOR, donde también se puede rotar.
+	view_dir := linalg.normalize(app.camera3d.position - app.camera3d.target)
+	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_view_dir, &view_dir, .VEC3)
 
 	on := f32(1)
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_use_mask, &on, .FLOAT)
@@ -2053,7 +2060,7 @@ render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 
 	wcs := constants.WORLD_CELL_SIZE
 	focus := raylib.Vector3{f32(m.width) * wcs * 0.5, 0, f32(m.height) * wcs * 0.5}
-	camera := camera3d_for_focus(focus, zoom)
+	camera := camera3d_for_focus(focus, zoom, 0)  // miniatura: siempre yaw=0, independiente de la cámara en vivo
 
 	// terrain_cache es un singleton compartido con el mapa real en curso —
 	// invalidar antes (para que tome los datos de `m`, el preview) y después

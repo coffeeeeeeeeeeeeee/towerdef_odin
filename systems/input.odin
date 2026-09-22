@@ -370,6 +370,10 @@ case .GARDENER:
 
 // Paused input
 input_handle_paused :: proc(app: ^entities.App_State) {
+	// PAUSED no pasa por input_handle_camera_3d (su zoom va por el path 2D
+	// compartido de input_handle_camera) — la rotación se cablea acá aparte.
+	input_handle_camera_orbit(app)
+
 	// SPACE resumes the game
 	if raylib.IsKeyPressed(.SPACE) {
 		simulation_set_pause(app, false)
@@ -919,13 +923,14 @@ input_handle_camera :: proc(app: ^entities.App_State) {
 	}
 }
 
-// Pan + zoom-to-cursor para el mapa 3D (PLAYING). No hay Camera2D: el pan se
-// resuelve arrastrando el punto de suelo bajo el mouse (doble raycast,
-// antes/después del delta); el zoom-to-cursor construye una cámara
+// Zoom-to-cursor + rotación para el mapa 3D (PLAYING/EDITOR). No hay pan:
+// camera_focus queda fijo salvo cuando simulation_fit_camera/default_focus
+// lo recalculan al cargar un mapa. El zoom-to-cursor construye una cámara
 // hipotética con la nueva distancia y desplaza camera_focus para que el
 // mismo punto de suelo quede bajo el cursor otra vez (ver 3D_RENDER_PLAN.md,
 // riesgo 7.5 — no es garantía matemática 1:1 con el zoom 2D, es una
-// aproximación visual).
+// aproximación visual). La rotación (botón central + drag) vive en
+// input_handle_camera_orbit, llamada al final de esta función.
 input_handle_camera_3d :: proc(app: ^entities.App_State) {
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
@@ -939,7 +944,7 @@ input_handle_camera_3d :: proc(app: ^entities.App_State) {
 		if app.target_zoom > constants.ZOOM_MAX { app.target_zoom = constants.ZOOM_MAX }
 
 		if old_ok {
-			hypothetical := camera3d_for_focus(app.camera_focus, app.target_zoom)
+			hypothetical := camera3d_for_focus(app.camera_focus, app.target_zoom, app.camera_yaw)
 			new_point, new_ok := raycast_ground_point(hypothetical, mouse_x, mouse_y)
 			if new_ok {
 				delta := old_point - new_point
@@ -948,17 +953,20 @@ input_handle_camera_3d :: proc(app: ^entities.App_State) {
 		}
 	}
 
-	// Pan with middle mouse button — arrastra el punto de suelo bajo el
-	// cursor, no un delta de píxeles crudo (la perspectiva no es 1:1).
-	if raylib.IsMouseButtonDown(.MIDDLE) {
-		prev_x := mouse_x - i32(raylib.GetMouseDelta().x)
-		prev_y := mouse_y - i32(raylib.GetMouseDelta().y)
-		before, before_ok := raycast_ground_point(app.camera3d, prev_x, prev_y)
-		after, after_ok := raycast_ground_point(app.camera3d, mouse_x, mouse_y)
-		if before_ok && after_ok {
-			delta := before - after
-			app.camera_focus += delta
-			app.target_camera_focus = app.camera_focus
-		}
+	input_handle_camera_orbit(app)
+}
+
+// Rotación de cámara por drag del botón central — gira app.camera_yaw en
+// vivo mientras se mantiene apretado. El botón central no tiene ninguna
+// acción de un solo click en este proyecto (a diferencia del derecho), así
+// que no hace falta distinguir click de drag: cualquier movimiento con el
+// botón apretado rota. Se llama desde PLAYING/EDITOR (acá arriba) y
+// también desde PAUSED (input_handle_paused), que no pasa por
+// input_handle_camera_3d.
+input_handle_camera_orbit :: proc(app: ^entities.App_State) {
+	mouse_x := raylib.GetMouseX()
+	mouse_y := raylib.GetMouseY()
+	if raylib.IsMouseButtonDown(.MIDDLE) && !ui_is_click_blocked(mouse_x, mouse_y) {
+		app.camera_yaw += raylib.GetMouseDelta().x * constants.CAMERA_ORBIT_SENSITIVITY
 	}
 }

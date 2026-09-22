@@ -157,6 +157,10 @@ WORLD_HEIGHT_SCALE :: f32(1.5)  // Multiplicador de heightmap [0,1] -> altura re
 WORLD_WATER_HEIGHT :: f32(0.15)
 
 CAMERA_PITCH_DEG :: f32(55)  // Ángulo fijo de inclinación de la cámara (isométrico)
+
+// Radianes de yaw por píxel de arrastre horizontal del botón central —
+// única forma de rotar la cámara (no hay paneo). Valor a ajustar a ojo.
+CAMERA_ORBIT_SENSITIVITY :: f32(0.005)
 CAMERA_FOVY      :: f32(45) // Field of view vertical, grados
 
 // Distancia cámara-foco, mapeada desde app.zoom (inversamente proporcional:

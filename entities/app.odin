@@ -292,6 +292,13 @@ App_State :: struct {
 	camera_focus:        raylib.Vector3,
 	target_camera_focus: raylib.Vector3,
 
+	// Yaw de la cámara alrededor de camera_focus, en radianes. Responde 1:1
+	// al drag del botón central (sin lerp/target, a diferencia de zoom/
+	// camera_focus) — ver input_handle_camera_orbit en input.odin. 0 = vista
+	// original (mirando siempre hacia -Z, idéntica a la cámara fija de antes
+	// de este cambio).
+	camera_yaw: f32,
+
 	// Screen shake — "trauma" en [0,1], decae con el tiempo. El offset visual
 	// se calcula en render_game a partir de esto y se aplica solo por el
 	// tiempo del frame (no persiste en camera_offset_x/y).
