@@ -890,6 +890,20 @@ day_night_sample :: proc(t: f32) -> constants.Day_Night_Values {
 	}
 }
 
+// Fondo (cielo) detrás del mapa = color del sol actual (día/noche), no un
+// color fijo por bioma — así el cielo acompaña el ciclo de luz. Compartido
+// entre render_game y render_map_preview_to_texture para no duplicar la
+// conversión Vector3[0,1] → raylib.Color en los dos call sites.
+sky_color_from_sun :: proc() -> raylib.Color {
+	dn := day_night_sample(lighting_shader.day_night_anim_time)
+	return raylib.Color{
+		u8(clamp(dn.sun_color.r, 0, 1) * 255),
+		u8(clamp(dn.sun_color.g, 0, 1) * 255),
+		u8(clamp(dn.sun_color.b, 0, 1) * 255),
+		255,
+	}
+}
+
 // Matriz vista×proyección ortográfica del "sol", centrada en el mapa
 // actual (no en la cámara del jugador — el mapa tiene una extensión de
 // mundo fija, GRID_SIZE como tope, independiente del zoom/pan). `sun_dir`
@@ -1997,16 +2011,7 @@ render_game :: proc(app: ^entities.App_State) {
 		m := &app.editor.game_map
 		update_camera3d(app)
 
-		// Fondo detrás del mapa = color del sol actual (día/noche), no un
-		// color fijo por bioma — así el cielo acompaña el ciclo de luz.
-		dn_bg := day_night_sample(lighting_shader.day_night_anim_time)
-		bg_color := raylib.Color{
-			u8(clamp(dn_bg.sun_color.r, 0, 1) * 255),
-			u8(clamp(dn_bg.sun_color.g, 0, 1) * 255),
-			u8(clamp(dn_bg.sun_color.b, 0, 1) * 255),
-			255,
-		}
-		raylib.ClearBackground(bg_color)
+		raylib.ClearBackground(sky_color_from_sun())
 		raylib.BeginMode3D(app.camera3d)
 		render_map_3d(app, m)
 		if app.settings.show_grid {
@@ -2101,15 +2106,8 @@ render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 	render_shadow_depth_pass(app, m, dn_sun_dir)
 	shadow_map_bind_for_sampling()
 
-	dn_bg := day_night_sample(lighting_shader.day_night_anim_time)
-	bg_color := raylib.Color{
-		u8(clamp(dn_bg.sun_color.r, 0, 1) * 255),
-		u8(clamp(dn_bg.sun_color.g, 0, 1) * 255),
-		u8(clamp(dn_bg.sun_color.b, 0, 1) * 255),
-		255,
-	}
 	raylib.BeginTextureMode(app.editor.browser.preview_tex)
-	raylib.ClearBackground(bg_color)
+	raylib.ClearBackground(sky_color_from_sun())
 	raylib.BeginMode3D(camera)
 	render_map_3d(app, m)
 	render_map_objects_3d(app, m)

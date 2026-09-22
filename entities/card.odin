@@ -637,7 +637,6 @@ card_name :: proc(card: Card) -> string {
 	return "?"
 }
 
-// Alias para compatibilidad con código existente que pasa tower_type
 // Convierte una carta al Tile correspondiente para selected_build_tower
 card_to_tile :: proc(card: Card) -> constants.Tile {
 	if card.kind == .OBSTACLE {
@@ -690,7 +689,6 @@ card_shop_price :: proc(card: Card) -> i32 {
 	return constants.SHOP_PRICE_COMMON
 }
 
-// Alias original (compatibilidad)
 // Precio de venta de una carta desde la mano: 100% de su precio de tienda.
 // Aplica igual a torres, obstáculos y relictos.
 card_sell_price :: proc(card: Card) -> i32 {

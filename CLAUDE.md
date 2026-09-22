@@ -662,10 +662,11 @@ no es 100% estático:
   su intensidad no fue re-chequeada contra los keyframes NIGHT/DUSK más
   oscuros/saturados, solo contra NOON.
 - **Fondo (cielo) = color del sol actual**, no un color fijo por bioma —
-  los dos `ClearBackground` antes de dibujar el mapa (`render_game` y
-  `render_map_preview_to_texture`, ambos en `rendering.odin`) samplean
+  `sky_color_from_sun()` (`rendering.odin`) samplea
   `day_night_sample(lighting_shader.day_night_anim_time).sun_color` y lo
-  convierten a `raylib.Color` (×255, clamp [0,1]) en vez de usar
+  convierte a `raylib.Color` (×255, clamp [0,1]). La usan los dos
+  `ClearBackground` antes de dibujar el mapa (`render_game` y
+  `render_map_preview_to_texture`) en vez de
   `constants.BIOME_COLORS[m.biome].bg`. Ese campo `.bg` de
   `BIOME_COLORS` queda sin usar en estos dos call sites — no se borró
   la constante en sí por si se usa en otro lado.
