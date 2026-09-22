@@ -967,6 +967,6 @@ input_handle_camera_orbit :: proc(app: ^entities.App_State) {
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
 	if raylib.IsMouseButtonDown(.MIDDLE) && !ui_is_click_blocked(mouse_x, mouse_y) {
-		app.camera_yaw += raylib.GetMouseDelta().x * constants.CAMERA_ORBIT_SENSITIVITY
+		app.camera_yaw -= raylib.GetMouseDelta().x * constants.CAMERA_ORBIT_SENSITIVITY
 	}
 }
