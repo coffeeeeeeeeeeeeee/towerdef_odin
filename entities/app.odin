@@ -121,7 +121,7 @@ Simulation :: struct {
 	// Inter-wave delay timer (counts down from INTER_WAVE_DELAY before auto-starting next wave)
 	inter_wave_timer: f32,
 
-	// Victory flag (set when wave MAX_WAVE is cleared with health > 0)
+	// Victory flag (set when the run's last wave is cleared with health > 0 — ver campaign_max_waves)
 	is_victory: bool,
 
 	// Airdrop events
@@ -193,13 +193,9 @@ Editor :: struct {
 
 	// Current tool
 	current_tool: constants.Tile,
-	show_grid: bool,
 
 	// Editor settings
 	current_biome: constants.Biome,
-
-	// Debug visualization
-	show_paths: bool,
 
 	// Load map filename input
 	load_map_filename: [64]u8,
@@ -274,7 +270,6 @@ App_State :: struct {
 	settings: Settings,
 	
 	// UI System
-	toasts:  [dynamic]Toast,
 	console: Console_State,
 	
 	// Camera/View
@@ -483,7 +478,6 @@ app_finish_run :: proc(app: ^App_State, victory: bool) {
 	app.run_cristales   = cristales
 	app.meta.cristales  += cristales
 	app.meta.total_runs += 1
-	clear(&app.toasts)
 
 	// Path de campaña: registrar progreso, sumar bonus opcional, volver al visualizador.
 	if app.current_campaign_node >= 0 &&

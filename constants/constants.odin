@@ -413,9 +413,6 @@ OVERKILL_RATIO_PER_STACK          :: f32(0.5)  // Fracción del daño sobrante q
 OVERKILL_RANGE                    :: f32(2.5)  // Radio máx. (tiles) para buscar la víctima del salpicado
 RESONANCIA_CHANCE_PER_STACK       :: f32(0.15) // Probabilidad de duplicar el efecto de una reliquia de gatillo, por stack
 
-CARD_REROLL_COST     :: i32(50)    // Gold cost to reroll the 3-card selection
-HAND_REDEAL_COST     :: i32(40)    // Gold cost to redeal the hand once the game has started (free before first wave)
-
 CRIT_BASE_CHANCE     :: f32(0.10)  // Base critical hit chance (10%) for all towers
 CRIT_DAMAGE_MULTIPLIER :: f32(2.0) // Damage multiplier on a critical hit
 
@@ -526,8 +523,7 @@ WAVE_ENEMIES_BASE  :: i32(5)
 WAVE_ENEMIES_SCALE :: i32(2)
 
 BOSS_WAVE_INTERVAL :: i32(10)  // A boss wave occurs every N waves (wave 10, 20, 30…)
-MAX_WAVE           :: i32(100) // Legacy constant (kept for reference)
-RUN_MAX_WAVES      :: i32(30)  // Waves per meta-progression run
+RUN_MAX_WAVES      :: i32(20)  // Waves per meta-progression run — único tope de oleadas (unificado, ver campaign_max_waves)
 INTER_WAVE_DELAY   :: f32(2.0) // Seconds between wave end and next wave auto-start
 
 // Bonus waves
@@ -545,7 +541,6 @@ MIXED_WAVE_MIN_WAVE :: i32(20)  // Mixed waves begin at this wave number
 DECK_HAND_SIZE          :: i32(3)     // Cards dealt to hand at the start of each wave
 DECK_CARD_DROP_CHANCE   :: f32(0.004) // Probability of a card drop on each enemy kill
 DECK_SELECTION_INTERVAL :: i32(1)     // Every N waves the shop opens (1 = every wave)
-SHOP_RELIC_PRICE        :: i32(75)    // Fallback price (kept for compatibility)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shop — mecánicas extendidas (lock, reroll progresivo, pity, skip, biome)
@@ -604,10 +599,6 @@ CAMPAIGN_DISPLAY_LEN  :: 64  // nombre mostrado al jugador
 // Defaults para nodos nuevos creados desde el editor.
 CAMPAIGN_DEFAULT_DIFFICULTY :: f32(1.0)  // 1.0 = HP/speed normales
 CAMPAIGN_DEFAULT_WAVES      :: i32(0)    // 0 = usa RUN_MAX_WAVES
-
-// Recompensa de cristales por completar un nodo opcional (encima del cálculo
-// estándar de waves/kills/lives). 0 = sin bonus.
-CAMPAIGN_OPTIONAL_REWARD :: i32(10)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Visualizador de campaña — colores y dimensiones
@@ -818,21 +809,6 @@ COLOR_BRIDGE_DECK     :: raylib.Color{135, 135, 130, 255}  // Piso del puente, c
 BRIDGE_DECK_THICK     :: f32(0.10)                          // Espesor del piso como fracción del tile
 
 // =============================================================================
-// Bird flock
-// =============================================================================
-
-BIRD_SPEED              :: f32(140.0)   // Pixels per second
-BIRD_FLAP_FREQ          :: f32(3.2)    // Wing flap cycles per second
-BIRD_WING_AMP           :: f32(5.0)    // Wing-tip vertical oscillation amplitude in pixels
-BIRD_SIZE               :: f32(7.0)    // Half-wingspan in pixels (scales with zoom)
-BIRD_COUNT_MIN          :: i32(5)
-BIRD_COUNT_MAX          :: i32(12)
-BIRD_SPAWN_INTERVAL_MIN :: f32(45.0)   // Seconds between flocks (min)
-BIRD_SPAWN_INTERVAL_MAX :: f32(120.0)  // Seconds between flocks (max)
-BIRD_SCATTER_RADIUS     :: f32(60.0)   // Max distance birds spread from flock center
-COLOR_BIRD              :: raylib.Color{30, 30, 30, 200}
-
-// =============================================================================
 // Enemy colors
 // =============================================================================
 
@@ -935,19 +911,10 @@ BIOME_TREE_COLORS := [Biome]Biome_Tree_Colors {
 // Tower rendering
 // =============================================================================
 
-TOWER_CELL_SIZE_RATIO    :: f32(0.8)   // Tower body size as a fraction of cell size
-TOWER_BORDER_THICKNESS   :: 3          // Outline stroke thickness in pixels
 TOWER_ROUNDED_CORNER     :: f32(0.3)   // Rounded-rectangle corner radius (0 = sharp, 1 = full)
 TOWER_CORNER_SEGMENTS    :: 8          // Segments used for rounded corner arcs
-TOWER_INNER_SIZE_RATIO   :: f32(0.25)  // Center dot size as a fraction of tower size
-TOWER_BARREL_WIDTH_RATIO :: f32(0.25)  // Barrel width as a fraction of tower size
-TOWER_BARREL_LENGTH_RATIO :: f32(0.6)  // Barrel length as a fraction of tower size
-TOWER_HATCH_RADIUS_RATIO :: f32(0.15)  // Hatch/circle size ratio
 
 TOWER_RANGE_PREVIEW :: raylib.Color{255, 255, 255,  30}  // Range fill (very faint, used for all-towers overlay)
-TOWER_RANGE_OUTLINE :: raylib.Color{255, 255, 255,  60}  // Range outline for the all-towers overlay setting
-
-TOWER_AOE_CIRCLE_SEGMENTS :: 64  // Segments used to draw the AoE preview circle outline (smoother than raylib's default)
 
 TOWER_RECOIL_DISTANCE_RATIO :: f32(0.14)  // Max barrel kickback on fire, as a fraction of cs
 TOWER_RECOIL_DECAY_PER_SEC  :: f32(6.0)   // Linear decay rate of tower.recoil back to 0
@@ -963,7 +930,6 @@ HIT_PARTICLE_RADIUS       :: f32(0.035) // Radio de la chispa, en unidades de gr
 HIT_PARTICLE_SPEED_MIN    :: f32(1.0)   // Velocidad inicial mínima, unidades de grilla/seg
 HIT_PARTICLE_SPEED_MAX    :: f32(2.5)
 HIT_PARTICLE_COUNT_HIT    :: 2   // Chispas por instancia de daño
-HIT_PARTICLE_COUNT_DEATH  :: 9   // Chispas al morir un enemigo (ráfaga más grande)
 
 SCREEN_SHAKE_DECAY_PER_SEC   :: f32(2.2)   // Decaimiento lineal del trauma [0,1] por segundo
 SCREEN_SHAKE_MAX_OFFSET_PX   :: f32(14.0)  // Desplazamiento máximo de cámara en pixeles (trauma=1)
@@ -978,16 +944,9 @@ ENEMY_HIT_SQUASH_AMOUNT         :: f32(0.35) // Deformación máxima (fracción)
 // Tower colors
 // =============================================================================
 
-TOWER_BORDER_COLOR      :: raylib.BLACK
-TOWER_INNER_COLOR       :: raylib.DARKGRAY
-TOWER_BASE_COLOR        :: raylib.Color{190, 190, 190, 255}
-TOWER_SECONDARY_COLOR   :: raylib.Color{150, 150, 150, 255}
-TOWER_HIGHLIGHT_COLOR   :: raylib.Color{230, 230, 230, 255}
 TOWER_SHADOW            :: raylib.Color{  0,   0,   0,  30}
 
 TOWER_BARREL            :: raylib.Color{100, 140, 180, 255}
-TOWER_BARREL_OUTLINE    :: raylib.Color{ 40,  40,  50, 255}
-TOWER_CANNON_COLOR      :: raylib.Color{ 70,  70,  80, 255}
 TOWER_CANNON_BASE       :: raylib.Color{ 90, 110, 140, 255}
 TOWER_CANNON_STROKE     :: raylib.Color{ 80,  90, 110, 255}
 TOWER_LASER_COLOR       :: raylib.Color{255,  68,  68, 255}
@@ -996,14 +955,12 @@ TOWER_LASER_BASE        :: raylib.Color{ 80, 120, 160, 255}
 TOWER_LASER_STROKE      :: raylib.Color{ 60, 100, 180, 255}
 TOWER_MISSILE_BASE      :: raylib.Color{160, 100,  80, 255}
 TOWER_MISSILE_POD       :: raylib.Color{120,  80,  60, 255}
-TOWER_MISSILE_WARHEAD   :: raylib.Color{255,  60,  60, 255}
 TOWER_MISSILE_STROKE    :: raylib.Color{180,  70,  60, 255}
 TOWER_SNIPER_BASE       :: raylib.Color{ 40, 140,  60, 255}
 TOWER_SNIPER_STROKE     :: raylib.Color{ 30, 100,  40, 255}
 TOWER_ARCHER_BASE       :: raylib.Color{160, 110,  60, 255}
 TOWER_ARCHER_STROKE     :: raylib.Color{120,  80,  40, 255}
 TOWER_ARCHER_WOOD       :: raylib.Color{180, 110,  50, 255}
-TOWER_ARCHER_STRING     :: raylib.Color{220, 220, 220, 255}
 TOWER_ICE_BASE          :: raylib.Color{160, 220, 245, 255}
 TOWER_ICE_STROKE        :: raylib.Color{ 70, 160, 210, 255}
 TOWER_ENHANCE_BASE      :: raylib.Color{230, 180,  40, 255}
@@ -1027,8 +984,6 @@ UI_BUTTON_ROUNDNESS    :: f32(0.3)
 
 UI_DROPDOWN_WIDTH  :: i32(80)
 UI_DROPDOWN_HEIGHT :: i32(24)
-UI_INPUT_WIDTH     :: i32(80)
-UI_INPUT_HEIGHT    :: i32(24)
 
 UI_SEGMENTS      :: 8
 UI_ROUNDNESS     :: f32(0.05)
@@ -1041,10 +996,8 @@ UI_PANEL_TITLE_SIZE  :: 22
 UI_PANEL_LABEL_SIZE  :: 18
 UI_PANEL_TEXT_SIZE   :: 14
 UI_PANEL_WIDTH       :: 200
-UI_PANEL_HEIGHT      :: 295
 UI_PANEL_MARGIN      :: 10
 UI_PANEL_Y_POSITION  :: 150
-UI_PANEL_ROUNDNESS   :: 0.2
 
 UI_MARGIN_X :: 10  // Screen-edge horizontal margin for panels
 UI_MARGIN_Y :: 8   // Screen-edge vertical margin for panels
@@ -1072,20 +1025,11 @@ ui_scale :: proc() -> f32 {
 TOOLTIP_MARGIN_X      :: i32(6)
 TOOLTIP_MARGIN_Y      :: i32(4)
 UI_TOOLTIP_FONT_SIZE  :: i32(12)
-UI_TOOLTIP_PADDING_H  :: i32(8)
-UI_TOOLTIP_PADDING_V  :: i32(5)
 UI_TOOLTIP_OFFSET     :: i32(8)    // Distance above the trigger area
 UI_TOOLTIP_SEGMENTS   :: f32(8)
 UI_TOOLTIP_ROUNDNESS  :: f32(0.12)
 UI_TOOLTIP_SHADOW_OFF :: f32(4)
 UI_TOOLTIP_MAX_TEXT_W :: f32(220)  // Ancho máximo de línea antes de wrappear a multilínea
-
-UI_TOAST_FONT_SIZE     :: i32(16)
-UI_TOAST_PADDING       :: i32(12)
-UI_TOAST_SPACING       :: i32(8)
-UI_TOAST_MARGIN_TOP    :: i32(80)  // Distance from top to avoid UI overlap
-UI_TOAST_SHADOW_OFFSET :: i32(2)
-UI_TOAST_ROUNDNESS     :: f32(0.3)
 
 // =============================================================================
 // UI colors
@@ -1123,9 +1067,7 @@ COLOR_CRISTAL_DARK_HOVER :: raylib.Color{ 55, 100, 135, 255}
 COLOR_CRISTAL_DARK_PRESS :: raylib.Color{ 70, 120, 160, 255}
 
 UI_TEXT_COLOR            :: raylib.Color{ 20,  20,  20, 255}
-UI_OVERLAY_COLOR         :: raylib.Color{  0,   0,   0, 200}
 UI_SHADOW_COLOR          :: raylib.Color{  0,   0,   0,  30}
-UI_EDITOR_HIGHLIGHT_COLOR :: raylib.Color{150, 150, 150, 255}
 
 UI_PANEL_TITLE_COLOR :: raylib.GRAY
 UI_PANEL_LABEL_COLOR :: raylib.DARKGRAY
@@ -1137,38 +1079,12 @@ UI_MODAL_CANCEL_BUTTON_COLOR  :: raylib.Color{200, 0, 0, 255}
 
 UI_RETICLE_COLOR :: raylib.Color{255, 255, 255, 255}
 
-UI_TOOLTIP_BG_COLOR     :: raylib.Color{ 28,  28,  32, 225}
-UI_TOOLTIP_TEXT_COLOR   :: raylib.Color{230, 230, 230, 255}
-UI_TOOLTIP_SHADOW_COLOR :: raylib.Color{  0,   0,   0,  70}
-
-UI_TOAST_SUCCESS_COLOR       :: raylib.Color{ 50, 200,  50, 240}
-UI_TOAST_SUCCESS_TEXT_COLOR  :: raylib.Color{255, 255, 255, 255}
-UI_TOAST_INFO_COLOR          :: raylib.Color{ 50, 150, 200, 240}
-UI_TOAST_INFO_TEXT_COLOR     :: raylib.Color{255, 255, 255, 255}
-UI_TOAST_WARNING_COLOR       :: raylib.Color{200, 150,  50, 240}
-UI_TOAST_WARNING_TEXT_COLOR  :: raylib.Color{255, 255, 255, 255}
-UI_TOAST_ERROR_COLOR         :: raylib.Color{200,  50,  50, 240}
-UI_TOAST_ERROR_TEXT_COLOR    :: raylib.Color{255, 255, 255, 255}
-
-// =============================================================================
-// Menu background
-// =============================================================================
-
-MENU_BG_TOP_COLOR    :: raylib.Color{15, 15, 35, 255}    // Dark blue
-MENU_BG_BOTTOM_COLOR :: raylib.Color{30, 35, 50, 255}    // Dark purple
-MENU_GRID_COLOR      :: raylib.Color{40, 40, 60,  80}
-MENU_GRID_SPACING    :: i32(40)
-MENU_GRID_SPEED      :: f32(10.0)  // Pixels per second for diagonal scroll animation
-
 // =============================================================================
 // Map browser panel
 // =============================================================================
 
 UI_MAP_BROWSER_WIDTH             :: i32(700)
 UI_MAP_BROWSER_HEIGHT            :: i32(500)
-UI_MAP_BROWSER_SHADOW_OFFSET     :: i32(4)
-UI_MAP_BROWSER_TITLE_Y_OFFSET    :: i32(14)
-UI_MAP_BROWSER_SEPARATOR_Y       :: i32(38)
 UI_MAP_BROWSER_HEADER_HEIGHT     :: i32(46)
 UI_MAP_BROWSER_FOOTER_HEIGHT     :: i32(52)
 UI_MAP_BROWSER_ITEM_HEIGHT       :: i32(36)
@@ -1179,14 +1095,12 @@ UI_MAP_BROWSER_ITEM_FONT_SIZE    :: i32(13)
 UI_MAP_BROWSER_SCROLL_FONT_SIZE  :: i32(11)
 UI_MAP_BROWSER_CLOSE_HEIGHT      :: i32(28)
 UI_MAP_BROWSER_CLOSE_BTN_MARGIN  :: i32(12)
-UI_MAP_BROWSER_TITLE_FONT_SIZE   :: i32(16)
 UI_MAP_BROWSER_LIST_WIDTH        :: i32(230)
 UI_MAP_BROWSER_INFO_HEIGHT       :: i32(48)
 UI_MAP_BROWSER_INFO_FONT_SIZE    :: i32(12)
 UI_MAP_BROWSER_PREVIEW_PAD       :: i32(12)
 
 UI_MAP_BROWSER_OVERLAY_COLOR      :: raylib.Color{  0,   0,   0, 140}
-UI_MAP_BROWSER_SHADOW_COLOR       :: raylib.Color{  0,   0,   0,  80}
 UI_MAP_BROWSER_SEPARATOR_COLOR    :: raylib.Color{180, 180, 180, 200}
 UI_MAP_BROWSER_MUTED_COLOR        :: raylib.Color{130, 130, 130, 255}
 UI_MAP_BROWSER_LOADED_COLOR       :: raylib.Color{ 30, 120,  30, 255}
@@ -1240,11 +1154,9 @@ AIRDROP_SPAWN_INTERVAL_MAX :: f32(50.0)  // Segundos máximos entre drops
 // Con 5 stacks = 2x más frecuente; con 20 stacks = 5x más frecuente.
 AIRDROP_RELIC_SPEED_PER_STACK :: f32(0.20)
 AIRDROP_PLANE_SPEED        :: f32(180.0) // Velocidad del avión (world px/s)
-AIRDROP_PLANE_Y_OFFSET     :: f32(-60.0) // Y del avión relativo al borde superior del mapa
 AIRDROP_BOX_FALL_SPEED     :: f32(2.2)   // Duración de la caída del paracaídas (segundos)
 AIRDROP_CHUTE_RADIUS_MAX   :: f32(1.4)   // Radio inicial del círculo (multiplicador de cs)
 AIRDROP_TRAIL_INTERVAL     :: f32(0.04)  // Segundos entre muestras de la estela
-AIRDROP_TRAIL_MAX          :: i32(24)    // Máximo de puntos en la estela
 AIRDROP_PING_INTERVAL      :: f32(3.5)   // Segundos entre pings convergentes
 AIRDROP_PING_DURATION      :: f32(1.4)   // Duración del anillo encogiendo (segundos)
 AIRDROP_PING_RADIUS        :: f32(2.8)   // Radio máximo del ping como múltiplo de cs

@@ -565,8 +565,7 @@ input_handle_editor :: proc(app: ^entities.App_State) {
 	
 	// Grid toggle
 	if raylib.IsKeyPressed(.G) {
-		app.editor.show_grid = !app.editor.show_grid
-		app.settings.show_grid = app.editor.show_grid
+		app.settings.show_grid = !app.settings.show_grid
 	}
 }
 
@@ -628,21 +627,6 @@ screen_to_grid_3d :: proc(app: ^entities.App_State, screen_x, screen_y: i32) -> 
 	cs := constants.WORLD_CELL_SIZE
 	grid_x = i32(math.floor(point.x / cs))
 	grid_y = i32(math.floor(point.z / cs))
-	return
-}
-
-// Punto donde el rayo desde la cámara hacia (screen_x, screen_y) cruza el
-// plano de suelo y=0. ok=false si el rayo es paralelo o se aleja del plano.
-// Usado solo para pan/zoom-to-cursor (input_handle_camera_3d) — ahí un plano
-// fijo alcanza, no hace falta la precisión de raycast_terrain_point.
-raycast_ground_point :: proc(camera: raylib.Camera3D, screen_x, screen_y: i32) -> (point: raylib.Vector3, ok: bool) {
-	ray := raylib.GetScreenToWorldRay({f32(screen_x), f32(screen_y)}, camera)
-	if ray.direction.y >= -0.0001 {
-		return {}, false
-	}
-	t := -ray.position.y / ray.direction.y
-	point = ray.position + ray.direction * t
-	ok = true
 	return
 }
 
@@ -923,34 +907,18 @@ input_handle_camera :: proc(app: ^entities.App_State) {
 	}
 }
 
-// Zoom-to-cursor + rotación para el mapa 3D (PLAYING/EDITOR). No hay pan:
-// camera_focus queda fijo salvo cuando simulation_fit_camera/default_focus
-// lo recalculan al cargar un mapa. El zoom-to-cursor construye una cámara
-// hipotética con la nueva distancia y desplaza camera_focus para que el
-// mismo punto de suelo quede bajo el cursor otra vez (ver 3D_RENDER_PLAN.md,
-// riesgo 7.5 — no es garantía matemática 1:1 con el zoom 2D, es una
-// aproximación visual). La rotación (botón central + drag) vive en
+// Zoom + rotación para el mapa 3D (PLAYING/EDITOR). No hay pan ni
+// zoom-to-cursor: camera_focus queda siempre en el centro del mapa
+// (fijo salvo cuando simulation_fit_camera/default_focus lo recalculan al
+// cargar un mapa) — el scroll solo achica/agranda la distancia, nunca
+// desplaza el punto mirado. La rotación (botón central + drag) vive en
 // input_handle_camera_orbit, llamada al final de esta función.
 input_handle_camera_3d :: proc(app: ^entities.App_State) {
-	mouse_x := raylib.GetMouseX()
-	mouse_y := raylib.GetMouseY()
-
 	wheel_movement := raylib.GetMouseWheelMove()
 	if wheel_movement != 0 {
-		old_point, old_ok := raycast_ground_point(app.camera3d, mouse_x, mouse_y)
-
 		app.target_zoom += wheel_movement * constants.ZOOM_SPEED
 		if app.target_zoom < constants.ZOOM_MIN { app.target_zoom = constants.ZOOM_MIN }
 		if app.target_zoom > constants.ZOOM_MAX { app.target_zoom = constants.ZOOM_MAX }
-
-		if old_ok {
-			hypothetical := camera3d_for_focus(app.camera_focus, app.target_zoom, app.camera_yaw)
-			new_point, new_ok := raycast_ground_point(hypothetical, mouse_x, mouse_y)
-			if new_ok {
-				delta := old_point - new_point
-				app.target_camera_focus = app.camera_focus + delta
-			}
-		}
 	}
 
 	input_handle_camera_orbit(app)

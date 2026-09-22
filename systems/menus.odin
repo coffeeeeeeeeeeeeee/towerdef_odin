@@ -172,8 +172,9 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 
 	savegame_exists := os.exists(entities.meta_save_path())
 
-	// Slot count: Continue (conditional) + Nueva Campaña + Editor + Settings + Progression + Exit
-	slot_count := (4 if constants.DEVELOPER else 3) + (1 if savegame_exists else 0)
+	// Slot count: Nueva Campaña + Jugar + Settings + Progression + Library + Exit
+	// (+ Continue si hay savegame, + Editor si DEVELOPER)
+	slot_count := 6 + (1 if constants.DEVELOPER else 0) + (1 if savegame_exists else 0)
 	total_buttons_height := slot_count * int(menu_button_height) + (slot_count - 1) * int(gap)
 	start_y := (i32(screen_height) - i32(total_buttons_height)) / 2
 	current_y := start_y
@@ -208,6 +209,17 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 		}
 	}
 	current_y += menu_button_height + gap
+
+	// Jugar — abre el browser de mapas en "play mode" para elegir y jugar un
+	// mapa guardado suelto, sin pasar por la campaña (ver _open_map_browser).
+	{
+		txt := constants.get_text("MENU_BUTTON_PLAY")
+		w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(txt, context.temp_allocator), button_font_size, 0).x)
+		if render_button(txt, {f32(screen_width / 2 - w / 2), f32(current_y), f32(w), f32(menu_button_height)}) {
+			_open_map_browser(app)
+		}
+		current_y += menu_button_height + gap
+	}
 
 	// Editor (solo en modo Developer — bloque eliminado en compile-time si DEVELOPER=false)
 	when constants.DEVELOPER {
@@ -429,7 +441,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 
 	// Calculate positions from right to left
 	is_between_waves := app.sim.enemies_spawned >= app.sim.enemies_to_spawn && len(app.sim.enemies) == 0
-	wave_limit_reached := app.sim.wave_number >= constants.MAX_WAVE
+	wave_limit_reached := app.sim.wave_number >= campaign_max_waves(app)
 	can_start_wave := (is_between_waves || !app.sim.started) && !wave_limit_reached
 	show_next_wave_button := !app.settings.auto_start_wave && can_start_wave
 

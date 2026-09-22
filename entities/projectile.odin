@@ -99,20 +99,6 @@ projectile_move :: proc(p: ^Projectile, dt: f32) -> bool {
 }
 
 // Check if projectile hit its actual target (for accuracy checks)
-projectile_check_hit :: proc(p: ^Projectile) -> bool {
-	if p.target == nil {
-		return true // Target dead, projectile should be removed
-	}
-
-	// Compare against the fire-time position, since the projectile travels
-	// toward target_orig_x/y and never re-homes.
-	dx := p.target_orig_x - p.x
-	dy := p.target_orig_y - p.y
-	dist := math.sqrt(dx * dx + dy * dy)
-
-	return dist < 0.3 // Within hit radius
-}
-
 // Calculate the spawn position (in grid coords) for a missile pod.
 // missile_side: 0 = left pod, 1 = right pod.
 // cx, cy: tower center in grid coords.

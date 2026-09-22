@@ -516,19 +516,6 @@ hand_refresh :: proc(sim: ^Simulation) {
 	}
 }
 
-// Devuelve las cartas de la mano al mazo, rebaraja y reparte de nuevo.
-// Usado antes de la primera oleada para cambiar la mano inicial.
-hand_redeal :: proc(sim: ^Simulation) {
-	for card in sim.cards.hand {
-		append(&sim.cards.deck, card)
-	}
-	clear(&sim.cards.hand)
-	deck_shuffle(&sim.cards.deck)
-	for _ in 0 ..< sim.cards.hand_size {
-		deck_draw_one(sim)
-	}
-}
-
 // Consume una carta de la mano por índice al colocarla.
 // La carta va al descarte para que pueda ser robada de nuevo (STEAL, hand_refresh, etc.).
 card_play :: proc(sim: ^Simulation, hand_idx: int) {
@@ -651,10 +638,6 @@ card_name :: proc(card: Card) -> string {
 }
 
 // Alias para compatibilidad con código existente que pasa tower_type
-card_tower_name :: proc(tower_type: constants.Tower_Type) -> string {
-	return card_name(Card{kind = .TOWER, tower_type = tower_type})
-}
-
 // Convierte una carta al Tile correspondiente para selected_build_tower
 card_to_tile :: proc(card: Card) -> constants.Tile {
 	if card.kind == .OBSTACLE {
@@ -708,10 +691,6 @@ card_shop_price :: proc(card: Card) -> i32 {
 }
 
 // Alias original (compatibilidad)
-card_tower_type_to_tile :: proc(tower_type: constants.Tower_Type) -> constants.Tile {
-	return card_to_tile(Card{kind = .TOWER, tower_type = tower_type})
-}
-
 // Precio de venta de una carta desde la mano: 100% de su precio de tienda.
 // Aplica igual a torres, obstáculos y relictos.
 card_sell_price :: proc(card: Card) -> i32 {

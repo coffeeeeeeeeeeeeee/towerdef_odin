@@ -1707,11 +1707,14 @@ render_enemies_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 			center := raylib.Vector3{pos.x, pos.y + size_y, pos.z}
 			raylib.DrawCube(center, size_xz * 2, size_y * 2, size_xz * 2, color)
 		case .FLYING in enemy.flags:
+			// DrawCylinder pinta radiusBottom en la base (position.y) y
+			// radiusTop en la punta (position.y + height) — quedaba ancho
+			// arriba y en punta abajo (cono al revés, "patas para arriba").
 			base := raylib.Vector3{pos.x, pos.y + cs * 0.6, pos.z}
-			raylib.DrawCylinder(base, size_xz, 0, size_y * 2, 4, color)
+			raylib.DrawCylinder(base, 0, size_xz, size_y * 2, 4, color)
 		case:
 			center := raylib.Vector3{pos.x, pos.y + size_y, pos.z}
-			raylib.DrawSphereEx(center, size_xz, 10, 10, color)
+			raylib.DrawSphereEx(center, size_xz, 20, 20, color)
 		}
 	}
 }
@@ -1994,7 +1997,16 @@ render_game :: proc(app: ^entities.App_State) {
 		m := &app.editor.game_map
 		update_camera3d(app)
 
-		raylib.ClearBackground(constants.BIOME_COLORS[m.biome].bg)
+		// Fondo detrás del mapa = color del sol actual (día/noche), no un
+		// color fijo por bioma — así el cielo acompaña el ciclo de luz.
+		dn_bg := day_night_sample(lighting_shader.day_night_anim_time)
+		bg_color := raylib.Color{
+			u8(clamp(dn_bg.sun_color.r, 0, 1) * 255),
+			u8(clamp(dn_bg.sun_color.g, 0, 1) * 255),
+			u8(clamp(dn_bg.sun_color.b, 0, 1) * 255),
+			255,
+		}
+		raylib.ClearBackground(bg_color)
 		raylib.BeginMode3D(app.camera3d)
 		render_map_3d(app, m)
 		if app.settings.show_grid {
@@ -2089,8 +2101,15 @@ render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 	render_shadow_depth_pass(app, m, dn_sun_dir)
 	shadow_map_bind_for_sampling()
 
+	dn_bg := day_night_sample(lighting_shader.day_night_anim_time)
+	bg_color := raylib.Color{
+		u8(clamp(dn_bg.sun_color.r, 0, 1) * 255),
+		u8(clamp(dn_bg.sun_color.g, 0, 1) * 255),
+		u8(clamp(dn_bg.sun_color.b, 0, 1) * 255),
+		255,
+	}
 	raylib.BeginTextureMode(app.editor.browser.preview_tex)
-	raylib.ClearBackground(constants.BIOME_COLORS[m.biome].bg)
+	raylib.ClearBackground(bg_color)
 	raylib.BeginMode3D(camera)
 	render_map_3d(app, m)
 	render_map_objects_3d(app, m)

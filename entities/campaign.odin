@@ -155,14 +155,6 @@ campaign_is_node_unlocked :: proc(c: ^Campaign_File, completed: []bool, node_idx
 }
 
 // Devuelve true si todos los nodos NO opcionales del main path están completos.
-campaign_is_complete :: proc(c: ^Campaign_File, completed: []bool) -> bool {
-	for i in 0 ..< int(c.node_count) {
-		if .OPTIONAL in c.nodes[i].flags { continue }
-		if i >= len(completed) || !completed[i] { return false }
-	}
-	return true
-}
-
 // Cuenta nodos completados (incluyendo opcionales).
 campaign_completed_count :: proc(c: ^Campaign_File, completed: []bool) -> i32 {
 	n := i32(0)
@@ -173,14 +165,6 @@ campaign_completed_count :: proc(c: ^Campaign_File, completed: []bool) -> i32 {
 }
 
 // Cuenta nodos NO opcionales (tamaño del main path).
-campaign_main_path_size :: proc(c: ^Campaign_File) -> i32 {
-	n := i32(0)
-	for i in 0 ..< int(c.node_count) {
-		if !(.OPTIONAL in c.nodes[i].flags) { n += 1 }
-	}
-	return n
-}
-
 // Crea un nodo nuevo con defaults sanos. Usado por el campaign editor cuando
 // el dev arrastra un mapa del browser al canvas.
 campaign_node_init :: proc(map_filename: string, display: string, pos_x, pos_y: f32) -> Campaign_Node {

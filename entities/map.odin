@@ -134,38 +134,6 @@ map_destroy :: proc(m: ^Map) {
 	delete(m.tile_data)
 }
 
-// Get tile at position
-map_get_tile :: proc(m: ^Map, row, col: i32) -> constants.Tile {
-	if row < 0 || row >= constants.GRID_SIZE || col < 0 || col >= constants.GRID_SIZE {
-		return .EMPTY
-	}
-	return m.grid[row][col]
-}
-
-// Set tile at position
-map_set_tile :: proc(m: ^Map, row, col: i32, tile: constants.Tile) {
-	if row < 0 || row >= constants.GRID_SIZE || col < 0 || col >= constants.GRID_SIZE {
-		return
-	}
-	m.grid[row][col] = tile
-}
-
-// Get obstacle at position
-map_get_obstacle :: proc(m: ^Map, row, col: i32) -> constants.Tile {
-	if row < 0 || row >= constants.GRID_SIZE || col < 0 || col >= constants.GRID_SIZE {
-		return .EMPTY
-	}
-	return m.obstacle_grid[row][col]
-}
-
-// Set obstacle at position
-map_set_obstacle :: proc(m: ^Map, row, col: i32, tile: constants.Tile) {
-	if row < 0 || row >= constants.GRID_SIZE || col < 0 || col >= constants.GRID_SIZE {
-		return
-	}
-	m.obstacle_grid[row][col] = tile
-}
-
 // Get tile data key
 map_get_tile_key :: proc(row, col: i32) -> string {
 	return fmt.tprintf("%d,%d", row, col)
@@ -223,20 +191,6 @@ map_clear :: proc(m: ^Map) {
 
 // Check if tile is a path tile
 // Find all spawn points
-map_find_spawns :: proc(m: ^Map) -> [dynamic]Spawn_Point {
-	spawns := make([dynamic]Spawn_Point)
-
-	for row in 0..<m.height {
-		for col in 0..<m.width {
-			if m.grid[row][col] == .SPAWN {
-				append(&spawns, Spawn_Point{r = i32(row), c = i32(col)})
-			}
-		}
-	}
-
-	return spawns
-}
-
 // Find goal point
 map_find_goal :: proc(m: ^Map) -> (i32, i32, bool) {
 	for row in 0..<m.height {
@@ -491,30 +445,6 @@ parse_i32 :: proc(s: string) -> i32 {
 }
 
 // List all saved map files in the maps/ directory
-map_list_saved :: proc() -> [dynamic]string {
-	files := make([dynamic]string)
-
-	fd, err := os.open("maps")
-	if err != os.ERROR_NONE {
-		return files
-	}
-	defer os.close(fd)
-
-	fis, read_err := os.read_dir(fd, -1, context.allocator)
-	if read_err != os.ERROR_NONE {
-		return files
-	}
-	defer os.file_info_slice_delete(fis, context.allocator)
-
-	for fi in fis {
-		if fi.type != .Directory && strings.has_suffix(fi.name, ".map") {
-			append(&files, strings.clone(fi.name))
-		}
-	}
-
-	return files
-}
-
 // Entry for the split-panel map viewer (name + formatted modification date).
 Map_File_Entry :: struct {
 	name:     string,

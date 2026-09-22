@@ -292,12 +292,9 @@ app_init :: proc(initial_settings: entities.Settings) {
 	app = entities.App_State {
 		state          = .MENU,
 		previous_state = .MENU,
-		toasts         = make([dynamic]entities.Toast),
 		editor = entities.Editor {
 			game_map        = entities.map_init(),
 			current_tool    = .EMPTY,
-			show_grid       = true,
-			show_paths      = false,
 			current_biome   = .PLAIN,
 			load_map_active = false,
 			campaign_editor = entities.Campaign_Editor_State{ selected_node = -1 },
@@ -341,12 +338,6 @@ app_destroy :: proc() {
 		entities.map_snapshot_destroy(&s)
 	}
 	delete(app.editor.redo_stack)
-
-	// Toasts pendientes (legado, normalmente vacío)
-	for &t in app.toasts {
-		delete(t.message)
-	}
-	delete(app.toasts)
 
 	// Consola: liberar entradas del log
 	entities.console_destroy(&app.console)

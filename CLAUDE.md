@@ -592,16 +592,22 @@ que lo que ya se dibuja hoy en pantalla.
 exactamente la misma posición que la cámara vieja (antes de que existiera
 rotación) — es el caso de regresión a no romper si se toca esta función.
 
-**No hay paneo.** `app.camera_focus` ya no se mueve en vivo — queda fijo
-en lo que establecen `simulation_fit_camera` (`systems/simulation.odin`) y
-`default_focus` (`main.odin`) al cargar/ajustar un mapa (ambos calculan el
-centro del mapa). Los únicos controles de cámara en el mapa 3D son:
-scroll = zoom (sin cambios, zoom-to-cursor incluido), botón central + drag
-= rotación (`app.camera_yaw`, `CAMERA_ORBIT_SENSITIVITY` en
-`constants.odin`). `input_handle_camera_orbit` (`systems/input.odin`)
-resuelve la rotación y se llama tanto desde `input_handle_camera_3d`
-(PLAYING/EDITOR) como desde `input_handle_paused` (PAUSED no pasa por
-`input_handle_camera_3d`, así que necesita su propia llamada).
+**No hay paneo ni zoom-to-cursor.** `app.camera_focus` nunca se mueve en
+vivo — queda fijo en lo que establecen `simulation_fit_camera`
+(`systems/simulation.odin`) y `default_focus` (`main.odin`) al
+cargar/ajustar un mapa (ambos calculan el centro del mapa), y es siempre
+el pivote tanto del zoom como de la rotación: el scroll solo cambia
+`target_zoom` (achica/agranda distancia, nunca desplaza el punto mirado)
+y el botón central + drag solo cambia `app.camera_yaw` — ninguno de los
+dos toca `camera_focus`. Hubo una versión anterior con zoom-to-cursor
+(raycast contra el plano y=0 para mantener el mismo punto de suelo bajo
+el cursor al hacer scroll, `raycast_ground_point`) que se sacó a pedido
+explícito porque el zoom siempre debe apuntar al centro del mapa — no
+reintroducir esa función sin que se pida de nuevo.
+`input_handle_camera_orbit` (`systems/input.odin`) resuelve la rotación y
+se llama tanto desde `input_handle_camera_3d` (PLAYING/EDITOR) como desde
+`input_handle_paused` (PAUSED no pasa por `input_handle_camera_3d`, así
+que necesita su propia llamada).
 
 `camera_yaw` no tiene lerp/target a diferencia de `camera_focus`/`zoom` —
 responde 1:1 al drag, no hay una versión "suavizada" que perseguir cada
@@ -655,6 +661,14 @@ no es 100% estático:
   depende de `sunDir` en el fragment shader, no de un valor cacheado — pero
   su intensidad no fue re-chequeada contra los keyframes NIGHT/DUSK más
   oscuros/saturados, solo contra NOON.
+- **Fondo (cielo) = color del sol actual**, no un color fijo por bioma —
+  los dos `ClearBackground` antes de dibujar el mapa (`render_game` y
+  `render_map_preview_to_texture`, ambos en `rendering.odin`) samplean
+  `day_night_sample(lighting_shader.day_night_anim_time).sun_color` y lo
+  convierten a `raylib.Color` (×255, clamp [0,1]) en vez de usar
+  `constants.BIOME_COLORS[m.biome].bg`. Ese campo `.bg` de
+  `BIOME_COLORS` queda sin usar en estos dos call sites — no se borró
+  la constante en sí por si se usa en otro lado.
 - **Sombra proyectada real (shadow mapping)** — reemplazó a las sombras de
   contacto falsas que hubo antes (`draw_contact_shadow_3d`, discos planos
   sin dirección bajo torres/árboles/bloques/enemigos — eliminadas). `Shadow_Map` (`rendering.odin`):
