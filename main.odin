@@ -108,6 +108,10 @@ main :: proc() {
 	systems.glow_ring_shader_init()
 	defer systems.glow_ring_shader_unload()
 
+	// Disco de rango/AoE — ver range_disc_shader en rendering.odin
+	systems.range_disc_shader_init()
+	defer systems.range_disc_shader_unload()
+
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
 	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)

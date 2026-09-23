@@ -918,6 +918,53 @@ loop en un único `BeginShaderMode(glow_ring_shader)`/`EndShaderMode`, fuera
 del shader de iluminación (sigue sin normales, mismo criterio que los
 demás rings/líneas).
 
+## Disco de rango/AoE (range_disc.vs/.fs)
+
+Mismo andamiaje que `glow_ring` (quad chato en modo inmediato de rlgl +
+shader mínimo, color/alpha por vértice, sin uniforms propios), pero con el
+falloff invertido: en vez de un anillo delgado, es un disco relleno,
+transparente en el centro y creciendo hacia el borde, con un corte nítido
+justo en el radio real (banda de antialiasing angosta, no un difuminado
+ancho como un glow). Reemplaza a `draw_ground_ring` (`DrawCircle3D`, solo
+contorno, eliminada) en los 8 usos que tenía: rango/AoE de torres (preview
+de todas + resaltado de la seleccionada), preview del ghost de
+construcción (rango + AoE), estado de enemigos (armored/slow) y pulsos de
+hielo.
+
+El terreno NO es un plano ni un simple escalón por tile: la malla real
+(`terrain_cache_ensure`) subdivide cada tile (`TERRAIN_MESH_SUBDIV`) e
+interpola bilinealmente entre esquinas promediadas con los vecinos, más el
+hundimiento del camino (`PATH_EMBOSS_DEPTH`) — hay pendiente DENTRO de un
+mismo tile, no solo entre tiles. Una primera versión de
+`draw_range_disc_3d` teselaba un quad por tile a la altura cruda de
+`tile_world_top` (sin promediar con vecinos, sin hundimiento) y el disco se
+veía cortado contra el terreno en cualquier pendiente o borde de camino —
+esa altura no es la que la malla realmente dibuja ahí.
+
+El fix: `terrain_surface_height(m, row, col, u, v)` calcula la altura REAL
+de la malla en un punto fraccional del tile — `_terrain_corner_lerp` menos
+el hundimiento de camino, PERO no con `_path_strip_mask` analítico (una
+segunda vuelta seguía cortándose justo en bordes/uniones de camino: ese
+cálculo no tiene el blur en cruz de `terrain_cache_ensure`, y en curvas/T
+el `min()` entre brazos deja una cresta dura que la malla real no tiene).
+`terrain_cache.path_mask_cpu` guarda una copia CPU de la MISMA textura-
+máscara ya blureada que sube a la GPU (antes se tiraba con `delete` tras
+subirla); `_path_mask_sample(u,v)` la muestrea a mano con el mismo
+bilinear+clamp que usa `lighting.vs`. `terrain_surface_height` samplea esa
+función en vez de la analítica — mismo pixel exacto que ve la GPU, blur
+incluido. `draw_range_disc_3d` tesela a la MISMA densidad que el mesh real
+(un sub-quad por celda de `TERRAIN_MESH_SUBDIV`, no uno por tile entero) y
+samplea esta función en cada vértice, así el disco se apoya sobre la
+superficie real en vez de flotar, hundirse o cortarse en un borde — mismo
+espíritu que las sombras reales, que se resuelven contra la geometría real
+vía shadow map en vez de un plano fijo. El UV de cada vértice se calcula en
+espacio de mundo relativo a `center`/`radius` (no 0..1 por sub-quad
+suelto), para que el falloff del shader se vea continuo en todo el disco,
+no en mosaico. Por esto `draw_range_disc_3d` recibe `m: ^entities.Map` y el
+parámetro `center` pasa a ser solo XZ + un pequeño offset en Y (0.02/0.03,
+anti z-fighting) — la altura real la resuelve la función punto por punto, no la
+calcula quien llama.
+
 ## Fondo animado (nebula.glsl)
 
 Activado vía `constants.NEBULA_BACKGROUND_ENABLED :: true` (gatea la
@@ -1091,16 +1138,14 @@ Dibuja los círculos de rango de torres como capa separada entre
 `render_map_3d` y `render_map_objects_3d`, llamado cada frame desde
 `render_game`.
 
-- Modo "todas las torres" (`show_tower_range` activo): un solo
-  `draw_ground_ring` semitransparente (`TOWER_RANGE_PREVIEW`) por torre.
-- Torre seleccionada (siempre): **dos** `draw_ground_ring` superpuestos —
-  relleno sutil (`TOWER_RANGE_PREVIEW`) + outline nítido (blanco,
-  alpha=200) — el outline es la parte que realmente se ve; sin él el rango
-  es casi invisible.
-
-**Trampa:** al editar el bloque de la torre seleccionada es fácil borrar
-el segundo `draw_ground_ring` (el outline) si se reemplaza solo parte del
-bloque. Verificar que ambas llamadas sigan presentes.
+- Modo "todas las torres" (`show_tower_range` activo): un
+  `draw_range_disc_3d` semitransparente (`TOWER_RANGE_PREVIEW`) por torre.
+- Torre seleccionada (siempre): un solo `draw_range_disc_3d` (blanco,
+  alpha=150). Antes de `range_disc_shader` (ver "Disco de rango/AoE" más
+  abajo) hacían falta DOS `draw_ground_ring` superpuestos acá — un
+  anillo sin relleno no tenía forma de "verse difuminado hacia el centro
+  y nítido en el borde" en una sola pasada. El disco nuevo ya trae eso
+  incluido, no hace falta la segunda llamada.
 
 ### Shop overlay y `ui_modal_blocks`
 

@@ -198,7 +198,7 @@ shadow_map_unload :: proc() {
 //
 // Portado del viejo assets/glow_circle.glsl (2D, borrado en la migración a
 // 3D) — ver draw_glow_ring_3d/render_glow_particles_3d. Anillo con falloff
-// gaussiano, no un disco de borde duro como draw_ground_ring.
+// gaussiano, no un disco relleno como range_disc_shader.
 glow_ring_shader: raylib.Shader
 
 glow_ring_shader_init :: proc() {
@@ -220,6 +220,77 @@ draw_glow_ring_3d :: proc(center: raylib.Vector3, radius: f32, color: raylib.Col
 	rlgl.TexCoord2f(0, 1); rlgl.Vertex3f(center.x - half, center.y, center.z + half)
 	rlgl.TexCoord2f(1, 1); rlgl.Vertex3f(center.x + half, center.y, center.z + half)
 	rlgl.TexCoord2f(1, 0); rlgl.Vertex3f(center.x + half, center.y, center.z - half)
+	rlgl.End()
+}
+
+// ── Range disc shader (rango/AoE de torres, estado de enemigos, pulsos de
+// hielo) ──────────────────────────────────────────────────────────────────
+//
+// Reemplaza a draw_ground_ring (DrawCircle3D — un anillo sin relleno, solo
+// el contorno). Acá es un disco relleno con falloff invertido respecto de
+// glow_ring: transparente en el centro, crece hacia el borde, con un
+// corte nítido en el radio real en vez del difuminado a ambos lados de un
+// glow típico.
+range_disc_shader: raylib.Shader
+
+range_disc_shader_init :: proc() {
+	range_disc_shader = raylib.LoadShader("assets/range_disc.vs", "assets/range_disc.fs")
+}
+
+range_disc_shader_unload :: proc() {
+	raylib.UnloadShader(range_disc_shader)
+}
+
+// El terreno NO es un plano ni siquiera un escalón por tile: cada tile de
+// la malla real está subdividido (TERRAIN_MESH_SUBDIV) e interpolado
+// bilinealmente entre esquinas promediadas con los vecinos, más el
+// hundimiento del camino (ver terrain_surface_height / terrain_cache_ensure)
+// — hay pendientes suaves DENTRO de un mismo tile, no solo entre tiles.
+// Un quad flotando a la altura cruda de tile_world_top (sin promediar, sin
+// hundimiento) queda por encima o por debajo de esa superficie real, así
+// que el disco se veía "cortado" contra el terreno en cualquier pendiente
+// o borde de camino. La solución: teselar a la MISMA densidad que el mesh
+// real (un sub-quad por celda de TERRAIN_MESH_SUBDIV) y samplear
+// terrain_surface_height en cada vértice — igual que las sombras reales
+// (shadow map) se resuelven contra la geometría real en vez de un plano
+// fijo. El UV de cada vértice se calcula en espacio de mundo relativo a
+// center/radius (no 0..1 por sub-quad) para que el falloff del shader
+// quede continuo en todo el disco, no en mosaico.
+// Debe dibujarse dentro de un BeginShaderMode(range_disc_shader) activo.
+draw_range_disc_3d :: proc(m: ^entities.Map, center: raylib.Vector3, radius: f32, color: raylib.Color) {
+	cs := constants.WORLD_CELL_SIZE
+	col_min := max(i32(math.floor((center.x - radius) / cs)), 0)
+	col_max := min(i32(math.floor((center.x + radius) / cs)), m.width - 1)
+	row_min := max(i32(math.floor((center.z - radius) / cs)), 0)
+	row_max := min(i32(math.floor((center.z + radius) / cs)), m.height - 1)
+
+	SUBDIV :: constants.TERRAIN_MESH_SUBDIV
+	step := f32(1) / f32(SUBDIV)
+
+	rlgl.Begin(rlgl.QUADS)
+	rlgl.Color4ub(color.r, color.g, color.b, color.a)
+	for row in row_min ..= row_max {
+		for col in col_min ..= col_max {
+			for sr in 0 ..< SUBDIV {
+				for sc in 0 ..< SUBDIV {
+					u0, u1 := f32(sc) * step, f32(sc + 1) * step
+					v0, v1 := f32(sr) * step, f32(sr + 1) * step
+					x0, x1 := f32(col) * cs + u0 * cs, f32(col) * cs + u1 * cs
+					z0, z1 := f32(row) * cs + v0 * cs, f32(row) * cs + v1 * cs
+					y00 := terrain_surface_height(m, row, col, u0, v0) + center.y
+					y01 := terrain_surface_height(m, row, col, u0, v1) + center.y
+					y11 := terrain_surface_height(m, row, col, u1, v1) + center.y
+					y10 := terrain_surface_height(m, row, col, u1, v0) + center.y
+					tu0, tv0 := (x0-center.x)/radius*0.5+0.5, (z0-center.z)/radius*0.5+0.5
+					tu1, tv1 := (x1-center.x)/radius*0.5+0.5, (z1-center.z)/radius*0.5+0.5
+					rlgl.TexCoord2f(tu0, tv0); rlgl.Vertex3f(x0, y00, z0)
+					rlgl.TexCoord2f(tu0, tv1); rlgl.Vertex3f(x0, y01, z1)
+					rlgl.TexCoord2f(tu1, tv1); rlgl.Vertex3f(x1, y11, z1)
+					rlgl.TexCoord2f(tu1, tv0); rlgl.Vertex3f(x1, y10, z0)
+				}
+			}
+		}
+	}
 	rlgl.End()
 }
 
@@ -510,6 +581,16 @@ Terrain_Cache :: struct {
 	path_mask_tex:  raylib.Texture2D,
 	water_mask_tex: raylib.Texture2D,
 	valid:          bool,
+
+	// Copia CPU de los mismos pixeles (post-blur) subidos a path_mask_tex —
+	// draw_range_disc_3d la usa para calcular la altura EXACTA que dibuja
+	// lighting.vs (bilinear + blur en cruz incluidos), en vez de recalcular
+	// _path_strip_mask analítico (que no tiene el blur y difiere justo en
+	// bordes/uniones de camino, donde el min() entre brazos deja una cresta
+	// dura — ver terrain_cache_ensure). Vive y muere con el resto del cache.
+	path_mask_cpu: []u8,
+	path_mask_w:   i32,
+	path_mask_h:   i32,
 }
 
 terrain_cache: Terrain_Cache
@@ -519,6 +600,8 @@ terrain_cache_invalidate :: proc() {
 		raylib.UnloadModel(terrain_cache.model)
 		raylib.UnloadTexture(terrain_cache.path_mask_tex)
 		raylib.UnloadTexture(terrain_cache.water_mask_tex)
+		delete(terrain_cache.path_mask_cpu)
+		terrain_cache.path_mask_cpu = nil
 		terrain_cache.valid = false
 	}
 }
@@ -651,6 +734,29 @@ _path_emboss_offset :: proc(m: ^entities.Map, row, col: i32) -> f32 {
 	return _path_strip_mask(m, row, col, 0.5, 0.5) * constants.PATH_EMBOSS_DEPTH
 }
 
+// Altura real de la malla de terreno en un punto fraccional (u,v) del tile
+// (row,col) — mismo cálculo que terrain_cache_ensure usa para plantar los
+// vértices del mesh (interpolación bilineal entre esquinas promediadas,
+// _terrain_corner_lerp) MÁS el mismo hundimiento de camino que aplica
+// lighting.vs en el vertex shader: no es _path_strip_mask analítico (ese no
+// tiene el blur en cruz de terrain_cache_ensure, y difiere justo en
+// bordes/uniones donde el min() entre brazos deja una cresta dura — eso
+// hacía que el disco se cortara contra el terreno ahí) sino
+// _path_mask_sample, que lee la MISMA textura-máscara ya blureada, con el
+// mismo bilinear+clamp que la GPU. Un tile de agua nunca se hunde (bridge:
+// bridgeGuard=0 en lighting.vs), así que ahí directamente se devuelve la
+// altura fija del agua. A diferencia de tile_world_top (altura CRUDA del
+// tile, sin promediar con vecinos ni hundir el camino), esto es lo que el
+// jugador realmente ve dibujado.
+terrain_surface_height :: proc(m: ^entities.Map, row, col: i32, u, v: f32) -> f32 {
+	if m.water_grid[row][col] { return constants.WORLD_WATER_HEIGHT }
+	h, _ := _terrain_corner_lerp(m, row, col, u, v, constants.Biome_Colors{})
+	wu := (f32(col) + u) / f32(m.width)
+	wv := (f32(row) + v) / f32(m.height)
+	h -= _path_mask_sample(wu, wv) * constants.PATH_EMBOSS_DEPTH
+	return h
+}
+
 terrain_cache_ensure :: proc(m: ^entities.Map) {
 	if terrain_cache.valid { return }
 
@@ -736,7 +842,6 @@ terrain_cache_ensure :: proc(m: ^entities.Map) {
 	mask_w := m.width * constants.PATH_MASK_SUBDIV
 	mask_h := m.height * constants.PATH_MASK_SUBDIV
 	mask_pixels := make([]u8, int(mask_w) * int(mask_h))
-	defer delete(mask_pixels)
 	for ty in 0 ..< mask_h {
 		row := ty / constants.PATH_MASK_SUBDIV
 		v := (f32(ty % constants.PATH_MASK_SUBDIV) + 0.5) / f32(constants.PATH_MASK_SUBDIV)
@@ -861,7 +966,41 @@ terrain_cache_ensure :: proc(m: ^entities.Map) {
 	terrain_cache.model = model
 	terrain_cache.path_mask_tex = mask_tex
 	terrain_cache.water_mask_tex = water_tex
+	terrain_cache.path_mask_cpu = mask_pixels
+	terrain_cache.path_mask_w = mask_w
+	terrain_cache.path_mask_h = mask_h
 	terrain_cache.valid = true
+}
+
+// Replica a mano el sampler BILINEAR+CLAMP que lighting.vs usa sobre
+// path_mask_tex, pero leyendo la copia CPU (terrain_cache.path_mask_cpu) —
+// mismo pixel exacto que ve la GPU, blur en cruz incluido. u,v en
+// coordenadas de mundo normalizadas [0,1] sobre TODO el mapa (mismo espacio
+// que vertexTexCoord = wc/width, wr/height en terrain_cache_ensure), no
+// fraccional-por-tile como _path_strip_mask.
+_path_mask_sample :: proc(u, v: f32) -> f32 {
+	w, h := terrain_cache.path_mask_w, terrain_cache.path_mask_h
+	if w == 0 || h == 0 { return 0 }
+	// Centro de texel en 0.5/w, así que restamos medio texel antes de
+	// interpolar — mismo convenio que cualquier sampler bilineal de GL.
+	fx := clamp(u, 0, 1) * f32(w) - 0.5
+	fy := clamp(v, 0, 1) * f32(h) - 0.5
+	x0 := i32(math.floor(fx))
+	y0 := i32(math.floor(fy))
+	tx := fx - f32(x0)
+	ty := fy - f32(y0)
+	sample :: proc(x, y, w, h: i32) -> f32 {
+		cx := clamp(x, 0, w - 1)
+		cy := clamp(y, 0, h - 1)
+		return f32(terrain_cache.path_mask_cpu[cy * w + cx]) / 255.0
+	}
+	v00 := sample(x0, y0, w, h)
+	v10 := sample(x0 + 1, y0, w, h)
+	v01 := sample(x0, y0 + 1, w, h)
+	v11 := sample(x0 + 1, y0 + 1, w, h)
+	top := v00 + (v10 - v00) * tx
+	bot := v01 + (v11 - v01) * tx
+	return top + (bot - top) * ty
 }
 
 // Terreno del mapa: malla continua cacheada (ver terrain_cache_ensure),
@@ -1443,27 +1582,25 @@ render_water_lily_3d :: proc(center: raylib.Vector3, row, col: i32) {
 	}
 }
 
-// Anillo plano sobre el suelo (rango de torre, AoE, action-target hover) —
-// DrawCircle3D acostado sobre el plano XZ.
-draw_ground_ring :: proc(center: raylib.Vector3, radius: f32, color: raylib.Color) {
-	raylib.DrawCircle3D(center, radius, {1, 0, 0}, 90, color)
-}
-
 render_tower_ranges_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	cs := constants.WORLD_CELL_SIZE
+	raylib.BeginShaderMode(range_disc_shader)
 	if app.settings.show_tower_range {
 		for &tower in app.sim.towers {
-			center, top_y := tile_world_top(m, tower.r, tower.c)
-			ring := raylib.Vector3{center.x, top_y + 0.02, center.z}
-			draw_ground_ring(ring, tower.range * cs, constants.TOWER_RANGE_PREVIEW)
+			center, _ := tile_world_top(m, tower.r, tower.c)
+			ring := raylib.Vector3{center.x, 0.02, center.z}
+			draw_range_disc_3d(m, ring, tower.range * cs, constants.TOWER_RANGE_PREVIEW)
 		}
 	}
 	if selected := entities.app_get_selected_tower(app); selected != nil {
-		center, top_y := tile_world_top(m, selected.r, selected.c)
-		ring := raylib.Vector3{center.x, top_y + 0.02, center.z}
-		draw_ground_ring(ring, selected.range * cs, constants.TOWER_RANGE_PREVIEW)
-		draw_ground_ring(ring, selected.range * cs, raylib.Color{255, 255, 255, 200})
+		center, _ := tile_world_top(m, selected.r, selected.c)
+		ring := raylib.Vector3{center.x, 0.02, center.z}
+		// Antes eran 2 draw_ground_ring superpuestos (relleno tenue + "contorno"
+		// blanco) porque el anillo viejo no tenía relleno real — el disco nuevo
+		// ya trae el borde nítido incluido, una sola pasada alcanza.
+		draw_range_disc_3d(m, ring, selected.range * cs, raylib.Color{255, 255, 255, 150})
 	}
+	raylib.EndShaderMode()
 }
 
 // Caja plana semitransparente sobre un tile — reemplazo simplificado del
@@ -1662,11 +1799,13 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 			tower_type := tile_to_tower_type(app.sim.selected_build_tower)
 			spec := constants.TOWER_SPECS[tower_type]
 			draw_tower_shape_3d(surface, cs, 0, 0, spec.color, 160, tower_type_has_barrel(tower_type))
-			ring := raylib.Vector3{surface.x, surface.y + 0.02, surface.z}
-			draw_ground_ring(ring, spec.range * cs, constants.TOWER_RANGE_PREVIEW)
+			ring := raylib.Vector3{surface.x, 0.02, surface.z}
+			raylib.BeginShaderMode(range_disc_shader)
+			draw_range_disc_3d(m, ring, spec.range * cs, constants.TOWER_RANGE_PREVIEW)
 			if spec.aoe > 0 {
-				draw_ground_ring(ring, spec.aoe * cs, raylib.Color{255, 180, 60, 180})
+				draw_range_disc_3d(m, ring, spec.aoe * cs, raylib.Color{255, 180, 60, 180})
 			}
+			raylib.EndShaderMode()
 		}
 	}
 }
@@ -1735,6 +1874,7 @@ render_enemies_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 
 render_enemy_status_rings_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	cs := constants.WORLD_CELL_SIZE
+	raylib.BeginShaderMode(range_disc_shader)
 	for &enemy in app.sim.enemies {
 		pos := world_from_raw_grid(m, enemy.x, enemy.y)
 		size := entities.enemy_get_size(&enemy) * cs
@@ -1742,14 +1882,15 @@ render_enemy_status_rings_3d :: proc(app: ^entities.App_State, m: ^entities.Map)
 		size_xz := size * (1 + squash)
 
 		if .ARMORED in enemy.flags {
-			draw_ground_ring({pos.x, pos.y + 0.02, pos.z}, size_xz * 1.1, constants.COLOR_ENEMY_ARMORED)
+			draw_range_disc_3d(m, {pos.x, 0.02, pos.z}, size_xz * 1.1, constants.COLOR_ENEMY_ARMORED)
 		}
 		if enemy.slow_timer > 0 {
 			pulse := f32(math.abs(math.sin(f64(raylib.GetTime()) * 5.0)))
 			alpha := u8(60.0 + 50.0 * pulse)
-			draw_ground_ring({pos.x, pos.y + 0.03, pos.z}, size_xz * 1.2, raylib.Color{100, 200, 255, alpha})
+			draw_range_disc_3d(m, {pos.x, 0.03, pos.z}, size_xz * 1.2, raylib.Color{100, 200, 255, alpha})
 		}
 	}
+	raylib.EndShaderMode()
 }
 
 render_projectiles_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
@@ -1799,13 +1940,15 @@ render_hit_particles_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 
 render_ice_pulses_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	cs := constants.WORLD_CELL_SIZE
+	raylib.BeginShaderMode(range_disc_shader)
 	for &pulse in app.sim.ice_pulses {
 		pos := world_from_centered_grid(m, pulse.x, pulse.y)
 		t := pulse.life / pulse.max_life
 		alpha := u8(t * 210.0)
-		ring := raylib.Vector3{pos.x, pos.y + 0.02, pos.z}
-		draw_ground_ring(ring, pulse.radius * cs, raylib.Color{180, 235, 255, alpha})
+		ring := raylib.Vector3{pos.x, 0.02, pos.z}
+		draw_range_disc_3d(m, ring, pulse.radius * cs, raylib.Color{180, 235, 255, alpha})
 	}
+	raylib.EndShaderMode()
 }
 
 render_laser_beams_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
