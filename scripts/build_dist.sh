@@ -43,7 +43,7 @@ build_linux() {
 
 copy_assets() {
 	local stage="$1"
-	cp -r images fonts audio music assets maps "$stage/"
+	cp -r images fonts audio music assets maps models "$stage/"
 	cp translations.txt campaign.bin README.md "$stage/"
 	# savegame.bin / settings.bin deliberately NOT copied: those are
 	# per-player state (progress, settings), not game content — a fresh

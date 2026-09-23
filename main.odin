@@ -112,6 +112,22 @@ main :: proc() {
 	systems.range_disc_shader_init()
 	defer systems.range_disc_shader_unload()
 
+	// Marca de spawn/goal — ver spawn_goal_shader en rendering.odin
+	systems.spawn_goal_shader_init()
+	defer systems.spawn_goal_shader_unload()
+
+	// Shimmer de la grilla del editor — ver grid_line_shader en rendering.odin
+	systems.grid_line_shader_init()
+	defer systems.grid_line_shader_unload()
+
+	// Árboles reales por bioma — ver tree_shader/tree_models en rendering.odin.
+	// El shader tiene que estar cargado ANTES de tree_models_init (asigna
+	// tree_shader a los materiales de cada modelo al cargarlos).
+	systems.tree_shader_init()
+	defer systems.tree_shader_unload()
+	systems.tree_models_init()
+	defer systems.tree_models_unload()
+
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
 	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)

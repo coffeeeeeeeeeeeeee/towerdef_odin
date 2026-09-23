@@ -27,16 +27,34 @@ uniform sampler2D shadowMap;
 uniform float shadowDepthBias;  // fijo, ver constants.SHADOW_DEPTH_BIAS
 uniform float shadowMinFactor;  // piso — fracción de sol que sobrevive en sombra plena
 
-float shadow_factor() {
+// ndotl: dot(normal, sunDir) YA clampeado a [0,1] (el mismo sunDiff que
+// arma el término difuso) — hace falta para el bias de abajo. Un bias FIJO
+// alcanza para una superficie de frente al sol, pero en superficies
+// casi de canto (ndotl bajo — copas de árbol, hojas casi paralelas a la
+// luz) un texel de la sombra cubre una franja de profundidad mucho más
+// ancha en mundo real, y ese mismo bias chico queda corto: el fragmento
+// se autosombrea contra su propio triángulo (o el de al lado, casi
+// coplanar) en un patrón rayado — "efecto tijera"/peine en el borde de la
+// sombra, mucho más notorio con geometría densa y angosta (hojas/fronds
+// de los árboles reales) que con los cuerpos simples de antes (torres,
+// cajas). El bias efectivo escala con la pendiente (aprox. tan del
+// ángulo respecto de la normal, clampeado para no dispararse a nada en
+// ángulos casi rasantes) y nunca baja del piso fijo — eso evita reabrir
+// peter-panning en las superficies de frente, que ya estaban bien.
+float shadow_factor(float ndotl) {
     vec3 proj = fragPosLightSpace.xyz / fragPosLightSpace.w;
     proj = proj * 0.5 + 0.5;  // NDC [-1,1] -> espacio de textura [0,1]
     if (proj.z > 1.0) return 1.0;  // fuera del far plane de la luz — sin dato, full sol
+
+    float slope = clamp(sqrt(max(1.0 - ndotl * ndotl, 0.0)) / max(ndotl, 0.05), 0.0, 8.0);
+    float bias = max(shadowDepthBias, shadowDepthBias * slope);
+
     float lit = 0.0;
     vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0));
     for (int x = -1; x <= 1; x++) {
         for (int y = -1; y <= 1; y++) {
             float closest = texture(shadowMap, proj.xy + vec2(x, y) * texel).r;
-            lit += (proj.z - shadowDepthBias > closest) ? 0.0 : 1.0;
+            lit += (proj.z - bias > closest) ? 0.0 : 1.0;
         }
     }
     lit /= 9.0;
@@ -60,6 +78,7 @@ const float SPECULAR_STRENGTH_WATER = 0.35;
 uniform float useTerrainMask;
 uniform sampler2D texture0;   // R: 1 = tile de camino
 uniform sampler2D texture1;   // R: 1 = tile de agua
+uniform sampler2D texture2;   // R: máscara de agua supersampleada + mipmaps, ver foamMask
 uniform vec3 pathColor;
 uniform vec3 waterColor;      // tinte plano de agua (constants.COLOR_WATER)
 uniform vec3 waterEdgeColor;  // borde/sombra del agua (constants.COLOR_WATER_EDGE)
@@ -173,6 +192,66 @@ vec3 waterCausticsOverlay(vec2 worldPos, vec3 baseColor) {
     float intensity = exp(w * 4.0 - 1.0);
     vec3 causticTint = vec3(intensity) * baseColor;
     return mix(baseColor, causticTint, 0.30);
+}
+
+// ── Espuma de orilla ─────────────────────────────────────────────────────
+// Línea continua alrededor de TODA el agua, no parches sueltos: blur de la
+// máscara de agua + contraste (doble smoothstep) para sacar el contorno,
+// variando el blur en el tiempo para que la línea "respire" — se contrae y
+// vuelve, como las olas — en vez de quedar fija.
+//
+// El blur NO se arma a mano con un loop de muestreo (con la máscara de 1
+// texel/tile de texture1 eso da parches cuadrados del tamaño de un tile,
+// no una línea — se probó y se veía exactamente así de mal): texture2 es
+// una versión supersampleada de la misma máscara CON MIPMAPS, y cada nivel
+// de mipmap YA es un blur de radio distinto (el hardware promedia un área
+// más grande en cada nivel siguiente). Animar el nivel de LOD con
+// textureLod() da "cambiar el radio del blur" con una sola lectura de
+// textura, continua y antialiaseada porque viene de un sampler bilineal,
+// no de una grilla de tiles. El umbral de contraste se deja SIEMPRE en
+// 0.5: en un borde recto eso cae justo en el límite real sin importar el
+// radio (un blur simétrico da 0.5 exacto en el borde), así que el
+// movimiento visible de la línea sale de la curvatura real de la costa
+// (esquinas, entrantes — sobra en un mapa por tiles), no de desplazar el
+// umbral a mano.
+float foamHash21(vec2 p) {
+    return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453);
+}
+
+float foamValueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    float a = foamHash21(i);
+    float b = foamHash21(i + vec2(1.0, 0.0));
+    float c = foamHash21(i + vec2(0.0, 1.0));
+    float d = foamHash21(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// causticsTime avanza a WATER_ANIM_SPEED (0.4) unidades por segundo real —
+// 2.2 acá da un ciclo de contracción/vuelta de ~7s reales (2π/2.2 unidades
+// × 2.5s por unidad), el vaivén "lento" pedido.
+const float FOAM_CYCLE_SPEED = 2.2;
+const float FOAM_MIN_LOD     = 2.5; // blur angosto, línea "recogida" — más lejos del borde
+const float FOAM_MAX_LOD     = 5.5; // blur ancho, línea "avanza"
+const float FOAM_HALF_WIDTH  = 0.06; // ancho de la línea en espacio de coverage
+
+float foamMask(vec2 uv, vec2 worldPos) {
+    float breathe = 0.5 + 0.5 * sin(causticsTime * FOAM_CYCLE_SPEED);
+    float lod     = mix(FOAM_MIN_LOD, FOAM_MAX_LOD, breathe);
+
+    float coverage = textureLod(texture2, uv, lod).r;
+    float line = smoothstep(0.5 - FOAM_HALF_WIDTH, 0.5, coverage)
+               - smoothstep(0.5, 0.5 + FOAM_HALF_WIDTH, coverage);
+
+    // Variación de INTENSIDAD, no de presencia — nunca corta la línea a
+    // cero, solo le da una textura de espuma menos uniforme que un trazo
+    // parejo.
+    float tex = foamValueNoise(worldPos * 3.0 + causticsTime * 0.15);
+    float intensity = mix(0.55, 1.0, smoothstep(0.3, 0.7, tex));
+
+    return line * intensity;
 }
 
 // ── Dunas (dune.glsl, bioma DESERT) ─────────────────────────────────────────
@@ -448,6 +527,9 @@ void main() {
             vec2 worldPos = fragTexCoord * mapSize;
             vec3 caustic = waterCausticsOverlay(worldPos, base);
             base = mix(base, caustic, isWater);
+
+            float foam = foamMask(fragTexCoord, worldPos);
+            base = mix(base, vec3(0.92, 0.97, 0.98), foam * 0.85);
         }
 
         float groundMix = (1.0 - isPath) * (1.0 - isWater);
@@ -474,7 +556,7 @@ void main() {
     vec3 n = normalize(fragNormal);
     float sunDiff = max(dot(n, sunDir), 0.0);
     float fillDiff = max(dot(n, fillDir), 0.0);
-    float sf = shadow_factor();
+    float sf = shadow_factor(sunDiff);
     vec3 lit = ambient + sunColor * sunDiff * sf + fillColor * fillDiff;
 
     // Especular: en terreno solo sobre agua (isWater), en formas inmediatas

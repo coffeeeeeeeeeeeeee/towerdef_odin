@@ -172,9 +172,9 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 
 	savegame_exists := os.exists(entities.meta_save_path())
 
-	// Slot count: Nueva Campaña + Jugar + Settings + Progression + Library + Exit
+	// Slot count: Nueva Campaña + Settings + Progression + Library + Exit
 	// (+ Continue si hay savegame, + Editor si DEVELOPER)
-	slot_count := 6 + (1 if constants.DEVELOPER else 0) + (1 if savegame_exists else 0)
+	slot_count := 5 + (1 if constants.DEVELOPER else 0) + (1 if savegame_exists else 0)
 	total_buttons_height := slot_count * int(menu_button_height) + (slot_count - 1) * int(gap)
 	start_y := (i32(screen_height) - i32(total_buttons_height)) / 2
 	current_y := start_y
@@ -202,24 +202,23 @@ render_menu_ui :: proc(app: ^entities.App_State) {
 		new_game_text,
 		{f32(screen_width / 2 - new_game_w / 2), f32(current_y), f32(new_game_w), f32(menu_button_height)},
 	) {
-		app.confirm_modal = entities.Confirm_Modal{
-			active = true,
-			text   = "¿Iniciar una nueva campaña?\nSe reiniciará tu progreso guardado.",
-			action = .NEW_GAME,
+		if savegame_exists {
+			app.confirm_modal = entities.Confirm_Modal{
+				active = true,
+				text   = "¿Iniciar una nueva campaña?\nSe reiniciará tu progreso guardado.",
+				action = .NEW_GAME,
+			}
+		} else {
+			// Primer run: no hay nada que sobreescribir, así que arranca
+			// directo sin el modal de confirmación (mismo efecto que
+			// confirmar .NEW_GAME, ver el switch de arriba).
+			app.meta = entities.Meta_State{}
+			app.meta_dirty = true
+			app.campaign_loaded = false
+			entities.app_set_state(app, .CAMPAIGN_MAP)
 		}
 	}
 	current_y += menu_button_height + gap
-
-	// Jugar — abre el browser de mapas en "play mode" para elegir y jugar un
-	// mapa guardado suelto, sin pasar por la campaña (ver _open_map_browser).
-	{
-		txt := constants.get_text("MENU_BUTTON_PLAY")
-		w   := i32(raylib.MeasureTextEx(constants.game_fonts.semibold, strings.clone_to_cstring(txt, context.temp_allocator), button_font_size, 0).x)
-		if render_button(txt, {f32(screen_width / 2 - w / 2), f32(current_y), f32(w), f32(menu_button_height)}) {
-			_open_map_browser(app)
-		}
-		current_y += menu_button_height + gap
-	}
 
 	// Editor (solo en modo Developer — bloque eliminado en compile-time si DEVELOPER=false)
 	when constants.DEVELOPER {

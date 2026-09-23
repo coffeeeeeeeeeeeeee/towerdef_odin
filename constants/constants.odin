@@ -280,6 +280,14 @@ PATH_MASK_SUBDIV    :: 16                // texels por tile en cada eje de la m�
 PATH_EMBOSS_DEPTH   :: f32(0.10)         // profundidad del hundimiento, unidades de mundo
 PATH_EDGE_SOFTNESS  :: f32(0.02)         // fracción del medio-ancho usada para el falloff del borde
 
+// Máscara de agua supersampleada + mipmaps para la espuma de orilla — cada
+// nivel de mipmap YA es un blur de radio distinto, así que animar el nivel
+// de LOD en el shader da el vaivén de las olas sin rearmar un blur a mano
+// por fragmento. Más baja que PATH_MASK_SUBDIV (16) a propósito: acá no
+// hace falta más resolución de la que un par de niveles de mipmap
+// necesitan para tener de dónde promediar. Ver foamMask en lighting.fs.
+FOAM_MASK_SUBDIV :: 8
+
 // =============================================================================
 // Tower specs
 // =============================================================================
@@ -769,10 +777,12 @@ INTEREST_RATE    :: f32(0.05)  // Fraction of current gold awarded as interest a
 // Environment colors
 // =============================================================================
 
-COLOR_GRID_LINE  :: raylib.Color{238, 238, 238, 255}
+COLOR_GRID_LINE  :: raylib.Color{238, 238, 238, 190}
 COLOR_PATH       :: raylib.Color{210, 180, 140, 255}
 COLOR_SPAWN      :: raylib.Color{100, 200, 100, 255}
 COLOR_GOAL       :: raylib.Color{200, 100, 100, 255}
+SPAWN_GOAL_PULSE_SPEED :: f32(1.4) // rad/s del pulso de intensidad, ver spawn_goal_shader
+GRID_LINE_NOISE_SPEED  :: f32(0.3) // deriva del shimmer de la grilla, ver grid_line_shader
 COLOR_TREE_TRUNK :: raylib.Color{139,  69,  19, 255}
 COLOR_TREE_LEAVES :: raylib.Color{ 34, 139,  34, 255}
 COLOR_BLOCK    :: raylib.Color{128, 128, 128, 255}

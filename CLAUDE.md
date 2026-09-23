@@ -685,9 +685,17 @@ no es 100% estático:
   invalidar para un mapa de este tamaño). `render_shadow_depth_pass`
   dibuja los casters — torres, árboles en tierra, bloques/barras de
   obstáculo, puente, enemigos — con `assets/shadow_depth.vs/.fs` (shader
-  mínimo, solo transforma posición) en vez de `lighting_shader.shader`,
-  reusando exactamente los mismos procs de dibujo (`render_tower_3d`,
-  `render_tree_3d`, etc. — geometría idéntica, shader distinto). El
+  mínimo, solo transforma posición) en vez de `lighting_shader.shader`.
+  Para las formas inmediatas (torres/bloques/...) reusa exactamente los
+  mismos procs de dibujo que la pasada visible (`render_tower_3d`, etc.) —
+  el `BeginShaderMode(shadow_map.depth_shader)` del llamador alcanza solo,
+  porque no tienen material propio. Los árboles NO: `render_tree_3d` dibuja
+  un `Model` real con `tree_shader` asignado a su material (`DrawModelEx`
+  ignora el `BeginShaderMode` activo, usa `material.shader` directo), así
+  que la sombra usa `render_tree_shadow_3d` — pisa el shader de todos los
+  materiales del árbol a `shadow_map.depth_shader` antes de dibujar y lo
+  devuelve a `tree_shader` después (ver la sección de árboles reales más
+  abajo para el detalle completo de esa trampa). El
   terreno **no** proyecta sombra (solo la recibe) — es la única malla con
   desplazamiento de vértices (el hundimiento del camino embossed), así que
   excluirlo como caster evita duplicar esa lógica en el shader de
@@ -701,6 +709,17 @@ no es 100% estático:
   `SHADOW_DEPTH_BIAS` es el valor a tunear a ojo si aparece "acné" (bias
   chico) o "peter-panning"/sombra despegada de la base (bias grande) —
   ajustar de a un síntoma por vez, tiran en direcciones opuestas.
+  `shadow_factor()` (en `lighting.fs` y `tree.fs`, misma fórmula en las
+  dos) escala ese bias por la pendiente real de la superficie respecto del
+  sol (`ndotl`, el mismo `dot(normal, sunDir)` que ya arma el término
+  difuso) en vez de usarlo fijo: en una superficie casi de canto al sol
+  (las hojas/fronds de los árboles reales son geometría angosta y casi
+  coplanar entre sí, mucho más propensa a esto que las formas simples de
+  antes) un bias fijo alcanzaba para autosombrear el fragmento contra su
+  propio triángulo o el de al lado en un patrón rayado — "efecto tijera"
+  en el borde de la sombra. El piso sigue siendo `SHADOW_DEPTH_BIAS` (no
+  baja de ahí), así que las superficies de frente al sol —terreno, torres—
+  quedan exactamente como antes.
   **Trampa de orden**: el `EnableFramebuffer`/`DisableFramebuffer` del
   shadow pass (nivel `rlgl`, no `BeginTextureMode`) tiene que completar
   ANTES de que arranque el `BeginTextureMode` de `Pause_Blur` — si no, el
@@ -964,6 +983,192 @@ no en mosaico. Por esto `draw_range_disc_3d` recibe `m: ^entities.Map` y el
 parámetro `center` pasa a ser solo XZ + un pequeño offset en Y (0.02/0.03,
 anti z-fighting) — la altura real la resuelve la función punto por punto, no la
 calcula quien llama.
+
+## Marca de spawn/goal (spawn_goal.vs/.fs)
+
+Reemplaza al viejo `DrawCylinder` plano de color sólido de
+`render_spawn_3d`/`render_goal_3d` (eliminadas). Reusa la geometría de
+`draw_range_disc_3d` (mismo quad teselado por tile, siguiendo la altura
+real de la malla — ver la sección de arriba) con un shader propio en vez
+de `range_disc_shader`: acá el disco es relleno PAREJO (no crece desde el
+centro) con un pulso suave de intensidad en el tiempo — es una marca de
+lugar fija, no un área de efecto. `render_spawn_goal_markers_3d` es una
+pasada aparte (como `render_tower_ranges_3d`), llamada en el mismo lugar
+del pipeline y también en `render_map_preview_to_texture` (el thumbnail
+del browser de mapas SÍ mostraba spawn/goal antes, cuando el dibujo vivía
+dentro del loop de `render_map_objects_3d` — sacarlos a una pasada aparte
+sin agregar el call ahí hubiera sido una regresión silenciosa).
+
+## Shimmer de la grilla del editor (grid_line.vs/.fs)
+
+`render_grid_lines_3d` (las líneas del toggle de grid, `app.settings.show_grid`)
+dibujaba con `raylib.DrawLine3D` y color plano fijo (`COLOR_GRID_LINE`).
+Ahora corre envuelta en `BeginShaderMode(grid_line_shader)` — sigue siendo
+el mismo `DrawLine3D`, el shader nuevo le suma un shimmer de OPACIDAD (no
+de brillo): ruido de alta frecuencia espacial (`fragWorldPos.xz * 60.0`,
+varía rápido a lo largo del trazo) con deriva lenta en el tiempo
+(`gridNoiseTime`, acumulado en `render_grid_lines_3d` igual que
+`dune_anim_time`/etc.), en un rango de opacidad 0.5..1.0. Es value noise
+(interpolación bilineal + smoothstep entre esquinas), no un hash crudo por
+fragmento — por construcción ya sale "suave" en vez de estática de TV, sin
+necesitar un blur aparte.
+
+Dos vueltas de ajuste ya dadas, anotadas para no repetir el mismo error:
+la primera versión multiplicaba el ruido sobre el RGB (un rango angosto,
+0.9..1.0, "muy levemente" tal cual se pidió al principio) — con
+`COLOR_GRID_LINE` casi blanco y una línea de 1px sin antialiasing esa
+variación (238→214) resultó imperceptible en pantalla, así que se
+ensanchó a 0.5..1.0. Con el rango ya ensanchado, oscurecer el RGB de una
+línea OPACA no da matices de color, va derecho a gris/negro — se veía
+como puntitos negros salpicados en vez de un shimmer. El fix real no era
+angostar el rango de vuelta: era mover el ruido de RGB a ALFA
+(`fragColor.a * opacity` en vez de `fragColor.rgb * opacity`), así el
+punto bajo de ruido es un hueco transparente (se ve el terreno de abajo)
+en vez de un punto oscuro pintado encima. Si hace falta ajustar de nuevo
+"muy sutil" vs. "se nota poco", tocar el rango de opacidad, no volver a
+multiplicar el RGB. `render_grid_lines_3d` abre y cierra su propio
+`BeginShaderMode`/`EndShaderMode` (con `defer`), así que no le importa qué
+shader haya quedado activo de `render_map_3d` antes ni qué necesite
+`render_tower_ranges_3d` después — mismo criterio de "cada pasada se hace
+cargo de su propio shader" que ya usan todas las demás.
+
+**El ancho de línea es geometría real, no `DrawLine3D`**: la primera
+versión dibujaba con `raylib.DrawLine3D` (primitiva `GL_LINES`), que se
+rasteriza con un ancho FIJO EN PÍXELES DE PANTALLA (1px en un contexto
+core, sin importar `glLineWidth`) — la grilla se veía siempre del mismo
+grosor de cerca o de lejos de la cámara, porque un `GL_LINES` no es
+geometría 3D real, es una primitiva delgada en espacio de clip.
+`draw_grid_line_ribbon_3d` reemplaza cada segmento por un quad angosto
+(`GRID_LINE_WIDTH`, en unidades de mundo) acostado sobre el terreno,
+perpendicular a la dirección del segmento en el plano XZ — con eso la
+perspectiva normal de la cámara ya hace que se vea más ancho de cerca y
+más fino de lejos, sin ningún cálculo de distancia a mano. Es plano
+(sin billboard hacia la cámara) a propósito: la grilla es esencialmente
+horizontal, apoyada en el terreno, no necesita encararlo.
+
+**Desvanecido TANGENCIAL, por segmento — no por distancia al mapa**: la
+opacidad se multiplica por un segundo factor, `tangent_fade`, que depende
+de dónde cae el fragmento A LO LARGO DE SU PROPIO segmento de grilla (su
+propio centro vs. sus propias dos puntas), no de la posición del
+fragmento respecto del mapa entero. Primer intento (revertido): un
+desvanecido por distancia al CENTRO DEL MAPA — mal entendido el pedido
+original, que pedía el centro/borde de CADA LÍNEA, no del mapa.
+
+El dato que hace falta (dónde cae el fragmento a lo largo del segmento) ya
+viaja gratis: `draw_grid_line_ribbon_3d` arma el quad de cada segmento con
+UV `(0,·)` en la punta `p0` y `(1,·)` en la punta `p1` — la U es
+exactamente la posición tangencial. `grid_line.vs` la pasa como
+`fragLineT`; `grid_line.fs` arma `d = abs(fragLineT - 0.5) * 2` (0 en el
+centro del segmento, 1 en cualquiera de las dos puntas) y
+`tangent_fade = 1 - smoothstep(0.6, 1.0, d)` — el 60% central de CADA
+segmento queda a opacidad plena, el 40% de cada punta se desvanece.
+
+## Árboles reales (tree.vs/.fs, tree_models)
+
+Reemplaza al árbol procedural (dos `DrawCylinder`, tronco + copa) por un
+modelo `.obj` real por bioma, cargado una sola vez en `tree_models_init`
+(`models/tree`, `models/pine`, `models/palm`, `models/bush` — Llanura,
+Bosque, Desierto, Montaña respectivamente). `models/palm/palmera.obj` es
+un FBX convertido a mano con `assimp export` (raylib no carga FBX
+directo, solo OBJ/IQM/glTF/VOX/M3D) — si el FBX original cambia, hay que
+volver a correr `assimp export palmera.fbx palmera.obj -tri` en esa
+carpeta. El `-tri` (triangular) NO es opcional: sin él, assimp exporta
+caras como n-gons de hasta 10 vértices (los frondes de la palmera), y el
+parser de OBJ que trae raylib (`tinyobj_loader_c`, `TINYOBJ_MAX_FACES_PER_F_LINE
+= 16`) aborta el proceso entero con un `assert` en cuanto encuentra una
+cara de más de 5 vértices — no es un error recuperable, tira el programa
+abajo. `tree/`, `pine/` y `bush/` no tienen este problema (caras de 3-4
+vértices, vienen así de origen), así que solo palm/ necesita el flag.
+
+**Shader propio (`tree_shader`), no `lighting_shader`**: `lighting.vs`
+asume todo en espacio de mundo (torres/enemigos/etc. se arman a mano
+vértice por vértice, ya ubicados) y no tiene `matModel`/`matNormal` ni
+sampling de textura difusa real, porque nunca le hizo falta — nada de eso
+se necesitaba antes de esto. Un modelo real rotado/escalado por instancia
+vía `DrawModelEx` sí necesita las dos matrices (para posición de mundo
+correcta en `fragPosLightSpace` y normales bien orientadas), así que en
+vez de forzarlo adentro de `lighting_shader` (arriesgando el resto del
+terreno/formas inmediatas que ya dependen de él) es un shader aparte —
+mismo sol/fill/ambient/sombra que `lighting.fs` (sincronizados cada frame
+desde `render_map_3d`/`shadow_map_bind_for_sampling`, ver esos sitios),
+más sampling de `texture0`/`colDiffuse` reales (raylib los resuelve solos
+por material, igual que `texture0`/`texture1` ya se resuelven solos en
+`lighting.fs`).
+
+**Trampa real con la que hay que tener cuidado**: `DrawModelEx` usa
+`material.shader` DIRECTO — no respeta el `BeginShaderMode` que esté
+activo en el llamador, a diferencia de las formas inmediatas
+(`DrawCylinder`/`DrawCube`/...) que sí lo respetan porque no tienen
+material propio. Por eso `render_tree_3d` (la pasada VISIBLE, dentro de
+`BeginShaderMode(lighting_shader.shader)` en `render_map_objects_3d`)
+tiene que volver a activar `lighting_shader` a mano después de dibujar el
+árbol — si no, el estado de shader de rlgl (global, no se acota al draw)
+queda en `tree_shader` para el resto del loop, y el siguiente obstáculo o
+torre del mismo frame sale pintado con el shader de árboles.
+
+**La pasada de sombra dibuja el modelo real, no un proxy** —
+`render_tree_shadow_3d` usa el mismo `Tree_Model` y la misma geometría que
+`render_tree_3d`, para que la sombra tenga la silueta real del árbol (copa
+recortada, huecos entre hojas, etc.) en vez de un blob genérico. Como
+`DrawModelEx` usa `material.shader` directo (ver la trampa de arriba), acá
+hay que pisar el shader de TODOS los materiales del modelo a
+`shadow_map.depth_shader` antes de dibujar y devolverlo a `tree_shader`
+después — si no, el modelo queda con el shader de profundidad puesto la
+próxima vez que se dibuje en la pasada visible. Importante: nunca usar
+`tree_shader` para la pasada de sombra (ni por comodidad, ni porque "el
+depth-write sale bien igual") — `tree_shader` samplea `shadowMap` para su
+propio `shadow_factor()`, y esa textura es justamente el attachment de
+profundidad que se está escribiendo en este mismo pass; leer y escribir la
+misma textura a la vez es *undefined behavior* en GL. `shadow_map.depth_shader`
+(solo posición, sin samplers) es el único shader seguro acá, mismo
+criterio que ya usan todos los demás casters (torres, obstáculos).
+
+**Orientación/escala por modelo** (`TREE_MODEL_SPECS`): cada archivo
+fuente viene con su propia convención de ejes y escala de diseño, ajena a
+`WORLD_CELL_SIZE = 1`. `tree/` y `bush/` vienen Z-up (la altura real está
+en Z, `needs_z_up_fix = true`) — `_fix_model_z_up` corrige ESO UNA SOLA
+VEZ en `tree_models_init`, rotando a mano los vértices/normales del mesh
+en CPU (`(x,y,z) → (x,z,-y)`, derivado directo de las fórmulas de rotación
+alrededor de X, no armado con una `Matrix`: `raylib.odin` no trae
+`MatrixRotate`/`MatrixMultiply` de `raymath.h` bindeadas, y mezclar a mano
+una `Matrix` `#row_major` de raylib con las de `core:math/linalg`
+—convención de columna— es terreno fácil para terminar con una rotación
+transpuesta sin darse cuenta) y subiendo el resultado a GPU con
+`UpdateMeshBuffer` (si no, la corrección se queda solo en CPU y el modelo
+se sigue viendo con la orientación vieja — `LoadModel` ya subió los datos
+originales antes). La base queda en `y=0` sin offset extra (el punto
+`z=0` de la base pasa a `y=0`). `pine/` y `palm/` ya vienen Y-up con la
+base en `y=0`, `needs_z_up_fix = false`. Los valores de `scale` salen de
+dividir la altura real del bounding box de cada fuente (medida a mano
+fuera del juego) por `~0.85` (la altura aproximada que tenía el árbol
+procedural viejo) — son un punto de partida calculado, no verificado en
+pantalla; si algún árbol se ve grande/chico de más, ajustar
+`TREE_MODEL_SPECS` directamente, no la geometría.
+
+**Rotación aleatoria por instancia**: cada árbol gira un yaw distinto
+alrededor de Y (`hash_random(row, col, 7) * 360`, mismo hash determinístico
+por tile que ya usa el resto del código para variación — mismo giro en
+`render_tree_3d` y en `render_tree_shadow_3d`, si no la sombra gira
+distinto que el árbol que la tira) para que no salgan todos clonados
+mirando para el mismo lado. Esto es justo lo que hace posible haber sacado
+la corrección Z-up del parámetro de rotación de `DrawModelEx`: antes
+`rot_axis`/`rot_deg` (la corrección) viajaban ahí, y `DrawModelEx` solo
+acepta UN eje+ángulo — no había dónde meter una segunda rotación por
+instancia sin componer matrices a mano (mismo problema de convención de
+arriba). Con la corrección ya horneada en el mesh, el parámetro de
+rotación de `DrawModelEx` queda completamente libre para el yaw.
+
+**Modelo de Montaña (`bush`) es un caso débil, a sabiendas**: el archivo
+(`15254_Key_Ring_Wall_Mount-Tree_v1.obj`) es un llavero decorativo con
+forma de árbol ("Key Ring Wall Mount"), no un arbusto real, y no trae
+ningún material/textura (el `.mtl`/`.jpg` que lo acompañan están vacíos,
+0 bytes) — el usuario confirmó usarlo igual a falta de un asset mejor.
+Sale con color de la iluminación pura (sin Kd ni textura), y es también
+el modelo más pesado con diferencia (~107k triángulos, dos órdenes de
+magnitud más que los otros tres) — y ahora se dibuja DOS veces por árbol
+por frame (pasada visible + pasada de sombra, ver `render_tree_shadow_3d`
+arriba), así que si Montaña se nota lenta con muchos árboles en pantalla,
+empezar a mirar por acá.
 
 ## Fondo animado (nebula.glsl)
 

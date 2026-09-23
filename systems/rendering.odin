@@ -241,6 +241,73 @@ range_disc_shader_unload :: proc() {
 	raylib.UnloadShader(range_disc_shader)
 }
 
+// ── Spawn/goal shader (marca de dónde aparecen y a dónde llegan los
+// enemigos) ──────────────────────────────────────────────────────────────
+//
+// Reemplaza al viejo DrawCylinder plano de color sólido (render_spawn_3d/
+// render_goal_3d, eliminadas). Reusa la geometría de draw_range_disc_3d
+// (mismo quad+shader teselado por tile, siguiendo la altura real de la
+// malla — ver el comentario ahí) con un shader propio en vez de
+// range_disc_shader: acá es un disco relleno PAREJO (no crece desde el
+// centro) con un pulso suave de intensidad en el tiempo, no un falloff de
+// radio — es una marca de lugar fija, no un área de efecto.
+spawn_goal_shader: raylib.Shader
+spawn_goal_shader_loc_pulse_time: i32
+spawn_goal_anim_time: f32
+
+spawn_goal_shader_init :: proc() {
+	spawn_goal_shader = raylib.LoadShader("assets/spawn_goal.vs", "assets/spawn_goal.fs")
+	spawn_goal_shader_loc_pulse_time = raylib.GetShaderLocation(spawn_goal_shader, "pulseTime")
+}
+
+spawn_goal_shader_unload :: proc() {
+	raylib.UnloadShader(spawn_goal_shader)
+}
+
+// ── Shader de la grilla del editor (shimmer sutil) ───────────────────────
+//
+// render_grid_lines_3d dibujaba las líneas con color plano fijo
+// (constants.COLOR_GRID_LINE) vía raylib.DrawLine3D. Este shader le suma
+// un ruido de brillo de alta frecuencia espacial con deriva lenta en el
+// tiempo — ver grid_line.fs para por qué el value noise ya sale "suave"
+// sin un blur aparte.
+grid_line_shader: raylib.Shader
+grid_line_shader_loc_noise_time: i32
+grid_line_anim_time: f32
+
+grid_line_shader_init :: proc() {
+	grid_line_shader = raylib.LoadShader("assets/grid_line.vs", "assets/grid_line.fs")
+	grid_line_shader_loc_noise_time = raylib.GetShaderLocation(grid_line_shader, "gridNoiseTime")
+}
+
+grid_line_shader_unload :: proc() {
+	raylib.UnloadShader(grid_line_shader)
+}
+
+// Radio de la marca — mismo 0.4*cs que tenía el cilindro viejo, para no
+// cambiar el tamaño visual de golpe.
+SPAWN_GOAL_MARKER_RADIUS_RATIO :: f32(0.4)
+
+render_spawn_goal_markers_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	frame_dt := min(raylib.GetFrameTime(), constants.WATER_ANIM_MAX_DT)
+	spawn_goal_anim_time += frame_dt * constants.SPAWN_GOAL_PULSE_SPEED
+	raylib.SetShaderValue(spawn_goal_shader, spawn_goal_shader_loc_pulse_time, &spawn_goal_anim_time, .FLOAT)
+
+	cs := constants.WORLD_CELL_SIZE
+	raylib.BeginShaderMode(spawn_goal_shader)
+	for row in 0 ..< m.height {
+		for col in 0 ..< m.width {
+			tile := m.grid[row][col]
+			if tile != .SPAWN && tile != .GOAL { continue }
+			color := constants.COLOR_SPAWN if tile == .SPAWN else constants.COLOR_GOAL
+			center, _ := tile_world_top(m, row, col)
+			ring := raylib.Vector3{center.x, 0.02, center.z}
+			draw_range_disc_3d(m, ring, cs * SPAWN_GOAL_MARKER_RADIUS_RATIO, color)
+		}
+	}
+	raylib.EndShaderMode()
+}
+
 // El terreno NO es un plano ni siquiera un escalón por tile: cada tile de
 // la malla real está subdividido (TERRAIN_MESH_SUBDIV) e interpolado
 // bilinealmente entre esquinas promediadas con los vecinos, más el
@@ -255,8 +322,11 @@ range_disc_shader_unload :: proc() {
 // (shadow map) se resuelven contra la geometría real en vez de un plano
 // fijo. El UV de cada vértice se calcula en espacio de mundo relativo a
 // center/radius (no 0..1 por sub-quad) para que el falloff del shader
-// quede continuo en todo el disco, no en mosaico.
-// Debe dibujarse dentro de un BeginShaderMode(range_disc_shader) activo.
+// quede continuo en todo el disco, no en mosaico. La geometría es
+// agnóstica del shader que la pinta — hay que dibujarla dentro de un
+// BeginShaderMode activo (range_disc_shader para rango/AoE/estado de
+// enemigos/pulsos de hielo, spawn_goal_shader para las marcas de
+// spawn/goal — ver render_spawn_goal_markers_3d).
 draw_range_disc_3d :: proc(m: ^entities.Map, center: raylib.Vector3, radius: f32, color: raylib.Color) {
 	cs := constants.WORLD_CELL_SIZE
 	col_min := max(i32(math.floor((center.x - radius) / cs)), 0)
@@ -313,11 +383,13 @@ shadow_map_bind_for_sampling :: proc() {
 	// (ver CLAUDE.md, sección de shadow mapping) antes de aplicar el fix.
 	light_space := shadow_map.proj * shadow_map.view
 	raylib.SetShaderValueMatrix(lighting_shader.shader, lighting_shader.loc_light_space_matrix, light_space)
+	raylib.SetShaderValueMatrix(tree_shader.shader, tree_shader.loc_light_space_matrix, light_space)
 
 	slot := constants.SHADOW_MAP_TEXTURE_SLOT
 	rlgl.ActiveTextureSlot(slot)
 	rlgl.EnableTexture(shadow_map.depth_tex.id)
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_shadow_map, &slot, .INT)
+	raylib.SetShaderValue(tree_shader.shader, tree_shader.loc_shadow_map, &slot, .INT)
 }
 
 // ── Cloud layer shader ───────────────────────────────────────────────────────
@@ -563,6 +635,169 @@ lighting_shader_unload :: proc() {
 	raylib.UnloadShader(lighting_shader.shader)
 }
 
+// ── Shader de modelos reales (árboles importados) ────────────────────────
+//
+// lighting_shader asume todo en espacio de mundo (torres/enemigos/etc. se
+// arman a mano vértice por vértice, ya ubicados) — no tiene matModel ni
+// sampling de textura difusa real, porque nunca le hizo falta. Un modelo
+// real (con su propia malla, UVs y normales, rotado/escalado por
+// instancia vía DrawModelEx) sí necesita las dos cosas, así que en vez de
+// forzarlo adentro de lighting_shader (arriesgando romper el resto del
+// terreno/formas inmediatas que ya dependen de ese shader) es un shader
+// aparte — mismo sol/fill/ambient/sombra, ver tree.fs.
+Tree_Shader :: struct {
+	shader:                 raylib.Shader,
+	loc_sun_dir:            i32,
+	loc_sun_color:          i32,
+	loc_fill_dir:           i32,
+	loc_fill_color:         i32,
+	loc_ambient:            i32,
+	loc_light_space_matrix: i32,
+	loc_shadow_map:         i32,
+	loc_shadow_bias:        i32,
+	loc_shadow_min_factor:  i32,
+}
+
+tree_shader: Tree_Shader
+
+tree_shader_init :: proc() {
+	s := raylib.LoadShader("assets/tree.vs", "assets/tree.fs")
+	tree_shader = Tree_Shader{
+		shader                 = s,
+		loc_sun_dir            = raylib.GetShaderLocation(s, "sunDir"),
+		loc_sun_color          = raylib.GetShaderLocation(s, "sunColor"),
+		loc_fill_dir           = raylib.GetShaderLocation(s, "fillDir"),
+		loc_fill_color         = raylib.GetShaderLocation(s, "fillColor"),
+		loc_ambient            = raylib.GetShaderLocation(s, "ambient"),
+		loc_light_space_matrix = raylib.GetShaderLocation(s, "lightSpaceMatrix"),
+		loc_shadow_map         = raylib.GetShaderLocation(s, "shadowMap"),
+		loc_shadow_bias        = raylib.GetShaderLocation(s, "shadowDepthBias"),
+		loc_shadow_min_factor  = raylib.GetShaderLocation(s, "shadowMinFactor"),
+	}
+
+	sun_dir := linalg.normalize(constants.LIGHT_SUN_DIR)
+	sun_color := constants.LIGHT_SUN_COLOR
+	fill_dir := linalg.normalize(constants.LIGHT_FILL_DIR)
+	fill_color := constants.LIGHT_FILL_COLOR
+	ambient := constants.LIGHT_AMBIENT
+	raylib.SetShaderValue(s, tree_shader.loc_sun_dir, &sun_dir, .VEC3)
+	raylib.SetShaderValue(s, tree_shader.loc_sun_color, &sun_color, .VEC3)
+	raylib.SetShaderValue(s, tree_shader.loc_fill_dir, &fill_dir, .VEC3)
+	raylib.SetShaderValue(s, tree_shader.loc_fill_color, &fill_color, .VEC3)
+	raylib.SetShaderValue(s, tree_shader.loc_ambient, &ambient, .VEC3)
+
+	shadow_bias := constants.SHADOW_DEPTH_BIAS
+	shadow_min_factor := constants.SHADOW_MIN_FACTOR
+	raylib.SetShaderValue(s, tree_shader.loc_shadow_bias, &shadow_bias, .FLOAT)
+	raylib.SetShaderValue(s, tree_shader.loc_shadow_min_factor, &shadow_min_factor, .FLOAT)
+}
+
+tree_shader_unload :: proc() {
+	raylib.UnloadShader(tree_shader.shader)
+}
+
+// Un modelo real por bioma, cargado una sola vez (LoadModel resuelve las
+// texturas del .mtl solo, relativas a la carpeta del .obj). Los cuatro
+// archivos fuente vienen con convenciones de origen distintas — algunos
+// Z-up (exportados de herramientas que usan Z como altura), otros ya
+// Y-up, y todos en escalas de diseño ajenas al mundo del juego
+// (WORLD_CELL_SIZE = 1) — `needs_z_up_fix`/`scale` por entrada corrigen eso
+// una sola vez acá, no en cada draw.
+Tree_Model :: struct {
+	model: raylib.Model,
+	scale: f32,
+	valid: bool,
+}
+
+tree_models: [constants.Biome]Tree_Model
+
+Tree_Model_Spec :: struct {
+	path:           cstring,
+	scale:          f32,
+	needs_z_up_fix: bool,
+}
+
+// Escalas calculadas a mano desde el bounding box real de cada fuente
+// (ver el chequeo hecho por fuera del juego antes de este commit) para que
+// la altura del árbol quede en el mismo orden que el cono procedural viejo
+// (~0.85 unidades de mundo) — punto de partida, no un valor final: ajustar
+// acá si en pantalla se ven grandes/chicos de más.
+TREE_MODEL_SPECS := [constants.Biome]Tree_Model_Spec{
+	// tree/: exportado Z-up (altura real en Z, 0..204.93) — _fix_model_z_up
+	// lo para, la base (z=0) queda en y=0.
+	.PLAIN    = {"models/tree/LowPoly_Tree_v1.obj", 0.85 / 204.933, true},
+	// pine/: ya Y-up (altura 0..3.8143), sin corrección.
+	.FOREST   = {"models/pine/lowpoyltree.obj", 0.85 / 3.8143, false},
+	// palm/: convertido de FBX con assimp (ver models/palm/palmera.obj),
+	// ya Y-up (altura 0..2767.43), sin corrección.
+	.DESERT   = {"models/palm/palmera.obj", 0.85 / 2767.4282, false},
+	// bush/: mismo criterio que tree/ — el eje con más rango horizontal
+	// (Z, 0..11.19) es el candidato a "altura" tras pararlo.
+	.MOUNTAIN = {"models/bush/15254_Key_Ring_Wall_Mount-Tree_v1.obj", 0.85 / 11.1888, true},
+}
+
+// Corrige un mesh Z-up a Y-up rotando vértices/normales A MANO —
+// (x,y,z) -> (x,z,-y), derivado directo de RotateX(-90°) sobre las
+// fórmulas de rotación (newY = y·cos θ − z·sin θ, newZ = y·sin θ + z·cos θ,
+// con θ=−90°) en vez de armar una Matrix: raylib.odin no trae las
+// funciones de raymath.h (MatrixRotate/MatrixMultiply no están
+// bindeadas), y mezclar a mano una matrix `#row_major` de raylib con las
+// de `core:math/linalg` (convención de columna) es terreno fácil para
+// terminar con una rotación transpuesta sin darse cuenta — esto evita el
+// problema de raíz. Se hace UNA sola vez al cargar, contra los datos CPU
+// del mesh (LoadModel ya los subió a GPU), así que hace falta
+// UpdateMeshBuffer después o la corrección se queda solo en CPU y el
+// modelo se ve exactamente igual que antes.
+_fix_model_z_up :: proc(model: raylib.Model) {
+	for i in 0 ..< int(model.meshCount) {
+		mesh := &model.meshes[i]
+		n := int(mesh.vertexCount)
+		for v in 0 ..< n {
+			y := mesh.vertices[v * 3 + 1]
+			z := mesh.vertices[v * 3 + 2]
+			mesh.vertices[v * 3 + 1] = z
+			mesh.vertices[v * 3 + 2] = -y
+			if mesh.normals != nil {
+				ny := mesh.normals[v * 3 + 1]
+				nz := mesh.normals[v * 3 + 2]
+				mesh.normals[v * 3 + 1] = nz
+				mesh.normals[v * 3 + 2] = -ny
+			}
+		}
+		buf_size := i32(n) * 3 * size_of(f32)
+		raylib.UpdateMeshBuffer(mesh^, 0, mesh.vertices, buf_size, 0)
+		if mesh.normals != nil {
+			raylib.UpdateMeshBuffer(mesh^, 2, mesh.normals, buf_size, 0)
+		}
+	}
+}
+
+tree_models_init :: proc() {
+	for biome in constants.Biome {
+		spec := TREE_MODEL_SPECS[biome]
+		model := raylib.LoadModel(spec.path)
+		if spec.needs_z_up_fix {
+			_fix_model_z_up(model)
+		}
+		for i in 0 ..< int(model.materialCount) {
+			model.materials[i].shader = tree_shader.shader
+		}
+		tree_models[biome] = Tree_Model{
+			model = model,
+			scale = spec.scale,
+			valid = true,
+		}
+	}
+}
+
+tree_models_unload :: proc() {
+	for biome in constants.Biome {
+		if tree_models[biome].valid {
+			raylib.UnloadModel(tree_models[biome].model)
+		}
+	}
+}
+
 // ── Malla cacheada del terreno (plano continuo, desniveles diagonales) ─────
 // Se construye una sola vez por run (invalidada en simulation_fit_camera):
 // una grilla de (width+1)×(height+1) vértices — un vértice por esquina
@@ -580,6 +815,7 @@ Terrain_Cache :: struct {
 	model:          raylib.Model,
 	path_mask_tex:  raylib.Texture2D,
 	water_mask_tex: raylib.Texture2D,
+	foam_mask_tex:  raylib.Texture2D, // supersampleada + mipmaps, ver foamMask en lighting.fs
 	valid:          bool,
 
 	// Copia CPU de los mismos pixeles (post-blur) subidos a path_mask_tex —
@@ -600,6 +836,7 @@ terrain_cache_invalidate :: proc() {
 		raylib.UnloadModel(terrain_cache.model)
 		raylib.UnloadTexture(terrain_cache.path_mask_tex)
 		raylib.UnloadTexture(terrain_cache.water_mask_tex)
+		raylib.UnloadTexture(terrain_cache.foam_mask_tex)
 		delete(terrain_cache.path_mask_cpu)
 		terrain_cache.path_mask_cpu = nil
 		terrain_cache.valid = false
@@ -721,17 +958,6 @@ _path_strip_mask :: proc(m: ^entities.Map, row, col: i32, u, v: f32) -> f32 {
 
 	soft := constants.PATH_EDGE_SOFTNESS * half_width
 	return 1.0 - math.smoothstep(half_width - soft, half_width + soft, d)
-}
-
-// Cuánto hay que bajar un objeto plantado en el CENTRO de un tile para que
-// se apoye sobre la malla ya hundida (spawn/goal, ver render_map_objects_3d)
-// — el vértice-centro no existe como tal en la malla (la subdivisión cae en
-// múltiplos de 1/TERRAIN_MESH_SUBDIV), pero _path_strip_mask en (0.5, 0.5)
-// da exactamente el mismo valor que interpola el shader ahí. Sin agua de por
-// medio (bridge), igual que el guard de lighting.vs.
-_path_emboss_offset :: proc(m: ^entities.Map, row, col: i32) -> f32 {
-	if m.water_grid[row][col] { return 0 }
-	return _path_strip_mask(m, row, col, 0.5, 0.5) * constants.PATH_EMBOSS_DEPTH
 }
 
 // Altura real de la malla de terreno en un punto fraccional (u,v) del tile
@@ -919,6 +1145,44 @@ terrain_cache_ensure :: proc(m: ^entities.Map) {
 	raylib.SetTextureWrap(water_tex, .CLAMP)
 	model.materials[0].maps[raylib.MaterialMapIndex.METALNESS].texture = water_tex
 
+	// Máscara de agua para la espuma de orilla (foamMask en lighting.fs),
+	// tercer slot de material (texture2 para el shader) — distinta de
+	// water_tex de arriba a propósito. water_tex es 1 texel/tile con
+	// filtro POINT (nítida, para decidir "esta tile es agua sí/no" sin
+	// artefactos); esta es supersampleada (FOAM_MASK_SUBDIV texels/tile)
+	// CON MIPMAPS. El truco: la espuma necesita un blur de RADIO
+	// VARIABLE en el tiempo para simular el vaivén de las olas, y
+	// rearmar ese blur a mano en el shader (un loop de muestreo por
+	// fragmento) con un radio de varios tiles sale carísimo. Un mipmap ya
+	// ES un blur — cada nivel promedia un área más grande que el
+	// anterior — así que sampleando con textureLod() y animando el nivel
+	// de LOD se obtiene "cambiar el radio del blur" con una sola lectura
+	// de textura, gratis vía el mismo hardware que ya genera mipmaps para
+	// todo lo demás.
+	foam_w := m.width * constants.FOAM_MASK_SUBDIV
+	foam_h := m.height * constants.FOAM_MASK_SUBDIV
+	foam_pixels := make([]u8, int(foam_w) * int(foam_h))
+	defer delete(foam_pixels)
+	for ty in 0 ..< foam_h {
+		row := ty / constants.FOAM_MASK_SUBDIV
+		for tx in 0 ..< foam_w {
+			col := tx / constants.FOAM_MASK_SUBDIV
+			foam_pixels[ty * foam_w + tx] = 255 if m.water_grid[row][col] else 0
+		}
+	}
+	foam_img := raylib.Image{
+		data    = raw_data(foam_pixels),
+		width   = foam_w,
+		height  = foam_h,
+		mipmaps = 1,
+		format  = .UNCOMPRESSED_GRAYSCALE,
+	}
+	foam_tex := raylib.LoadTextureFromImage(foam_img)
+	raylib.GenTextureMipmaps(&foam_tex)
+	raylib.SetTextureFilter(foam_tex, .TRILINEAR)
+	raylib.SetTextureWrap(foam_tex, .CLAMP)
+	model.materials[0].maps[raylib.MaterialMapIndex.NORMAL].texture = foam_tex
+
 	path_color := raylib.Vector3{f32(biome_colors.path.r) / 255, f32(biome_colors.path.g) / 255, f32(biome_colors.path.b) / 255}
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_path_color, &path_color, .VEC3)
 
@@ -966,6 +1230,7 @@ terrain_cache_ensure :: proc(m: ^entities.Map) {
 	terrain_cache.model = model
 	terrain_cache.path_mask_tex = mask_tex
 	terrain_cache.water_mask_tex = water_tex
+	terrain_cache.foam_mask_tex = foam_tex
 	terrain_cache.path_mask_cpu = mask_pixels
 	terrain_cache.path_mask_w = mask_w
 	terrain_cache.path_mask_h = mask_h
@@ -1112,6 +1377,19 @@ shadow_light_matrix :: proc(m: ^entities.Map, sun_dir: raylib.Vector3) -> (view,
 // que cambia qué uniform "mvp" recibe cada draw).
 render_shadow_depth_pass :: proc(app: ^entities.App_State, m: ^entities.Map, sun_dir: raylib.Vector3) {
 	if !shadow_map.valid { return }
+
+	// Esta pasada corre ANTES que render_map_3d en el frame (el shadow map
+	// tiene que estar listo antes de que la pasada visible lo samplee) —
+	// terrain_cache_ensure normalmente se garantiza desde ahí, pero acá
+	// también hace falta: terrain_surface_height (usada más abajo para
+	// asentar la sombra del árbol a la altura real) lee
+	// terrain_cache.path_mask_cpu, que sin este call todavía puede estar
+	// vacío en el primer frame tras cargar un mapa — panic de índice fuera
+	// de rango, no un shadow raro. Idempotente (guardado por
+	// terrain_cache.valid), así que llamarlo de nuevo en render_map_3d no
+	// hace nada de más.
+	terrain_cache_ensure(m)
+
 	shadow_map.view, shadow_map.proj = shadow_light_matrix(m, sun_dir)
 
 	res := constants.SHADOW_MAP_RESOLUTION
@@ -1162,7 +1440,13 @@ render_shadow_depth_pass :: proc(app: ^entities.App_State, m: ^entities.Map, sun
 				}
 			case .ACCESSORY_TREE:
 				if !m.water_grid[row][col] {
-					render_tree_3d(surface, m.biome)
+					// Misma altura real que la pasada visible (ver la nota en
+					// render_map_objects_3d) — si no, la sombra se proyecta
+					// desde una posición distinta a donde el árbol realmente
+					// se ve, y queda notoriamente desalineada del propio árbol.
+					tree_y := terrain_surface_height(m, row, col, 0.5, 0.5)
+					tree_surface := raylib.Vector3{surface.x, tree_y, surface.z}
+					render_tree_shadow_3d(tree_surface, m.biome, row, col)
 				}
 			case .ACCESSORY_BLOCK:
 				blk_level := entities.map_get_obstacle_level(m, row, col)
@@ -1216,6 +1500,14 @@ render_map_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_fill_dir, &dn_fill_dir, .VEC3)
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_fill_color, &dn.fill_color, .VEC3)
 	raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_ambient, &dn.ambient, .VEC3)
+
+	// Mismos valores para tree_shader — los árboles reales viven fuera de
+	// lighting_shader (ver Tree_Shader) pero comparten el mismo sol/día-noche.
+	raylib.SetShaderValue(tree_shader.shader, tree_shader.loc_sun_dir, &dn_sun_dir, .VEC3)
+	raylib.SetShaderValue(tree_shader.shader, tree_shader.loc_sun_color, &dn.sun_color, .VEC3)
+	raylib.SetShaderValue(tree_shader.shader, tree_shader.loc_fill_dir, &dn_fill_dir, .VEC3)
+	raylib.SetShaderValue(tree_shader.shader, tree_shader.loc_fill_color, &dn.fill_color, .VEC3)
+	raylib.SetShaderValue(tree_shader.shader, tree_shader.loc_ambient, &dn.ambient, .VEC3)
 
 	// viewDir por frame — la cámara ahora rota (botón central + drag), ya
 	// no es la constante fija de antes. Sin gate de estado: también hace
@@ -1388,25 +1680,61 @@ render_tower_3d :: proc(tower: ^entities.Tower, m: ^entities.Map) {
 	draw_tower_shape_3d(base, cs, tower.angle, tower.recoil, color, 255, tower_type_has_barrel(tower.type))
 }
 
-render_spawn_3d :: proc(center: raylib.Vector3) {
-	cs := constants.WORLD_CELL_SIZE
-	pos := center
-	raylib.DrawCylinder(pos, cs * 0.4, cs * 0.4, cs * 0.06, 16, constants.COLOR_SPAWN)
+// Árbol real (ver tree_models) — dibuja con tree_shader (asignado a los
+// materiales del modelo en tree_models_init) y VUELVE a activar
+// lighting_shader al final: DrawModelEx no respeta el BeginShaderMode que
+// esté activo en el llamador (usa material.shader directo), así que sin
+// este restore el resto de los draws inmediatos del mismo loop
+// (obstáculos, la torre del tile siguiente...) quedarían pintados con
+// tree_shader el resto del frame — el estado de shader de rlgl es global,
+// no se acota solo al terminar este draw. Solo para la pasada visible
+// (render_map_objects_3d); la pasada de sombra usa render_tree_shadow_3d.
+//
+// row/col: solo para el yaw — hash_random(row, col, ...) da un ángulo
+// estable por tile (mismo árbol, mismo giro en todos los frames) en vez de
+// uno que cambie cuadro a cuadro. El giro va en el propio DrawModelEx
+// (rotationAxis={0,1,0}), libre de usar porque la corrección Z-up→Y-up ya
+// no vive ahí — quedó horneada en los vértices del mesh en
+// tree_models_init (_fix_model_z_up), así que acá no hay dos rotaciones
+// que combinar, una sola.
+render_tree_3d :: proc(center: raylib.Vector3, biome: constants.Biome, row, col: i32) {
+	tm := tree_models[biome]
+	if !tm.valid { return }
+	yaw := hash_random(row, col, 7) * 360.0
+	raylib.DrawModelEx(tm.model, center, {0, 1, 0}, yaw, {tm.scale, tm.scale, tm.scale}, raylib.WHITE)
+	raylib.BeginShaderMode(lighting_shader.shader)
 }
 
-render_goal_3d :: proc(center: raylib.Vector3) {
-	cs := constants.WORLD_CELL_SIZE
-	pos := center
-	raylib.DrawCylinder(pos, cs * 0.4, cs * 0.4, cs * 0.06, 16, constants.COLOR_GOAL)
-}
-
-render_tree_3d :: proc(center: raylib.Vector3, biome: constants.Biome) {
-	cs := constants.WORLD_CELL_SIZE
-	colors := constants.BIOME_TREE_COLORS[biome]
-	trunk_h := cs * 0.3
-	raylib.DrawCylinder(center, cs * 0.09, cs * 0.11, trunk_h, 8, colors.trunk)
-	foliage_base := raylib.Vector3{center.x, center.y + trunk_h, center.z}
-	raylib.DrawCylinder(foliage_base, cs * 0.34, 0, cs * 0.55, 10, colors.layer_mid)
+// Sombra real del árbol — mismo modelo y misma geometría que render_tree_3d,
+// para el shadow map (ver render_shadow_depth_pass). DrawModelEx usa
+// material.shader DIRECTO (no lo que esté activo vía BeginShaderMode, ver
+// la nota de arriba), así que acá no alcanza con un BeginShaderMode
+// alrededor del draw como hacen las formas inmediatas (torres/obstáculos)
+// — hay que pisar el shader del material a mano antes de dibujar y
+// devolverlo a tree_shader después, o el modelo quedaría "roto" (con el
+// shader de profundidad puesto) la próxima vez que se dibuje en la pasada
+// visible. Nunca usar tree_shader para la pasada de sombra ni de casualidad
+// aunque el depth-write saldría bien igual (el rasterizador escribe
+// profundidad sin importar qué hace el fragment shader): tree_shader
+// samplea shadowMap para SU PROPIO shadow_factor(), y esa textura es
+// justamente el attachment de profundidad que se está escribiendo en este
+// mismo pass — leer y escribir la misma textura a la vez es undefined
+// behavior en GL. shadow_map.depth_shader (posición nada más, sin
+// samplers) es el único shader seguro acá, mismo criterio que ya usan
+// todos los demás casters.
+render_tree_shadow_3d :: proc(center: raylib.Vector3, biome: constants.Biome, row, col: i32) {
+	tm := tree_models[biome]
+	if !tm.valid { return }
+	// Mismo yaw que render_tree_3d (mismo hash, mismo row/col) — si no, la
+	// sombra proyectada gira distinto que el árbol que la tira.
+	yaw := hash_random(row, col, 7) * 360.0
+	for i in 0 ..< int(tm.model.materialCount) {
+		tm.model.materials[i].shader = shadow_map.depth_shader
+	}
+	raylib.DrawModelEx(tm.model, center, {0, 1, 0}, yaw, {tm.scale, tm.scale, tm.scale}, raylib.WHITE)
+	for i in 0 ..< int(tm.model.materialCount) {
+		tm.model.materials[i].shader = tree_shader.shader
+	}
 }
 
 render_block_3d :: proc(center: raylib.Vector3, biome: constants.Biome, level: i32) {
@@ -1719,14 +2047,6 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 				}
 				tower_spec_off := f32(0)
 				raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_specular_strength, &tower_spec_off, .FLOAT)
-			case .SPAWN:
-				sunk := surface
-				sunk.y -= _path_emboss_offset(m, row, col)
-				render_spawn_3d(sunk)
-			case .GOAL:
-				sunk := surface
-				sunk.y -= _path_emboss_offset(m, row, col)
-				render_goal_3d(sunk)
 			case .ACCESSORY_TREE:
 				if m.water_grid[row][col] {
 					// La malla del terreno promedia la altura por ESQUINA
@@ -1748,7 +2068,15 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 					lily_center := raylib.Vector3{surface.x, water_y, surface.z}
 					render_water_lily_3d(lily_center, row, col)
 				} else {
-					render_tree_3d(surface, m.biome)
+					// surface.y es la altura CRUDA del tile (tile_world_top, sin
+					// promediar con vecinos) — la malla real interpola por
+					// esquina (terrain_surface_height, igual que draw_range_disc_3d
+					// y el nenúfar de arriba), así que plantar el árbol ahí lo
+					// dejaba flotando o hundido según cómo diera el heightmap
+					// crudo contra el promedio real en ese punto.
+					tree_y := terrain_surface_height(m, row, col, 0.5, 0.5)
+					tree_surface := raylib.Vector3{surface.x, tree_y, surface.z}
+					render_tree_3d(tree_surface, m.biome, row, col)
 				}
 			case .ACCESSORY_BLOCK:
 				blk_level := entities.map_get_obstacle_level(m, row, col)
@@ -2161,6 +2489,7 @@ render_game :: proc(app: ^entities.App_State) {
 			render_grid_lines_3d(app, m)
 		}
 		render_tower_ranges_3d(app, m)
+		render_spawn_goal_markers_3d(app, m)
 		render_map_objects_3d(app, m)
 		render_gameplay_3d(app, m)          // no-op en EDITOR: sim.enemies/... vacío fuera de una run
 		raylib.EndMode3D()
@@ -2253,6 +2582,7 @@ render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 	raylib.ClearBackground(sky_color_from_sun())
 	raylib.BeginMode3D(camera)
 	render_map_3d(app, m)
+	render_spawn_goal_markers_3d(app, m)
 	render_map_objects_3d(app, m)
 	raylib.EndMode3D()
 	raylib.EndTextureMode()
@@ -2273,10 +2603,49 @@ render_map_preview_to_texture :: proc(app: ^entities.App_State) {
 // _terrain_corner (ver terrain_cache_ensure) para que las líneas se apoyen
 // sobre el terreno real en vez de flotar o enterrarse en las pendientes
 // diagonales del mesh.
+// Ancho real en unidades de mundo (no píxeles) de la línea de grilla — ver
+// draw_grid_line_ribbon_3d, por qué hace falta ser geometría real y no
+// DrawLine3D. Punto de partida, no verificado en pantalla.
+GRID_LINE_WIDTH :: f32(0.02)
+
+// Cinta angosta acostada sobre el terreno entre dos puntos — reemplaza a
+// DrawLine3D para que el ancho de la línea sea geometría 3D real (un quad
+// finito en unidades de mundo) en vez de la primitiva GL_LINES, que se
+// rasteriza a un ancho FIJO EN PÍXELES DE PANTALLA sin importar la
+// distancia de la cámara (por eso la grilla se veía siempre del mismo
+// grosor de cerca o de lejos). Con un quad real, la perspectiva normal ya
+// hace que se vea más ancha cerca y más fina lejos, sin ningún cálculo de
+// distancia a mano. Perpendicular en el plano XZ (la grilla es
+// básicamente horizontal, apoyada en el terreno — no hace falta billboard
+// hacia la cámara).
+draw_grid_line_ribbon_3d :: proc(p0, p1: raylib.Vector3, width: f32, color: raylib.Color) {
+	dx := p1.x - p0.x
+	dz := p1.z - p0.z
+	length := math.sqrt(dx * dx + dz * dz)
+	if length < 0.0001 { return }
+	half := width * 0.5
+	perp_x := -dz / length * half
+	perp_z := dx / length * half
+
+	rlgl.Begin(rlgl.QUADS)
+	rlgl.Color4ub(color.r, color.g, color.b, color.a)
+	rlgl.TexCoord2f(0, 0); rlgl.Vertex3f(p0.x - perp_x, p0.y, p0.z - perp_z)
+	rlgl.TexCoord2f(0, 1); rlgl.Vertex3f(p0.x + perp_x, p0.y, p0.z + perp_z)
+	rlgl.TexCoord2f(1, 1); rlgl.Vertex3f(p1.x + perp_x, p1.y, p1.z + perp_z)
+	rlgl.TexCoord2f(1, 0); rlgl.Vertex3f(p1.x - perp_x, p1.y, p1.z - perp_z)
+	rlgl.End()
+}
+
 render_grid_lines_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	cs := constants.WORLD_CELL_SIZE
 	biome_colors := constants.BIOME_COLORS[m.biome]
 	LIFT :: f32(0.03)  // evita z-fighting contra la superficie del terreno
+
+	frame_dt := min(raylib.GetFrameTime(), constants.WATER_ANIM_MAX_DT)
+	grid_line_anim_time += frame_dt * constants.GRID_LINE_NOISE_SPEED
+	raylib.SetShaderValue(grid_line_shader, grid_line_shader_loc_noise_time, &grid_line_anim_time, .FLOAT)
+	raylib.BeginShaderMode(grid_line_shader)
+	defer raylib.EndShaderMode()
 
 	for r in 0 ..= m.height {
 		for c in 0 ..= m.width {
@@ -2288,12 +2657,12 @@ render_grid_lines_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 			if c < m.width {
 				h2, _ := _terrain_corner(m, r, c + 1, biome_colors)
 				y2 := h2 + LIFT
-				raylib.DrawLine3D({f32(c) * cs, y, f32(r) * cs}, {f32(c + 1) * cs, y2, f32(r) * cs}, constants.COLOR_GRID_LINE)
+				draw_grid_line_ribbon_3d({f32(c) * cs, y, f32(r) * cs}, {f32(c + 1) * cs, y2, f32(r) * cs}, GRID_LINE_WIDTH, constants.COLOR_GRID_LINE)
 			}
 			if r < m.height {
 				h2, _ := _terrain_corner(m, r + 1, c, biome_colors)
 				y2 := h2 + LIFT
-				raylib.DrawLine3D({f32(c) * cs, y, f32(r) * cs}, {f32(c) * cs, y2, f32(r + 1) * cs}, constants.COLOR_GRID_LINE)
+				draw_grid_line_ribbon_3d({f32(c) * cs, y, f32(r) * cs}, {f32(c) * cs, y2, f32(r + 1) * cs}, GRID_LINE_WIDTH, constants.COLOR_GRID_LINE)
 			}
 		}
 	}
