@@ -137,6 +137,14 @@ main :: proc() {
 	systems.block_models_init()
 	defer systems.block_models_unload()
 
+	// Caja de airdrop, avión F-16, y piezas de puente — mismo tree_shader.
+	systems.crate_model_init()
+	defer systems.crate_model_unload()
+	systems.plane_model_init()
+	defer systems.plane_model_unload()
+	systems.bridge_models_init()
+	defer systems.bridge_models_unload()
+
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
 	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)

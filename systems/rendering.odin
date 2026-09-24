@@ -893,6 +893,74 @@ block_models_unload :: proc() {
 	}
 }
 
+// Caja de madera del airdrop (reemplaza el DrawCube liso), avión F-16
+// (reemplaza el dibujo 2D en pantalla), y las dos piezas modulares del
+// puente colgante (tablón de piso + baranda con cables) — mismo mecanismo
+// que tree_models/block_models (Tree_Model/tree_shader reusados).
+CRATE_MODEL_SPEC := Tree_Model_Spec{"models/crate/wooden_crate.obj", 0.5 / 1.0050, false}
+crate_model: Tree_Model
+
+// Largo objetivo 1.3 unidades de mundo (un poco más de un tile) — un
+// avión chico pero imponente sobrevolando el mapa. Nariz en eje local +X
+// (ver tree_tile_offset/block_tile_yaw para el mismo criterio de
+// convención de ángulos — acá el yaw sale de airdrop_plane_yaw_deg).
+PLANE_MODEL_SPEC := Tree_Model_Spec{"models/plane/cargo_plane.obj", 1.3 / 1.0600, false}
+plane_model: Tree_Model
+
+// Tablón: pieza de 1×1 (footprint) × 0.108 (espesor) — el código la
+// escala NO uniforme en X/Z según el tramo de camino que tenga que cubrir
+// (igual criterio que ya usaba el DrawCube que reemplaza), dejando la
+// superficie de arriba plana para que el escalado no la deforme.
+BRIDGE_DECK_MODEL_SPEC := Tree_Model_Spec{"models/bridge/deck_plank.obj", 1.0, false}
+bridge_deck_model: Tree_Model
+
+// Baranda colgante (postes + cable principal en catenaria + suspensores) —
+// ancho de referencia real 1.06 (no exactamente 1.0, la curva del cable se
+// pasa un poco de los postes), profundidad 0.06, altura 1.0. El código
+// sigue escalando cada eje por separado, como con el tablón.
+BRIDGE_RAILING_MODEL_SPEC := Tree_Model_Spec{"models/bridge/railing.obj", 1.0, false}
+bridge_railing_model: Tree_Model
+
+crate_model_init :: proc() {
+	spec := CRATE_MODEL_SPEC
+	model := raylib.LoadModel(spec.path)
+	for i in 0 ..< int(model.materialCount) {
+		model.materials[i].shader = tree_shader.shader
+	}
+	crate_model = Tree_Model{model = model, scale = spec.scale}
+}
+crate_model_unload :: proc() { raylib.UnloadModel(crate_model.model) }
+
+plane_model_init :: proc() {
+	spec := PLANE_MODEL_SPEC
+	model := raylib.LoadModel(spec.path)
+	for i in 0 ..< int(model.materialCount) {
+		model.materials[i].shader = tree_shader.shader
+	}
+	plane_model = Tree_Model{model = model, scale = spec.scale}
+}
+plane_model_unload :: proc() { raylib.UnloadModel(plane_model.model) }
+
+bridge_models_init :: proc() {
+	deck_spec := BRIDGE_DECK_MODEL_SPEC
+	deck := raylib.LoadModel(deck_spec.path)
+	for i in 0 ..< int(deck.materialCount) {
+		deck.materials[i].shader = tree_shader.shader
+	}
+	bridge_deck_model = Tree_Model{model = deck, scale = deck_spec.scale}
+
+	rail_spec := BRIDGE_RAILING_MODEL_SPEC
+	rail := raylib.LoadModel(rail_spec.path)
+	for i in 0 ..< int(rail.materialCount) {
+		rail.materials[i].shader = tree_shader.shader
+	}
+	bridge_railing_model = Tree_Model{model = rail, scale = rail_spec.scale}
+}
+bridge_models_unload :: proc() {
+	raylib.UnloadModel(bridge_deck_model.model)
+	raylib.UnloadModel(bridge_railing_model.model)
+}
+
 // Multiplicador de escala por nivel de obstáculo (1-3) — mismo ratio que
 // ya usaba el cubo genérico viejo (`h := cs*(0.35 + (lvl-1)*0.15)`),
 // normalizado contra el nivel 1 (que es la altura de referencia de
@@ -1721,14 +1789,25 @@ render_shadow_depth_pass :: proc(app: ^entities.App_State, m: ^entities.Map, sun
 					render_tree_shadow_3d(tree_surface, m.biome, row, col)
 				}
 			case .ACCESSORY_BLOCK:
+				// Misma razón que los árboles (ver la nota en
+				// render_map_objects_3d): surface.y es la altura CRUDA del
+				// tile, sin la interpolación real de la malla — con
+				// pendiente dentro del tile o entre vecinos, eso dejaba la
+				// casa flotando o hundida. Centrado (u=v=0.5, sin el offset
+				// aleatorio de los árboles — una casa sí queda fija al
+				// centro del tile).
 				blk_level := entities.map_get_obstacle_level(m, row, col)
-				render_block_shadow_3d(surface, m.biome, blk_level, row, col)
+				blk_y := terrain_surface_height(m, row, col, 0.5, 0.5)
+				blk_surface := raylib.Vector3{surface.x, blk_y, surface.z}
+				render_block_shadow_3d(blk_surface, m.biome, blk_level, row, col)
 			}
 		}
 	}
 	render_obstacles_3d(m, m.width, m.height)
-	render_bridge_3d(m)
+	render_bridge_shadow_3d(m)
 	render_enemies_3d(app, m)
+	render_airdrop_boxes_shadow_3d(app, m)
+	render_airdrop_plane_shadow_3d(app)
 	raylib.EndShaderMode()
 
 	rlgl.DrawRenderBatchActive()
@@ -2113,63 +2192,123 @@ render_obstacles_3d :: proc(m: ^entities.Map, map_w, map_h: i32) {
 // valor de "tierra" válido ahí debajo, y es continuo con los tiles vecinos
 // por construcción del ruido — así el piso queda a nivel con la orilla en
 // vez de a la altura plana y baja del agua).
-render_bridge_3d :: proc(m: ^entities.Map) {
+// Dimensiones REALES medidas de los archivos exportados (no 1.0/1.0
+// redondo) — deck_plank.obj y railing.obj, ver bridge_models_init. El
+// tablón mide exactamente 1×1 de footprint, pero la baranda quedó en 1.06
+// de ancho (la curva del cable principal se pasa un poco de los postes),
+// así que hace falta esta referencia para no dejarla resacada.
+BRIDGE_DECK_REF_SIZE   :: f32(1.0)
+BRIDGE_DECK_REF_THICK  :: f32(0.108)
+BRIDGE_RAIL_REF_WIDTH  :: f32(1.06)
+BRIDGE_RAIL_REF_HEIGHT :: f32(1.0)
+BRIDGE_RAIL_REF_THICK  :: f32(0.06)
+
+_bridge_is_path_like :: proc(m: ^entities.Map, r, c: i32) -> bool {
+	if r < 0 || r >= m.height || c < 0 || c >= m.width { return false }
+	t := m.grid[r][c]
+	return t == .PATH || t == .SPAWN || t == .GOAL
+}
+
+// Arma un tile de puente entero (tablones + barandas), ya sea con
+// tree_shader (pasada visible) o shadow_map.depth_shader (pasada de
+// sombra) según qué shader tengan puestos los materiales de los dos
+// modelos al momento de llamar — ver render_bridge_3d/render_bridge_shadow_3d,
+// que solo difieren en eso. Antes eran puros DrawCube (respetan cualquier
+// BeginShaderMode activo); con modelos reales (DrawModelEx, material.shader
+// directo) hace falta este desdoblamiento, mismo criterio que árboles/casas.
+_bridge_draw_tile :: proc(m: ^entities.Map, row, col: i32) {
 	cs         := constants.WORLD_CELL_SIZE
 	path_width := cs * constants.PATH_WIDTH_RATIO
 	rail_t     := cs * constants.BRIDGE_RAILING_THICK
 	rail_h     := cs * 0.18
-	rail_color := constants.COLOR_BRIDGE_RAILING
 	deck_thick := cs * constants.BRIDGE_DECK_THICK
-	deck_color := constants.COLOR_BRIDGE_DECK
 
-	is_path_like :: proc(m: ^entities.Map, r, c: i32) -> bool {
-		if r < 0 || r >= m.height || c < 0 || c >= m.width { return false }
-		t := m.grid[r][c]
-		return t == .PATH || t == .SPAWN || t == .GOAL
+	cx := f32(col) * cs + cs*0.5
+	cz := f32(row) * cs + cs*0.5
+	half := cs * 0.5
+	deck_top := m.heightmap[row][col] * constants.WORLD_HEIGHT_SCALE
+	// Modelo con base en y=0 (a diferencia del DrawCube viejo, centrado en
+	// su pos) — colocarlo en deck_top-deck_thick pone la base ahí y la
+	// superficie de arriba (tras el scale en Y) llega justo a deck_top.
+	deck_y_pos := deck_top - deck_thick
+
+	dm := bridge_deck_model.model
+	dsx := path_width / BRIDGE_DECK_REF_SIZE
+	dsz := path_width / BRIDGE_DECK_REF_SIZE
+	dsy := deck_thick / BRIDGE_DECK_REF_THICK
+	raylib.DrawModelEx(dm, {cx, deck_y_pos, cz}, {0, 1, 0}, 0, {dsx, dsy, dsz}, raylib.WHITE)
+	if _bridge_is_path_like(m, row - 1, col) {
+		raylib.DrawModelEx(dm, {cx, deck_y_pos, cz - half*0.5}, {0, 1, 0}, 0, {dsx, dsy, half / BRIDGE_DECK_REF_SIZE}, raylib.WHITE)
+	}
+	if _bridge_is_path_like(m, row + 1, col) {
+		raylib.DrawModelEx(dm, {cx, deck_y_pos, cz + half*0.5}, {0, 1, 0}, 0, {dsx, dsy, half / BRIDGE_DECK_REF_SIZE}, raylib.WHITE)
+	}
+	if _bridge_is_path_like(m, row, col - 1) {
+		raylib.DrawModelEx(dm, {cx - half*0.5, deck_y_pos, cz}, {0, 1, 0}, 0, {half / BRIDGE_DECK_REF_SIZE, dsy, dsz}, raylib.WHITE)
+	}
+	if _bridge_is_path_like(m, row, col + 1) {
+		raylib.DrawModelEx(dm, {cx + half*0.5, deck_y_pos, cz}, {0, 1, 0}, 0, {half / BRIDGE_DECK_REF_SIZE, dsy, dsz}, raylib.WHITE)
 	}
 
+	// Baranda: escala SIEMPRE en el mismo orden que su eje local (X=ancho
+	// entre postes, Y=altura, Z=espesor) — para los bordes este/oeste
+	// (columna vecina), en vez de swapear width/length como hacía el
+	// DrawCube viejo, se rota 90° en yaw DESPUÉS de escalar (la escala se
+	// aplica en espacio local, donde X sigue siendo "el ancho entre
+	// postes" — girarla manda ese ancho a Z, exactamente lo que hacía el
+	// swap manual, sin distorsionar postes/cables).
+	rm := bridge_railing_model.model
+	rsx := path_width / BRIDGE_RAIL_REF_WIDTH
+	rsy := rail_h / BRIDGE_RAIL_REF_HEIGHT
+	rsz := rail_t / BRIDGE_RAIL_REF_THICK
+	if !_bridge_is_path_like(m, row - 1, col) {
+		raylib.DrawModelEx(rm, {cx, deck_top, cz - path_width*0.5}, {0, 1, 0}, 0, {rsx, rsy, rsz}, raylib.WHITE)
+	}
+	if !_bridge_is_path_like(m, row + 1, col) {
+		raylib.DrawModelEx(rm, {cx, deck_top, cz + path_width*0.5}, {0, 1, 0}, 0, {rsx, rsy, rsz}, raylib.WHITE)
+	}
+	if !_bridge_is_path_like(m, row, col - 1) {
+		raylib.DrawModelEx(rm, {cx - path_width*0.5, deck_top, cz}, {0, 1, 0}, 90, {rsx, rsy, rsz}, raylib.WHITE)
+	}
+	if !_bridge_is_path_like(m, row, col + 1) {
+		raylib.DrawModelEx(rm, {cx + path_width*0.5, deck_top, cz}, {0, 1, 0}, 90, {rsx, rsy, rsz}, raylib.WHITE)
+	}
+}
+
+render_bridge_3d :: proc(m: ^entities.Map) {
 	for row in 0 ..< m.height {
 		for col in 0 ..< m.width {
 			if m.grid[row][col] != .PATH || !m.water_grid[row][col] { continue }
-			cx := f32(col) * cs + cs*0.5
-			cz := f32(row) * cs + cs*0.5
-
-			// Piso: mismo ancho que la franja de camino embossed en tierra
-			// (path_width), no el tile entero — un cuadrado central más un
-			// tablón por cada borde conectado, llegando justo hasta el borde
-			// del tile (half) para empalmar sin hueco con el tablón del
-			// tile vecino (que arranca ahí mismo desde su propio centro).
-			half := cs * 0.5
-			deck_top := m.heightmap[row][col] * constants.WORLD_HEIGHT_SCALE
-			deck_y_pos := deck_top - deck_thick*0.5
-			raylib.DrawCube({cx, deck_y_pos, cz}, path_width, deck_thick, path_width, deck_color)
-			if is_path_like(m, row - 1, col) {
-				raylib.DrawCube({cx, deck_y_pos, cz - half*0.5}, path_width, deck_thick, half, deck_color)
-			}
-			if is_path_like(m, row + 1, col) {
-				raylib.DrawCube({cx, deck_y_pos, cz + half*0.5}, path_width, deck_thick, half, deck_color)
-			}
-			if is_path_like(m, row, col - 1) {
-				raylib.DrawCube({cx - half*0.5, deck_y_pos, cz}, half, deck_thick, path_width, deck_color)
-			}
-			if is_path_like(m, row, col + 1) {
-				raylib.DrawCube({cx + half*0.5, deck_y_pos, cz}, half, deck_thick, path_width, deck_color)
-			}
-
-			deck_y := deck_top + rail_h*0.5
-			if !is_path_like(m, row - 1, col) {
-				raylib.DrawCube({cx, deck_y, cz - path_width*0.5}, path_width, rail_h, rail_t, rail_color)
-			}
-			if !is_path_like(m, row + 1, col) {
-				raylib.DrawCube({cx, deck_y, cz + path_width*0.5}, path_width, rail_h, rail_t, rail_color)
-			}
-			if !is_path_like(m, row, col - 1) {
-				raylib.DrawCube({cx - path_width*0.5, deck_y, cz}, rail_t, rail_h, path_width, rail_color)
-			}
-			if !is_path_like(m, row, col + 1) {
-				raylib.DrawCube({cx + path_width*0.5, deck_y, cz}, rail_t, rail_h, path_width, rail_color)
-			}
+			_bridge_draw_tile(m, row, col)
 		}
+	}
+	raylib.BeginShaderMode(lighting_shader.shader)
+}
+
+// Sombra real del puente — mismo patrón shader-swap que el resto de los
+// modelos (árboles/casas/caja/avión): pisar el shader de los materiales a
+// shadow_map.depth_shader antes de dibujar, devolverlo a tree_shader
+// después. Antes, con DrawCube, esta pasada compartía directamente
+// render_bridge_3d (las formas inmediatas respetan cualquier
+// BeginShaderMode activo) — con modelos reales ya no alcanza.
+render_bridge_shadow_3d :: proc(m: ^entities.Map) {
+	for i in 0 ..< int(bridge_deck_model.model.materialCount) {
+		bridge_deck_model.model.materials[i].shader = shadow_map.depth_shader
+	}
+	for i in 0 ..< int(bridge_railing_model.model.materialCount) {
+		bridge_railing_model.model.materials[i].shader = shadow_map.depth_shader
+	}
+	for row in 0 ..< m.height {
+		for col in 0 ..< m.width {
+			if m.grid[row][col] != .PATH || !m.water_grid[row][col] { continue }
+			_bridge_draw_tile(m, row, col)
+		}
+	}
+	for i in 0 ..< int(bridge_deck_model.model.materialCount) {
+		bridge_deck_model.model.materials[i].shader = tree_shader.shader
+	}
+	for i in 0 ..< int(bridge_railing_model.model.materialCount) {
+		bridge_railing_model.model.materials[i].shader = tree_shader.shader
 	}
 }
 
@@ -2239,7 +2378,7 @@ render_tower_ranges_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 		// Antes eran 2 draw_ground_ring superpuestos (relleno tenue + "contorno"
 		// blanco) porque el anillo viejo no tenía relleno real — el disco nuevo
 		// ya trae el borde nítido incluido, una sola pasada alcanza.
-		draw_range_disc_3d(m, ring, selected.range * cs, raylib.Color{255, 255, 255, 150})
+		draw_range_disc_3d(m, ring, selected.range * cs, raylib.Color{255, 255, 255, 90})
 	}
 	raylib.EndShaderMode()
 }
@@ -2383,8 +2522,15 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 					render_tree_3d(tree_surface, m.biome, row, col)
 				}
 			case .ACCESSORY_BLOCK:
+				// Mismo motivo que el árbol de arriba: surface.y es la
+				// altura cruda del tile, sin la interpolación real de la
+				// malla — dejaba la casa flotando/hundida según la
+				// pendiente. Centrado (u=v=0.5), sin el offset de los
+				// árboles.
 				blk_level := entities.map_get_obstacle_level(m, row, col)
-				render_block_3d(surface, m.biome, blk_level, row, col)
+				blk_y := terrain_surface_height(m, row, col, 0.5, 0.5)
+				blk_surface := raylib.Vector3{surface.x, blk_y, surface.z}
+				render_block_3d(blk_surface, m.biome, blk_level, row, col)
 			}
 		}
 	}
@@ -2638,26 +2784,94 @@ render_gameplay_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	render_explosions_3d(app, m)
 	render_hit_particles_3d(app, m)
 	render_airdrop_boxes_3d(app, m)
+	render_airdrop_plane_3d(app)
 	raylib.EndShaderMode()
 
 	render_enemy_status_rings_3d(app, m)
 }
 
-// Caja de airdrop ya aterrizada — cubo real apoyado sobre el terreno (antes
-// era un dibujo pixel-art 2D reproyectado, ver render_airdrops; el resto de
-// las fases del airdrop — avión, estela, paracaídas, ping, indicador de
-// borde — se quedan 2D screen-space a propósito, son overlays "siempre
-// visibles en pantalla", no objetos del mundo).
+// Caja de airdrop ya aterrizada — modelo real de cajón de madera (antes
+// era un DrawCube liso; antes de eso, un dibujo pixel-art 2D reproyectado).
+// La estela/paracaídas/ping/indicador de borde se quedan 2D screen-space a
+// propósito (ver render_airdrops) — son overlays "siempre visibles en
+// pantalla", no objetos del mundo; el avión SÍ pasó a 3D real, ver
+// render_airdrop_plane_3d.
 render_airdrop_boxes_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
-	cs := constants.WORLD_CELL_SIZE
-	size := cs * 0.5
-
+	sc := crate_model.scale
 	for &drop in app.sim.airdrops {
 		if drop.phase != .BOX_LANDED { continue }
 		center, top_y := tile_world_top(m, drop.target_row, drop.target_col)
-		pos := raylib.Vector3{center.x, top_y + size * 0.5, center.z}
-		raylib.DrawCube(pos, size, size, size, constants.COLOR_AIRDROP_BOX)
-		raylib.DrawCubeWires(pos, size, size, size, constants.COLOR_AIRDROP_BOX_DARK)
+		pos := raylib.Vector3{center.x, top_y, center.z}
+		yaw := hash_random(drop.target_row, drop.target_col, 21) * 360.0
+		raylib.DrawModelEx(crate_model.model, pos, {0, 1, 0}, yaw, {sc, sc, sc}, raylib.WHITE)
+	}
+	raylib.BeginShaderMode(lighting_shader.shader)
+}
+
+// Sombra real de la caja — mismo patrón shader-swap que render_tree_shadow_3d.
+render_airdrop_boxes_shadow_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
+	sc := crate_model.scale
+	for i in 0 ..< int(crate_model.model.materialCount) {
+		crate_model.model.materials[i].shader = shadow_map.depth_shader
+	}
+	for &drop in app.sim.airdrops {
+		if drop.phase != .BOX_LANDED { continue }
+		center, top_y := tile_world_top(m, drop.target_row, drop.target_col)
+		pos := raylib.Vector3{center.x, top_y, center.z}
+		yaw := hash_random(drop.target_row, drop.target_col, 21) * 360.0
+		raylib.DrawModelEx(crate_model.model, pos, {0, 1, 0}, yaw, {sc, sc, sc}, raylib.WHITE)
+	}
+	for i in 0 ..< int(crate_model.model.materialCount) {
+		crate_model.model.materials[i].shader = tree_shader.shader
+	}
+}
+
+// Avión F-16 volando (fase PLANE_FLYING) — geometría 3D real dentro del
+// mundo, no un dibujo 2D reproyectado como antes. Reusa la misma posición
+// 2D→3D que ya calculaba render_airdrops (ver esa función para el porqué:
+// el sistema de airdrops sigue en coordenadas de mundo 2D viejas). yaw:
+// `angle` es atan2(dir_y, dir_x), mismo convenio 2D que usa el ángulo de
+// las torres (dir := {cos(angle),0,sin(angle)}) — con el modelo modelado
+// con la nariz en +X local, alinear esa nariz a `dir` requiere yaw =
+// -angle en grados (una rotación positiva alrededor de +Y en raylib manda
+// +X hacia -Z, el sentido opuesto a como crece `angle` acá).
+render_airdrop_plane_3d :: proc(app: ^entities.App_State) {
+	cs2d := f32(app.settings.cell_size)
+	scale_to_3d := constants.WORLD_CELL_SIZE / cs2d
+	PLANE_ALTITUDE :: f32(3.0)
+	sc := plane_model.scale
+
+	for &drop in app.sim.airdrops {
+		if drop.phase != .PLANE_FLYING || drop.plane_x < -9000 { continue }
+		pos := raylib.Vector3{drop.plane_x * scale_to_3d, PLANE_ALTITUDE, drop.plane_y * scale_to_3d}
+		angle := math.atan2_f32(drop.plane_dir_y, drop.plane_dir_x)
+		yaw := -angle * (180.0 / math.PI)
+		raylib.DrawModelEx(plane_model.model, pos, {0, 1, 0}, yaw, {sc, sc, sc}, raylib.WHITE)
+	}
+	raylib.BeginShaderMode(lighting_shader.shader)
+}
+
+// Sombra real del avión — mismo patrón shader-swap. El frustum de sombra
+// cubre hasta SHADOW_WORLD_Y_MAX=4.0, por encima de PLANE_ALTITUDE=3.0,
+// así que el avión entra sin tocar el rango del shadow map.
+render_airdrop_plane_shadow_3d :: proc(app: ^entities.App_State) {
+	cs2d := f32(app.settings.cell_size)
+	scale_to_3d := constants.WORLD_CELL_SIZE / cs2d
+	PLANE_ALTITUDE :: f32(3.0)
+	sc := plane_model.scale
+
+	for i in 0 ..< int(plane_model.model.materialCount) {
+		plane_model.model.materials[i].shader = shadow_map.depth_shader
+	}
+	for &drop in app.sim.airdrops {
+		if drop.phase != .PLANE_FLYING || drop.plane_x < -9000 { continue }
+		pos := raylib.Vector3{drop.plane_x * scale_to_3d, PLANE_ALTITUDE, drop.plane_y * scale_to_3d}
+		angle := math.atan2_f32(drop.plane_dir_y, drop.plane_dir_x)
+		yaw := -angle * (180.0 / math.PI)
+		raylib.DrawModelEx(plane_model.model, pos, {0, 1, 0}, yaw, {sc, sc, sc}, raylib.WHITE)
+	}
+	for i in 0 ..< int(plane_model.model.materialCount) {
+		plane_model.model.materials[i].shader = tree_shader.shader
 	}
 }
 
@@ -4046,72 +4260,28 @@ render_airdrops :: proc(app: ^entities.App_State) {
 		switch drop.phase {
 
 		case .PLANE_FLYING:
-			// Solo dibujar si el avión aún está visible (no marcado como salido)
+			// El cuerpo del avión (F-16 real, ver plane_model) ya se dibuja
+			// en 3D de verdad dentro de BeginMode3D — render_airdrop_plane_3d,
+			// llamado desde render_gameplay_3d. Acá solo queda la llama del
+			// motor (single-engine, a diferencia del avión genérico viejo de
+			// 2 motores) como acento 2D barato — no vale la pena un glow
+			// real en 3D para un solo círculo chico.
 			if drop.plane_x < -9000 { break }
 
 			angle := math.atan2_f32(drop.plane_dir_y, drop.plane_dir_x)
 			cos_a := math.cos_f32(angle)
 			sin_a := math.sin_f32(angle)
+			z     := app.zoom
 
-			// Helper: convierte coordenadas locales (en world units 2D) a
-			// screen, proyectando por 3D real en vez de camera_offset_x/y.
-			// lx = eje adelante/atrás, ly = eje izquierda/derecha
-			to_s :: #force_inline proc(app: ^entities.App_State, pwx, pwy, lx, ly, cos_a, sin_a, scale, altitude: f32) -> raylib.Vector2 {
-				wx := pwx + lx*cos_a - ly*sin_a
-				wy := pwy + lx*sin_a + ly*cos_a
-				return project(app, wx, wy, scale, altitude)
-			}
-			pwx := drop.plane_x
-			pwy := drop.plane_y
-			z   := app.zoom
-
-			// ── Ala delta (triángulo: punta al frente, borde trasero ancho) ────
-			//   Nose:    lx=+14,  ly=0
-			//   L-trail: lx=-7,   ly=-11
-			//   R-trail: lx=-7,   ly=+11
-			v_nose  := to_s(app, pwx, pwy,  14,   0, cos_a, sin_a, scale_to_3d, PLANE_ALTITUDE)
-			v_left  := to_s(app, pwx, pwy,  -7, -11, cos_a, sin_a, scale_to_3d, PLANE_ALTITUDE)
-			v_right := to_s(app, pwx, pwy,  -7,  11, cos_a, sin_a, scale_to_3d, PLANE_ALTITUDE)
-			// Raylib DrawTriangle: CCW en screen (y↓)
-			raylib.DrawTriangle(v_nose, v_right, v_left, constants.COLOR_AIRDROP_PLANE)
-
-			// ── Fuselaje (franja central estrecha) ─────────────────────────────
-			ang_deg := angle * (180.0 / math.PI)
-			body_w  := f32(28) * z
-			body_h  := f32(4)  * z
-			plane_screen := project(app, drop.plane_x, drop.plane_y, scale_to_3d, PLANE_ALTITUDE)
-			raylib.DrawRectanglePro(
-				{plane_screen.x, plane_screen.y, body_w, body_h},
-				{body_w / 2, body_h / 2},
-				ang_deg,
-				raylib.Color{220, 220, 230, 255},
+			// Tobera del motor, detrás del fuselaje (lx negativo = atrás).
+			nozzle_cx := drop.plane_x + (-16)*cos_a
+			nozzle_cy := drop.plane_y + (-16)*sin_a
+			nozzle_screen := project(app, nozzle_cx, nozzle_cy, scale_to_3d, PLANE_ALTITUDE)
+			raylib.DrawCircleV(
+				nozzle_screen,
+				f32(3) * z,
+				raylib.Color{255, 140, 40, 200},
 			)
-
-			// ── Dos motores (pequeños rectángulos en el borde trasero del ala) ─
-			eng_w := f32(7) * z
-			eng_h := f32(3) * z
-			sides := [2]f32{-7.5, 7.5}
-			for side in sides {
-				// Centro del motor en world space
-				ecx := pwx + (-5)*cos_a - side*sin_a
-				ecy := pwy + (-5)*sin_a + side*cos_a
-				eng_screen := project(app, ecx, ecy, scale_to_3d, PLANE_ALTITUDE)
-				raylib.DrawRectanglePro(
-					{eng_screen.x, eng_screen.y, eng_w, eng_h},
-					{eng_w / 2, eng_h / 2},
-					ang_deg,
-					raylib.Color{80, 80, 100, 255},
-				)
-				// Llama del motor (pequeño círculo naranja en la tobera)
-				nozzle_cx := pwx + (-9)*cos_a - side*sin_a
-				nozzle_cy := pwy + (-9)*sin_a + side*cos_a
-				nozzle_screen := project(app, nozzle_cx, nozzle_cy, scale_to_3d, PLANE_ALTITUDE)
-				raylib.DrawCircleV(
-					nozzle_screen,
-					f32(2.5) * z,
-					raylib.Color{255, 140, 40, 200},
-				)
-			}
 
 		case .BOX_FALLING:
 			// Paracaídas: círculo encogiendo en el tile destino

@@ -863,26 +863,35 @@ COLOR_OBSTACLE_SHADOW :: raylib.Color{  0,   0,   0,  55}  // Drop shadow
 // Biome colors
 // =============================================================================
 
+// `path` de cada bioma NO es simplemente `bg` oscurecido parejo — eso daba
+// muy poco contraste real (mismo tono, ~25-30 más oscuro; en DESERT en
+// particular el camino quedaba casi del mismo color arena que el fondo,
+// el reporte original de "el camino no se distingue en algunos mapas" era
+// justamente ese caso). Ahora `path` es un tono "tierra pisada" cálido
+// (más marrón, menos verde/gris que el terreno de cada bioma) con una
+// diferencia de luminosidad real (~60-100, contra los ~25-30 de antes) —
+// contraste por MATIZ además de por brillo, para que se lea como un
+// material distinto y no solo como una sombra del mismo piso.
 BIOME_COLORS := [Biome]Biome_Colors {
 	.PLAIN = {
 		bg      = raylib.Color{210, 215, 200, 255},
 		bg_grid = raylib.Color{200, 205, 190, 255},
-		path    = raylib.Color{185, 190, 175, 255},
+		path    = raylib.Color{170, 145, 110, 255},
 	},
 	.FOREST = {
 		bg      = raylib.Color{170, 190, 170, 255},
 		bg_grid = raylib.Color{155, 175, 155, 255},
-		path    = raylib.Color{140, 160, 140, 255},
+		path    = raylib.Color{140, 110,  80, 255},
 	},
 	.DESERT = {
 		bg      = raylib.Color{230, 215, 195, 255},
 		bg_grid = raylib.Color{220, 205, 185, 255},
-		path    = raylib.Color{205, 190, 170, 255},
+		path    = raylib.Color{150, 110,  75, 255},
 	},
 	.MOUNTAIN = {
 		bg      = raylib.Color{190, 195, 200, 255},
 		bg_grid = raylib.Color{175, 180, 185, 255},
-		path    = raylib.Color{160, 165, 170, 255},
+		path    = raylib.Color{140, 125, 110, 255},
 	},
 }
 

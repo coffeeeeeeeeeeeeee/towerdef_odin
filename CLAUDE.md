@@ -955,6 +955,25 @@ a simple vista. Si en algún momento se nota lo mismo en otro objeto bajo
 (usada por enemigos) — el mismo patrón de helpers manuales por `rlgl`
 aplicaría si hiciera falta.
 
+## Color del camino por bioma (`BIOME_COLORS[...].path`)
+
+No es `bg` oscurecido de forma pareja (así estaba antes: una resta fija de
+~25-30 en R/G/B, mismo matiz apenas más oscuro) — eso daba muy poco
+contraste real, sobre todo en DESERT, donde el camino quedaba casi del
+mismo tono arena que el terreno (reporte: "el camino no es visible en
+algunos mapas"). Ahora `path` es un tono "tierra pisada" cálido,
+deliberadamente más marrón que el terreno de cada bioma (no solo más
+oscuro) — contraste de MATIZ además de luminosidad (~60-100 de diferencia
+de luminosidad aproximada, contra los ~25-30 de antes), para que se lea
+como un material distinto incluso cuando el terreno de fondo ya es
+oscuro/apagado. `pathColor` (uniform de `lighting.fs`, cargado desde acá
+en `terrain_cache_ensure`) es lo único que pinta el color del camino — el
+hundimiento embossed (`PATH_EMBOSS_DEPTH`) da una pista de relieve
+adicional pero no alcanza solo, sin contraste de color de por medio.
+`constants.COLOR_PATH` (un tercer valor fijo, sin relación con esta
+tabla) es aparte — solo lo usa un ícono 2D de `systems/menus.odin`, no el
+render 3D del mapa.
+
 ## Overlays de bioma del terreno 3D (dunas, roca, pasto, cáusticas)
 
 Viven todos dentro de `assets/lighting.fs` (`duneOverlay`/`rockOverlay`/
@@ -1460,6 +1479,99 @@ el tiempo + un hook en el momento del evento que lo dispara.
 si se agrega un array nuevo de este estilo, agregar su `delete()` ahí
 también (se detectó y arregló un leak real: `hit_particles` no se liberaba).
 
+## Caja de airdrop, avión F-16 y puente colgante — modelos reales
+
+Tres piezas más del mismo mecanismo `Tree_Model`/`tree_shader` (modelos
+propios modelados en Blender, color plano sin texturas, exportados Y-up
+con base en y=0):
+
+- **Caja de madera** (`crate_model`, `models/crate/wooden_crate.obj`):
+  reemplaza el `DrawCube`+`DrawCubeWires` liso que dibujaba
+  `render_airdrop_boxes_3d` para la fase `BOX_LANDED`. Cajón con tablones
+  verticales marcados por cara, listones de refuerzo en las aristas y
+  cruz diagonal en la tapa. Yaw aleatorio por drop
+  (`hash_random(target_row, target_col, 21)`, índice que no pisa el 7/11/13
+  de árboles ni el 17 de casas). Con sombra real
+  (`render_airdrop_boxes_shadow_3d`) — antes no tenía (el `DrawCube` nunca
+  se llamaba desde la pasada de sombra).
+
+- **Avión F-16** (`plane_model`, `models/plane/cargo_plane.obj`): el avión
+  de los airdrops (fase `PLANE_FLYING`) pasó de ser un dibujo 100%
+  screen-space (triángulo de ala + rectángulos de fuselaje/motores
+  reproyectados con `GetWorldToScreen`, ver el comentario grande al
+  principio de `render_airdrops`) a un modelo 3D real dibujado DENTRO de
+  `BeginMode3D` (`render_airdrop_plane_3d`, llamado desde
+  `render_gameplay_3d`). La posición 3D se calcula con la MISMA
+  conversión 2D→3D que ya usaba el código viejo (`plane_x/plane_y *
+  scale_to_3d`, altura fija `PLANE_ALTITUDE=3.0`) — el sistema de
+  airdrops sigue en coordenadas 2D internamente, eso no cambió. Lo único
+  que queda screen-space en `render_airdrops` es la estela (línea blanca)
+  y una sola llama de motor (el F16 real tiene un solo motor, a
+  diferencia del avión genérico viejo que tenía dos) — no vale la pena
+  un glow 3D real para un acento tan chico.
+
+  **Convención de yaw** (`render_airdrop_plane_3d`): el modelo tiene la
+  nariz en el eje local +X. `angle := atan2(dir_y, dir_x)` es el mismo
+  ángulo 2D que ya usan las torres (`dir := {cos(angle),0,sin(angle)}`) —
+  pero une rotación positiva de `DrawModelEx` alrededor de `{0,1,0}` manda
+  +X hacia -Z (regla de la mano derecha), el sentido CONTRARIO a como
+  crece ese `angle`. Por eso `yaw := -angle * (180/π)`, no `angle`
+  directo — usar el signo equivocado acá haría que el avión vuele
+  mirando para el lado opuesto a su trayectoria real. Con sombra real
+  (`render_airdrop_plane_shadow_3d`) — el frustum de sombra ya cubre
+  hasta `SHADOW_WORLD_Y_MAX=4.0`, por encima de `PLANE_ALTITUDE=3.0`, así
+  que no hizo falta agrandar el rango del shadow map.
+
+  El modelo pasó por dos iteraciones: la primera fue un jet genérico
+  (ala delta + 2 motores) — el usuario pidió específicamente un F-16 real,
+  así que se rehizo con sus rasgos distintivos (fuselaje afinado, carlinga
+  burbuja, LERX fusionados al fuselaje, ala delta RECORTADA —trapezoidal,
+  no puntiaguda—, toma de aire ventral única, una sola cola vertical,
+  proporciones reales envergadura/largo≈0.63) en vez de un jet genérico.
+
+- **Puente colgante** (`bridge_deck_model` + `bridge_railing_model`,
+  `models/bridge/deck_plank.obj` + `railing.obj`): reemplaza los
+  `DrawCube` planos que armaban tablón/baranda en `render_bridge_3d`. La
+  arquitectura de ensamblado NO cambió (sigue siendo tile-por-tile: un
+  tablón central + uno por borde conectado, baranda en los bordes que NO
+  conectan — ver el comentario grande original de esa función, todavía
+  vigente) — lo único que cambió es CÓMO se dibuja cada pieza
+  (`DrawModelEx` en vez de `DrawCube`). La baranda tiene postes + un cable
+  principal en catenaria (6 segmentos rectos aproximando la curva) +
+  cables de suspensión verticales colgando hasta el tablero — sugiere el
+  lenguaje visual de un puente colgante (pedido explícito: "como el
+  Golden Gate") SIN rehacer la arquitectura del código a nivel de tramo
+  completo (torres + cable único a lo largo de todo el cruce de agua,
+  que hubiera requerido detectar dónde empieza/termina cada cruce en vez
+  del sistema actual de vecino-por-vecino) — decisión explícita del
+  usuario de mantener el alcance acotado.
+
+  **`_bridge_draw_tile` centraliza el dibujo de UN tile** (tablones +
+  barandas), compartido por `render_bridge_3d` (pasada visible,
+  `tree_shader`) y `render_bridge_shadow_3d` (pasada de sombra,
+  `shadow_map.depth_shader`) — antes una sola función servía para las dos
+  pasadas porque `DrawCube` respeta cualquier `BeginShaderMode` activo;
+  con modelos reales (`DrawModelEx`, `material.shader` directo) hace
+  falta el mismo desdoblamiento shader-swap que ya usan
+  árboles/casas/caja/avión.
+
+  **Escala no uniforme por eje, sin geometría nueva por variante**: el
+  tablón (`BRIDGE_DECK_REF_SIZE=1.0`, footprint cuadrado, base en y=0) se
+  escala distinto en X/Z según si es la pieza central (cuadrada,
+  `path_width×path_width`) o una extensión hacia un borde conectado
+  (rectangular, `path_width×half` o `half×path_width`) — mismos números
+  que ya usaba el `DrawCube` viejo, con la salvedad de que el modelo mide
+  1.0 exacto así que la escala ES directamente el tamaño deseado, sin
+  conversión. La baranda (`BRIDGE_RAIL_REF_WIDTH=1.06`, no 1.0 parejo —
+  la curva del cable se pasa un poco de los postes) para los bordes
+  norte/sur usa yaw=0 (su eje local X, el ancho entre postes, ya cae
+  sobre el eje mundo correcto); para los bordes este/oeste, en vez de
+  swapear los parámetros width/length como hacía el `DrawCube` original,
+  se aplica LA MISMA escala (en espacio local, donde X sigue siendo "el
+  ancho entre postes") y se rota 90° en yaw DESPUÉS — el giro manda ese
+  ancho al eje Z sin distorsionar la geometría de postes/cables, mismo
+  resultado que el swap manual pero sin duplicar la lógica de escala.
+
 ## Obstáculos en el camino
 
 - `obstacle_bar_dims(m, row, col, cs)` determina dimensiones de la barrera
@@ -1513,6 +1625,52 @@ devolverlo a `tree_shader` después, o el modelo queda "roto" la próxima
 vez que se dibuje en la pasada visible. Mismo yaw que la pasada visible
 (mismo `row,col` → mismo `hash_random`), si no la sombra rota distinto que
 la casa que la tira.
+
+**Trampa real ya pisada — posición de mundo horneada en el export** (la
+causa de fondo de "las casas del desierto se desperdigan del centro del
+tile" que reportó el usuario): el flujo de trabajo para modelar varios
+assets en una sesión de Blender es "construir en el origen (0,0,0),
+exportar, RECIÉN AHÍ mover el objeto a un costado" (para poder ver todos
+juntos en un screenshot final sin que se pisen) — si el export se hace
+DESPUÉS de mover el objeto (por ejemplo, para retocar algo ya exportado
+sin acordarse de traerlo de vuelta al origen primero), el exportador de
+Blender graba la posición de MUNDO en las coordenadas del `.obj`, no la
+local. El juego (`raylib.LoadModel` + `DrawModelEx`) usa esas coordenadas
+tal cual como espacio LOCAL del modelo — rota alrededor de `(0,0,0)`
+asumiendo que ahí vive el centro de la pieza. Con el offset horneado (ej.
+`location.x=2.4` de cuando el objeto estaba "en fila" para el screenshot),
+el pivote de rotación quedaba a 2.4 unidades de distancia del centro
+visual real de la casa: yaw=0 ya se veía corrida, y los otros 3 pasos de
+`block_tile_yaw` giraban esa distancia en 4 direcciones distintas según el
+tile — de ahí el efecto de "desperdigado" que no tenía nada que ver con
+`block_tile_offset`/pivote-vs-centroide (que también se corrigió de
+paso, ver el commit, pero NO era la causa principal).
+
+Se detectó recién al medir los archivos `.obj` ya exportados en disco
+(`grep "^v " archivo.obj | awk ...` para min/max de la columna X) y
+comparar contra `get_object_info` en Blender — de los 4 modelos de
+casas/rocas, 3 (`ForestCabin`, `DesertAdobe`, `MountainRocks`) tenían el
+offset horneado (`location.x` en 1.2/2.4/3.6, la fila de "screenshot de
+conjunto"); solo `PlainHouse` se salvó porque nunca se había movido de
+`(0,0,0)`. Fix: `obj.location = (0,0,0)` en cada uno (sin tocar la
+geometría local, que ya estaba bien centrada) y reexportar.
+
+**Antes de dar por buena la posición de un modelo recién exportado,
+medir el archivo `.obj` en disco directamente** (no confiar en
+`get_object_info`/inspección de `mesh.vertices` en Blender — esas son
+coordenadas LOCALES, no lo que terminó en el archivo si el objeto no
+estaba en el origen al momento del export) — este bug pasó dos revisiones
+sin detectarse porque los chequeos anteriores miraban `mesh.vertices`
+(local, siempre centrado) o `get_object_info().world_bounding_box` de un
+momento en el que el objeto sí estaba en el origen, no el estado real del
+archivo ya guardado.
+
+**Trampa de herramienta — `sort -g` con números negativos dio un orden
+mal** al verificar esto por primera vez: `grep "^v " archivo.obj | awk
+'{print $2}' | sort -g | sed -n '1p;$p'` devolvió mínimos/máximos
+incorrectos (probablemente un problema de locale en esta máquina). El
+método confiable que sí funcionó es calcular min/max a mano en un único
+paso de `awk` (`if($2<minx)minx=$2 ...`), sin pasar por `sort`.
 
 ## Modal de confirmación Sí/No (`Confirm_Modal`)
 

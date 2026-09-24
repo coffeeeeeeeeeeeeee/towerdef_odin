@@ -230,12 +230,13 @@ float foamValueNoise(vec2 p) {
 }
 
 // causticsTime avanza a WATER_ANIM_SPEED (0.4) unidades por segundo real —
-// 2.2 acá da un ciclo de contracción/vuelta de ~7s reales (2π/2.2 unidades
-// × 2.5s por unidad), el vaivén "lento" pedido.
-const float FOAM_CYCLE_SPEED = 2.2;
+// 1.0 acá da un ciclo de contracción/vuelta de ~16s reales (2π/(0.4×1.0)),
+// bajado desde 2.2 (~7s, se veía demasiado rápido/pulsante) a pedido
+// explícito de que el efecto sea sutil.
+const float FOAM_CYCLE_SPEED = 1.0;
 const float FOAM_MIN_LOD     = 2.5; // blur angosto, línea "recogida" — más lejos del borde
 const float FOAM_MAX_LOD     = 5.5; // blur ancho, línea "avanza"
-const float FOAM_HALF_WIDTH  = 0.06; // ancho de la línea en espacio de coverage
+const float FOAM_HALF_WIDTH  = 0.045; // ancho de la línea en espacio de coverage — más angosta que antes (0.06), línea más fina/discreta
 
 float foamMask(vec2 uv, vec2 worldPos) {
     float breathe = 0.5 + 0.5 * sin(causticsTime * FOAM_CYCLE_SPEED);
@@ -247,9 +248,12 @@ float foamMask(vec2 uv, vec2 worldPos) {
 
     // Variación de INTENSIDAD, no de presencia — nunca corta la línea a
     // cero, solo le da una textura de espuma menos uniforme que un trazo
-    // parejo.
-    float tex = foamValueNoise(worldPos * 3.0 + causticsTime * 0.15);
-    float intensity = mix(0.55, 1.0, smoothstep(0.3, 0.7, tex));
+    // parejo. Rango angostado (0.65-0.85, antes 0.55-1.0) y deriva más
+    // lenta (0.08, antes 0.15) — mismo pedido de sutileza: menos contraste
+    // entre el punto más y menos intenso, menos movimiento visible del
+    // moteado.
+    float tex = foamValueNoise(worldPos * 3.0 + causticsTime * 0.08);
+    float intensity = mix(0.65, 0.85, smoothstep(0.3, 0.7, tex));
 
     return line * intensity;
 }
