@@ -2842,7 +2842,12 @@ render_airdrop_plane_3d :: proc(app: ^entities.App_State) {
 	sc := plane_model.scale
 
 	for &drop in app.sim.airdrops {
-		if drop.phase != .PLANE_FLYING || drop.plane_x < -9000 { continue }
+		// El avión sigue volando (y hay que seguir dibujándolo) más allá de
+		// que la caja ya haya empezado a caer/aterrizado — drop.phase pasa
+		// a describir la fase de la CAJA en cuanto se suelta, así que ya no
+		// sirve para decidir si el avión sigue en pantalla. plane_x < -9000
+		// es el único centinela real (ver airdrop_update, simulation.odin).
+		if drop.plane_x < -9000 { continue }
 		pos := raylib.Vector3{drop.plane_x * scale_to_3d, PLANE_ALTITUDE, drop.plane_y * scale_to_3d}
 		angle := math.atan2_f32(drop.plane_dir_y, drop.plane_dir_x)
 		yaw := -angle * (180.0 / math.PI)
@@ -2864,7 +2869,7 @@ render_airdrop_plane_shadow_3d :: proc(app: ^entities.App_State) {
 		plane_model.model.materials[i].shader = shadow_map.depth_shader
 	}
 	for &drop in app.sim.airdrops {
-		if drop.phase != .PLANE_FLYING || drop.plane_x < -9000 { continue }
+		if drop.plane_x < -9000 { continue }
 		pos := raylib.Vector3{drop.plane_x * scale_to_3d, PLANE_ALTITUDE, drop.plane_y * scale_to_3d}
 		angle := math.atan2_f32(drop.plane_dir_y, drop.plane_dir_x)
 		yaw := -angle * (180.0 / math.PI)
@@ -4240,34 +4245,34 @@ render_airdrops :: proc(app: ^entities.App_State) {
 		target_center, _ := tile_world_top(m, drop.target_row, drop.target_col)
 		target_screen := raylib.GetWorldToScreen(target_center, app.camera3d)
 
-		// ── Estela jet (solo mientras el avión está volando) ─────────────────
-		if drop.phase == .PLANE_FLYING && drop.trail_len > 1 {
-			for i in 1 ..< int(drop.trail_len) {
-				// Índices en el ring buffer: más antiguo = trail_head
-				i0 := (int(drop.trail_head) + i - 1) % len(drop.trail)
-				i1 := (int(drop.trail_head) + i    ) % len(drop.trail)
-				p0 := drop.trail[i0]
-				p1 := drop.trail[i1]
-				// Alpha crece de 0 (punta vieja) a 180 (punta reciente)
-				alpha := u8(f32(i) / f32(drop.trail_len) * 180)
-				s0 := project(app, p0.x, p0.y, scale_to_3d, PLANE_ALTITUDE)
-				s1 := project(app, p1.x, p1.y, scale_to_3d, PLANE_ALTITUDE)
-				thick := max(f32(1), app.zoom * 1.5)
-				raylib.DrawLineEx(s0, s1, thick, raylib.Color{255, 255, 255, alpha})
+		// ── Estela jet + llama de motor (mientras el avión siga en pantalla,
+		// más allá de en qué fase esté la caja — ver la nota grande en
+		// airdrop_update, simulation.odin: drop.phase pasa a describir la
+		// fase de la CAJA en cuanto se suelta, plane_x < -9000 es el único
+		// centinela real de "avión todavía visible") ─────────────────────
+		if drop.plane_x > -9000 {
+			if drop.trail_len > 1 {
+				for i in 1 ..< int(drop.trail_len) {
+					// Índices en el ring buffer: más antiguo = trail_head
+					i0 := (int(drop.trail_head) + i - 1) % len(drop.trail)
+					i1 := (int(drop.trail_head) + i    ) % len(drop.trail)
+					p0 := drop.trail[i0]
+					p1 := drop.trail[i1]
+					// Alpha crece de 0 (punta vieja) a 180 (punta reciente)
+					alpha := u8(f32(i) / f32(drop.trail_len) * 180)
+					s0 := project(app, p0.x, p0.y, scale_to_3d, PLANE_ALTITUDE)
+					s1 := project(app, p1.x, p1.y, scale_to_3d, PLANE_ALTITUDE)
+					thick := max(f32(1), app.zoom * 1.5)
+					raylib.DrawLineEx(s0, s1, thick, raylib.Color{255, 255, 255, alpha})
+				}
 			}
-		}
 
-		switch drop.phase {
-
-		case .PLANE_FLYING:
 			// El cuerpo del avión (F-16 real, ver plane_model) ya se dibuja
 			// en 3D de verdad dentro de BeginMode3D — render_airdrop_plane_3d,
 			// llamado desde render_gameplay_3d. Acá solo queda la llama del
 			// motor (single-engine, a diferencia del avión genérico viejo de
 			// 2 motores) como acento 2D barato — no vale la pena un glow
 			// real en 3D para un solo círculo chico.
-			if drop.plane_x < -9000 { break }
-
 			angle := math.atan2_f32(drop.plane_dir_y, drop.plane_dir_x)
 			cos_a := math.cos_f32(angle)
 			sin_a := math.sin_f32(angle)
@@ -4282,6 +4287,14 @@ render_airdrops :: proc(app: ^entities.App_State) {
 				f32(3) * z,
 				raylib.Color{255, 140, 40, 200},
 			)
+		}
+
+		switch drop.phase {
+
+		case .PLANE_FLYING:
+			// No queda nada específico de esta fase acá — el avión (estela,
+			// llama, modelo 3D) ya se maneja arriba de forma independiente
+			// de drop.phase, ver la nota grande de más arriba.
 
 		case .BOX_FALLING:
 			// Paracaídas: círculo encogiendo en el tile destino

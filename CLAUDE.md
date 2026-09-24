@@ -1529,6 +1529,32 @@ con base en y=0):
   no puntiaguda—, toma de aire ventral única, una sola cola vertical,
   proporciones reales envergadura/largo≈0.63) en vez de un jet genérico.
 
+  **Bug real ya pisado — el avión se "congelaba" invisible apenas la caja
+  empezaba a caer** (`airdrop_update`, `systems/simulation.odin`):
+  `drop.phase` (`Airdrop_Phase`) hacía DOBLE trabajo — describía a la vez
+  el ciclo de vida del AVIÓN (`.PLANE_FLYING`) y el de la CAJA
+  (`.BOX_FALLING`/`.BOX_LANDED`), pero son independientes: el avión debe
+  seguir volando y salir de pantalla DESPUÉS de soltar la carga, mientras
+  la caja empieza su propio ciclo. Como todo el movimiento del avión
+  (`plane_x/y += ...`, muestreo de estela, chequeo de "salió de pantalla")
+  vivía adentro de `case .PLANE_FLYING:`, en cuanto `drop.phase` pasaba a
+  `.BOX_FALLING` (al soltar la caja) ese bloque dejaba de ejecutarse por
+  completo — el avión quedaba congelado en el punto exacto de la suelta,
+  y como los 3 sitios que lo dibujan (`render_airdrop_plane_3d`/
+  `_shadow_3d`, más la estela/llama 2D en `render_airdrops`) también
+  filtraban por `drop.phase == .PLANE_FLYING`, encima se volvía invisible
+  de inmediato. El código de despacho ("eliminar avión cuando sale de la
+  PANTALLA") nunca llegaba a correr — dead code funcional, aunque el
+  comentario ya decía la intención correcta. Fix: el bloque de
+  movimiento/estela/despacho del avión se sacó del `switch drop.phase` a
+  un bloque incondicional guardado solo por `drop.plane_x > -9000` (el
+  centinela que ya marcaba "avión despachado", reusado como único criterio
+  de "¿sigue en pantalla?" en vez de la fase) — corre sin importar en qué
+  fase esté la caja. Los 3 sitios de render se actualizaron igual, de
+  `drop.phase == .PLANE_FLYING` a `drop.plane_x > -9000`. `drop.phase`
+  ahora es puramente el estado de la CAJA (el `switch` que le sigue queda
+  con `case .PLANE_FLYING:` vacío, sin nada específico que hacer ahí).
+
 - **Puente colgante** (`bridge_deck_model` + `bridge_railing_model`,
   `models/bridge/deck_plank.obj` + `railing.obj`): reemplaza los
   `DrawCube` planos que armaban tablón/baranda en `render_bridge_3d`. La

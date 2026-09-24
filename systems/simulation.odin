@@ -2386,9 +2386,19 @@ airdrop_update :: proc(app: ^entities.App_State, dt: f32) {
 	for i < len(sim.airdrops) {
 		drop := &sim.airdrops[i]
 
-		switch drop.phase {
-		case .PLANE_FLYING:
-			// Mover avión a lo largo de su dirección
+		// El avión vuela y se despacha de forma INDEPENDIENTE de la fase de
+		// la caja — antes este bloque vivía adentro de `case .PLANE_FLYING:`
+		// de abajo, así que en cuanto la caja pasaba a .BOX_FALLING el
+		// avión dejaba de moverse (y de dibujarse, ver
+		// render_airdrop_plane_3d) congelado/invisible en el punto exacto
+		// donde soltó la carga, en vez de seguir de largo hasta salir de
+		// pantalla como ya indicaba el comentario de más abajo ("Eliminar
+		// avión cuando sale de la PANTALLA") — ese código de despacho
+		// nunca llegaba a correr. `drop.plane_x > -9000` (el mismo
+		// centinela que ya marcaba "avión ya despachado") es el único
+		// guard: sigue corriendo mientras el avión no haya salido de
+		// pantalla, sin importar en qué fase esté la caja.
+		if drop.plane_x > -9000 {
 			speed := constants.AIRDROP_PLANE_SPEED
 			drop.plane_x += drop.plane_dir_x * speed * dt
 			drop.plane_y += drop.plane_dir_y * speed * dt
@@ -2407,14 +2417,15 @@ airdrop_update :: proc(app: ^entities.App_State, dt: f32) {
 			}
 
 			// Soltar caja cuando el avión supera el tile destino (producto punto >= 0)
-			to_target_x := drop.target_wx - drop.plane_x
-			to_target_y := drop.target_wy - drop.plane_y
-			passed := (to_target_x * drop.plane_dir_x + to_target_y * drop.plane_dir_y) <= 0
-
-			if !drop.dropped && passed {
-				drop.dropped = true
-				drop.chute_t = 1.0
-				drop.phase   = .BOX_FALLING
+			if !drop.dropped {
+				to_target_x := drop.target_wx - drop.plane_x
+				to_target_y := drop.target_wy - drop.plane_y
+				passed := (to_target_x * drop.plane_dir_x + to_target_y * drop.plane_dir_y) <= 0
+				if passed {
+					drop.dropped = true
+					drop.chute_t = 1.0
+					drop.phase   = .BOX_FALLING
+				}
 			}
 
 			// Eliminar avión cuando sale de la PANTALLA (igual que los pájaros)
@@ -2435,7 +2446,14 @@ airdrop_update :: proc(app: ^entities.App_State, dt: f32) {
 				ordered_remove(&sim.airdrops, i)
 				continue
 			}
+		}
 
+		switch drop.phase {
+		case .PLANE_FLYING:
+			// El movimiento del avión ya se resolvió arriba, corra o no
+			// corra esta fase — acá no queda nada específico de la fase en
+			// sí (solo existe para que .dropped se convierta en
+			// .BOX_FALLING, ya manejado arriba también).
 		case .BOX_FALLING:
 			// chute_t shrinks from 1.0 to 0.0 over AIRDROP_BOX_FALL_SPEED seconds
 			drop.chute_t -= dt / constants.AIRDROP_BOX_FALL_SPEED
