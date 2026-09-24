@@ -516,9 +516,26 @@ void main() {
         isPath = texture(texture0, fragTexCoord).r;
         base = mix(base, pathColor, isPath);
 
+        // waterCoverage es un blur de 5x5 tiles — redondea la FORMA del
+        // borde entre tiles de agua conectados (si no, se ve en escalera
+        // sobre la grilla), pero por sí solo no sabe nada de la geometría
+        // real: sangra tinte de agua sobre tiles de TIERRA vecinos
+        // sin más, algo que con la tierra inclinándose suave hasta el agua
+        // quedaba disimulado, pero desde que la orilla tiene un risco real
+        // (ver Terrain_Corner_Category/_terrain_add_bank_wall en
+        // rendering.odin) se ve como pedacitos de agua traslúcidos
+        // flotando sobre tierra ya claramente separada, arriba del risco.
+        // tileIsWater (texture1 sin blur, 1 texel/tile, POINT — el valor
+        // crudo del PROPIO tile) recorta ambos términos a cero en
+        // cualquier fragmento cuyo tile no sea agua, sin tocar la forma
+        // redondeada que ve un tile de agua de verdad (ahí tileIsWater=1,
+        // no cambia nada).
         float coverage = waterCoverage(fragTexCoord);
-        isWater = smoothstep(0.38, 0.62, coverage);
-        float waterEdge = isWater - smoothstep(0.50, 0.62, coverage);
+        float tileIsWater = texture(texture1, fragTexCoord).r;
+        float isWaterRaw = smoothstep(0.38, 0.62, coverage);
+        float edgeRaw = smoothstep(0.50, 0.62, coverage);
+        isWater = isWaterRaw * tileIsWater;
+        float waterEdge = (isWaterRaw - edgeRaw) * tileIsWater;
 
         if (isWater > 0.001) {
             base = mix(base, waterColor, isWater);
