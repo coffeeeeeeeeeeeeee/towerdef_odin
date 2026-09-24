@@ -486,10 +486,10 @@ portaron a geometría 3D real, ambos en `render_map_objects_3d`:
   `_terrain_tile_height_color`); el puente es geometría aparte por encima.
 - **Nenúfares** (`render_water_lily_3d`): árboles (`ACCESSORY_TREE`) que
   caen en un tile de agua ya no se dibujan como árbol — en su lugar, 2-4
-  discos chatos (`DrawCylinder` muy bajo, raylib no tiene un círculo 3D
-  relleno nativo) con deriva animada y flor opcional, apoyados en
-  `WORLD_WATER_HEIGHT` (la altura fija del agua, no el heightmap — ver
-  `_terrain_tile_height_color`).
+  modelos reales de nenúfar (`lily_models`, ver "Modelos reales por
+  bioma + nenúfar" más abajo) con deriva animada, radio y yaw aleatorios,
+  apoyados en `WORLD_WATER_HEIGHT` (la altura fija del agua, no el
+  heightmap — ver `_terrain_tile_height_color`).
 
 `render_map_objects_3d` dibuja las torres reales buscando el `Tower` que
 matchea en `app.sim.towers` — cuando no hay uno (EDITOR, o el preview de un
@@ -543,12 +543,94 @@ emprolija la cresta en la imagen en vez de tocar el campo de distancia
 analítico, con una caja más chica que un 3x3 completo para no difuminar de
 más el resto del borde.
 
-**Spawn y goal se hunden con el camino** — la plataforma (`render_spawn_3d`/
-`render_goal_3d`) se planta con `tile_world_top`, que no sabe nada del
-hundimiento (es CPU, el hundimiento es puramente del shader). Para que no
-quede flotando sobre la malla hundida, `_path_emboss_offset(m, row, col)`
-recalcula cuánto baja el CENTRO del tile (mismo `_path_strip_mask` evaluado
-en `u=v=0.5`, con guard de agua) y se lo resta a la `y` antes de dibujar.
+**Spawn y goal se hunden con el camino** — la marca (`render_spawn_goal_markers_3d`,
+ver "Marca de spawn/goal" más abajo) usa `terrain_surface_height(m, row,
+col, 0.5, 0.5)`, que YA incluye el hundimiento del camino (via
+`_path_mask_sample`) además de la interpolación bilineal real de la malla
+— a diferencia de `tile_world_top` (altura CRUDA del tile, sin ninguna de
+las dos cosas), así que la marca nunca queda flotando sobre la franja
+tallada.
+
+### Agua plana + paredes de orilla (`Terrain_Corner_Category`, `_terrain_add_bank_wall`)
+
+Bug de arrastre: `_terrain_corner` promediaba los hasta 4 tiles que tocan
+cada esquina de grilla SIN distinguir agua de tierra — un tile de agua
+junto a tierra de otra altura no quedaba perfectamente plano, su esquina
+hacia la tierra se corría hacia la altura del vecino (inclinación suave
+en vez de agua plana con quiebre limpio en la orilla).
+
+Fix en dos partes:
+1. **`Terrain_Corner_Category` (`ANY`/`LAND`/`WATER`)**, parámetro opcional
+   (default `.ANY`, así que los call sites que no les importa la
+   distinción — grilla del editor — compilan sin tocarlos) en
+   `_terrain_corner`/`_terrain_corner_lerp`: con `.LAND`/`.WATER`
+   promedia SOLO los tiles de esa categoría. `sub_vertex` (dentro de
+   `terrain_cache_ensure`) pasa la categoría del PROPIO tile que está
+   armando — un tile de agua nunca vuelve a mezclar su altura con tierra
+   vecina (todas sus esquinas dan exactamente `WORLD_WATER_HEIGHT`, agua
+   perfectamente plana en TODA la malla, no solo lejos de la orilla) y un
+   tile de tierra nunca se hunde/levanta por el agua de al lado (sigue su
+   propio heightmap sin interrupción). `terrain_surface_height` (la
+   altura "real" que usan `draw_range_disc_3d`/árboles/etc. — ver más
+   arriba) pasa a pedir `.LAND` en su rama de tierra, para quedar
+   consistente con la malla ya corregida.
+2. **`_terrain_add_bank_wall`**: el escalón que ahora separa agua de
+   tierra (categorías que ya no se mezclan) se tapa con geometría real —
+   un quad vertical por sub-segmento (misma densidad que
+   `TERRAIN_MESH_SUBDIV`) que conecta la altura real de la tierra (su
+   propia interpolación `.LAND`, sin promediar) con el nivel plano del
+   agua. El borde superior de la pared coincide vértice a vértice con el
+   borde de la malla de tierra (mismo `_terrain_corner_lerp(.LAND)` que ya
+   usa `sub_vertex` para ese tile) y el inferior es agua perfectamente
+   plana en todos lados — así que ninguno de los dos deja costura. Normal
+   dada A MANO (`_terrain_push_wall_tri`, no `_terrain_push_tri`): una
+   pared casi vertical (`n.y≈0`) no tiene un lado "hacia arriba" claro del
+   que partir el flip de seguridad que sí tiene sentido para el resto del
+   terreno (pendientes suaves, casi siempre mirando hacia arriba).
+   Funciona **sin importar si la tierra queda más alta o más baja que el
+   agua** en cada tramo — el agua se pinta a mano en el editor sin
+   relación con el heightmap de abajo, no hay ninguna dirección que se
+   pueda asumir. UV en espacio de mundo normalizado (mismo convenio que
+   `sub_vertex`, `wc/width, wr/height`), no un UV local 0..1 por segmento
+   — la pared entra al mismo mesh que el resto del terreno bajo el mismo
+   `lighting_shader` con `useTerrainMask` activo, así que su texcoord
+   tiene que apuntar al lugar correcto de `texture0`/`texture1` (máscaras
+   de camino/agua) o samplearía esas texturas en cualquier lado.
+
+   **Puentes quedan afuera a propósito** (`_is_bridge_water`, mismo
+   criterio de clasificación que `is_path_like` en `render_bridge_3d`): un
+   tile de agua que además es PATH/SPAWN/GOAL no dispara pared — el
+   puente ya resuelve su propia conexión visual con la tierra (piso a
+   nivel + barandas), una pared cortando justo donde arranca se vería mal.
+
+   **Límite conocido, no resuelto**: solo se tapan bordes CARDINALES
+   (tile agua/tierra compartiendo una arista completa, barrido horizontal
+   + vertical). Dos tiles que se tocan solo en DIAGONAL (agua y tierra en
+   patrón de tablero de ajedrez) no generan pared — caso raro en mapas
+   reales, pero si aparece, ahí sigue quedando el quiebre sin tapar.
+
+Como efecto colateral, `render_water_lily_3d` (nenúfares) ya no necesita
+promediar las 4 esquinas del tile para saber dónde apoyarse — el agua es
+`WORLD_WATER_HEIGHT` en cualquier punto de cualquier tile de agua, sin
+excepción, así que usa la constante directo.
+
+**Consecuencia que hizo falta corregir aparte (`lighting.fs`)**: el
+tinte/color de agua (`isWater`/`waterEdge`, `main()`) sale de
+`waterCoverage`, un blur de 5x5 tiles sobre la máscara binaria de agua —
+redondea la FORMA del borde entre tiles de agua conectados (si no, se ve
+en escalera sobre la grilla), pero no sabe nada de la geometría real: por
+sí solo sangra tinte de agua sobre tiles de TIERRA vecinos sin más. Con la
+tierra inclinándose suave hasta el agua (el bug de arriba) ese sangrado
+quedaba disimulado; con el risco real ya en su lugar se veía como
+pedacitos de agua traslúcidos flotando sobre tierra ya claramente
+separada, arriba del risco. Fix: `tileIsWater` (`texture(texture1,
+fragTexCoord).r`, SIN el blur de `waterCoverage` — 1 texel/tile, `POINT`,
+el valor crudo del propio tile) multiplica tanto `isWater` como
+`waterEdge`, recortándolos a cero en cualquier fragmento cuyo tile no sea
+agua, sin tocar la forma redondeada que ve un tile de agua de verdad (ahí
+`tileIsWater=1`, no cambia nada). El foam de orilla (`foamMask`) queda
+afuera de este recorte a propósito — es la línea de espuma, se espera que
+se vea sobre el borde mismo, straddling los dos lados.
 
 ## Vidrio esmerilado de la pantalla de Pausa (`Pause_Blur`)
 
@@ -999,6 +1081,26 @@ del browser de mapas SÍ mostraba spawn/goal antes, cuando el dibujo vivía
 dentro del loop de `render_map_objects_3d` — sacarlos a una pasada aparte
 sin agregar el call ahí hubiera sido una regresión silenciosa).
 
+### La grilla sigue la categoría agua/tierra (`_grid_draw_segment`)
+
+Bug de arrastre nuevo, consecuencia directa de "Agua plana + paredes de
+orilla" (ver esa sección): `render_grid_lines_3d` seguía usando
+`_terrain_corner` sin categoría (`.ANY`, el default) para la altura de
+cada punto de esquina — dejó de tener sentido en cuanto un punto de
+esquina compartido entre agua y tierra pasó a tener DOS alturas reales (una
+por lado, con un escalón real entre ellas) en vez de una sola promediada.
+La grilla quedaba flotando a una altura que ya no era ninguna de las dos
+reales, sin seguir el contorno nuevo.
+
+Fix: `_grid_draw_segment` recibe la categoría explícita a usar. Para cada
+segmento de grilla (horizontal o vertical), `render_grid_lines_3d` mira
+los DOS tiles que lo bordean (arriba/abajo para un segmento horizontal,
+izquierda/derecha para uno vertical) — si son de la misma categoría, una
+sola línea alcanza (mismo resultado que antes, sin cambios visibles ahí);
+si son de categorías distintas, se dibujan DOS líneas superpuestas en X/Z
+pero cada una a la altura de su propio lado, así la grilla también
+"escalona" en la orilla en vez de cortar en diagonal por el medio.
+
 ## Shimmer de la grilla del editor (grid_line.vs/.fs)
 
 `render_grid_lines_3d` (las líneas del toggle de grid, `app.settings.show_grid`)
@@ -1063,22 +1165,33 @@ centro del segmento, 1 en cualquiera de las dos puntas) y
 `tangent_fade = 1 - smoothstep(0.6, 1.0, d)` — el 60% central de CADA
 segmento queda a opacidad plena, el 40% de cada punta se desvanece.
 
-## Árboles reales (tree.vs/.fs, tree_models)
+## Modelos reales por bioma + nenúfar (tree.vs/.fs, tree_models, lily_models)
 
 Reemplaza al árbol procedural (dos `DrawCylinder`, tronco + copa) por un
 modelo `.obj` real por bioma, cargado una sola vez en `tree_models_init`
 (`models/tree`, `models/pine`, `models/palm`, `models/bush` — Llanura,
-Bosque, Desierto, Montaña respectivamente). `models/palm/palmera.obj` es
-un FBX convertido a mano con `assimp export` (raylib no carga FBX
-directo, solo OBJ/IQM/glTF/VOX/M3D) — si el FBX original cambia, hay que
-volver a correr `assimp export palmera.fbx palmera.obj -tri` en esa
-carpeta. El `-tri` (triangular) NO es opcional: sin él, assimp exporta
-caras como n-gons de hasta 10 vértices (los frondes de la palmera), y el
-parser de OBJ que trae raylib (`tinyobj_loader_c`, `TINYOBJ_MAX_FACES_PER_F_LINE
-= 16`) aborta el proceso entero con un `assert` en cuanto encuentra una
-cara de más de 5 vértices — no es un error recuperable, tira el programa
-abajo. `tree/`, `pine/` y `bush/` no tienen este problema (caras de 3-4
-vértices, vienen así de origen), así que solo palm/ necesita el flag.
+Bosque, Desierto, Montaña respectivamente). El nenúfar (`lily_models`,
+`models/waterlily/`, ver más abajo) sigue exactamente el mismo mecanismo
+(`Tree_Model`/`tree_shader` reusados tal cual) en vez de un sistema aparte.
+
+**Los 6 modelos (4 árboles + 2 variantes de nenúfar) son propios,
+modelados en Blender para este proyecto** (vía MCP de Blender, primitivas
++ geometría procedural en Python/bpy — no assets de terceros) — reemplazan
+tanto los 3 árboles de stock que había antes como, sobre todo, el modelo
+de Montaña, que era un llavero decorativo ajeno de 107k triángulos sin
+ningún material/textura real (ver el historial de git si hace falta
+recuperar esa referencia). Todos se exportan ya en la convención que el
+juego espera (Y-up, base en `y=0`, centrados en x/z=0, triangulados) desde
+el propio exportador de Blender (`bpy.ops.wm.obj_export` con
+`forward_axis='NEGATIVE_Z'`, `up_axis='Y'`, `export_triangulated_mesh=True`)
+— construyendo la geometría en Blender (Z-up) con la base apoyada en
+Z=0 y centrada en X=0/Y=0, esa combinación de ejes de exportación da
+directamente `obj_x=blender_x, obj_y=blender_z, obj_z=-blender_y`, o sea
+la convención correcta sin ningún paso de corrección manual — así que
+ninguno de los 6 usa `needs_z_up_fix` (queda como mecanismo general por si
+algún asset futuro sí viene Z-up, ver `_fix_model_z_up`). Todos los
+materiales son `Kd` plano (sin texturas/`map_Kd`), coherente con el resto
+de assets low-poly del juego.
 
 **Shader propio (`tree_shader`), no `lighting_shader`**: `lighting.vs`
 asume todo en espacio de mundo (torres/enemigos/etc. se arman a mano
@@ -1123,27 +1236,30 @@ misma textura a la vez es *undefined behavior* en GL. `shadow_map.depth_shader`
 (solo posición, sin samplers) es el único shader seguro acá, mismo
 criterio que ya usan todos los demás casters (torres, obstáculos).
 
-**Orientación/escala por modelo** (`TREE_MODEL_SPECS`): cada archivo
-fuente viene con su propia convención de ejes y escala de diseño, ajena a
-`WORLD_CELL_SIZE = 1`. `tree/` y `bush/` vienen Z-up (la altura real está
-en Z, `needs_z_up_fix = true`) — `_fix_model_z_up` corrige ESO UNA SOLA
-VEZ en `tree_models_init`, rotando a mano los vértices/normales del mesh
-en CPU (`(x,y,z) → (x,z,-y)`, derivado directo de las fórmulas de rotación
-alrededor de X, no armado con una `Matrix`: `raylib.odin` no trae
-`MatrixRotate`/`MatrixMultiply` de `raymath.h` bindeadas, y mezclar a mano
-una `Matrix` `#row_major` de raylib con las de `core:math/linalg`
-—convención de columna— es terreno fácil para terminar con una rotación
-transpuesta sin darse cuenta) y subiendo el resultado a GPU con
-`UpdateMeshBuffer` (si no, la corrección se queda solo en CPU y el modelo
-se sigue viendo con la orientación vieja — `LoadModel` ya subió los datos
-originales antes). La base queda en `y=0` sin offset extra (el punto
-`z=0` de la base pasa a `y=0`). `pine/` y `palm/` ya vienen Y-up con la
-base en `y=0`, `needs_z_up_fix = false`. Los valores de `scale` salen de
-dividir la altura real del bounding box de cada fuente (medida a mano
-fuera del juego) por `~0.85` (la altura aproximada que tenía el árbol
-procedural viejo) — son un punto de partida calculado, no verificado en
-pantalla; si algún árbol se ve grande/chico de más, ajustar
-`TREE_MODEL_SPECS` directamente, no la geometría.
+**Orientación/escala por modelo** (`TREE_MODEL_SPECS`): como los 4 ya
+vienen Y-up con la base en `y=0` (ver más arriba), lo único que corrige
+esta tabla es la escala de diseño (ajena a `WORLD_CELL_SIZE = 1`). Los
+valores de `scale` salen de dividir la altura real del bounding box
+reportada por Blender al exportar por un target de altura en mundo:
+`~0.85` para los 3 árboles de tamaño completo (mismo orden que tenía el
+cono procedural viejo), pero `~0.45` para MOUNTAIN — es un arbusto
+achaparrado a propósito, no un árbol de altura completa, así que su target
+es la mitad del resto (pedido explícito: el arbusto se veía demasiado
+grande con el target de 0.85 que comparten los demás). Son un punto de
+partida calculado, no un valor final — si algún modelo se ve grande/chico
+de más en pantalla, ajustar `TREE_MODEL_SPECS` directamente, no la
+geometría.
+
+**Sin fallback si el modelo no carga**: `Tree_Model` no tiene un campo
+`valid`/chequeo de "¿cargó bien?" antes de dibujar — se sacó a propósito
+(pedido explícito) porque nunca podía dar `false` en la práctica:
+`tree_models_init`/`lily_models_init` llaman `raylib.LoadModel` y asignan
+el resultado incondicionalmente, así que el chequeo era puro código
+defensivo muerto para un escenario que no podía pasar con estos 6 archivos
+ya versionados en el repo. Si en algún momento se agrega un modelo que SÍ
+pueda fallar en cargar (ej. un asset que se descarga o se genera en
+runtime), ahí sí vale la pena reintroducir un chequeo — pero contra ese
+caso real, no como guard genérico "por las dudas".
 
 **Rotación aleatoria por instancia**: cada árbol gira un yaw distinto
 alrededor de Y (`hash_random(row, col, 7) * 360`, mismo hash determinístico
@@ -1158,17 +1274,102 @@ instancia sin componer matrices a mano (mismo problema de convención de
 arriba). Con la corrección ya horneada en el mesh, el parámetro de
 rotación de `DrawModelEx` queda completamente libre para el yaw.
 
-**Modelo de Montaña (`bush`) es un caso débil, a sabiendas**: el archivo
-(`15254_Key_Ring_Wall_Mount-Tree_v1.obj`) es un llavero decorativo con
-forma de árbol ("Key Ring Wall Mount"), no un arbusto real, y no trae
-ningún material/textura (el `.mtl`/`.jpg` que lo acompañan están vacíos,
-0 bytes) — el usuario confirmó usarlo igual a falta de un asset mejor.
-Sale con color de la iluminación pura (sin Kd ni textura), y es también
-el modelo más pesado con diferencia (~107k triángulos, dos órdenes de
-magnitud más que los otros tres) — y ahora se dibuja DOS veces por árbol
-por frame (pasada visible + pasada de sombra, ver `render_tree_shadow_3d`
-arriba), así que si Montaña se nota lenta con muchos árboles en pantalla,
-empezar a mirar por acá.
+**Descentrado aleatorio dentro de la celda** (`tree_tile_offset`): a pedido
+explícito, los árboles no quedan plantados en el centro geométrico exacto
+del tile — se ven demasiado "en grilla" si todos caen justo en el mismo
+punto relativo. `tree_tile_offset(row, col)` (junto a `render_tree_3d`)
+centraliza el cálculo: dos `hash_random` más (índices 11 y 13, no pisan el
+7 que ya usa el yaw ni el 0 que usa el nenúfar) dan un offset ±0.25 de la
+celda en cada eje, devuelto tanto en fracción `u,v` (para sampleear
+`terrain_surface_height(m,row,col,u,v)` en el punto real, no en el centro
+— importante en tiles con pendiente) como ya convertido a unidades de
+mundo (`world_dx,world_dz`) para sumar a `surface.x/z`. Usado por LAS DOS
+llamadas — `render_map_objects_3d` (pasada visible) y
+`render_shadow_depth_pass` (pasada de sombra, vía `render_tree_shadow_3d`)
+— con el mismo criterio que el yaw: si alguna vez se llama
+`tree_tile_offset` en un solo lugar y no en el otro, la sombra se
+desalinea del árbol. El rango ±0.25 (no más) es a propósito — deja margen
+para no cruzar al tile vecino ni terminar plantado sobre una esquina/unión
+de camino.
+
+Los nenúfares YA tenían este comportamiento desde el principio (cada pad
+sortea su propia posición dentro del tile, `local_x`/`local_z` en
+`render_water_lily_3d`, ver más abajo) — no hizo falta tocarlos.
+
+### Nenúfar como modelo real (`lily_models`, `render_water_lily_3d`)
+
+Reemplaza la versión anterior (cilindros chatos dibujados a mano con
+`DrawCylinder`/`DrawCylinderWires`) por dos modelos reales, mismo mecanismo
+que los árboles: `Lily_Model_Kind{PAD, PAD_FLOWER}`, `LILY_MODEL_SPECS`,
+`lily_models_init/unload` (hookeados en `main.odin` justo después de
+`tree_models_init`, mismo orden de dependencia con `tree_shader_init`).
+Dos variantes en vez de una sola para preservar el 50% de chance de flor
+por pad que ya tenía la versión procedural — `render_water_lily_3d` sortea
+entre `.PAD`/`.PAD_FLOWER` con el mismo `rng(&s) > 0.5` de siempre, ahora
+eligiendo qué modelo dibujar en vez de si dibujar o no una flor aparte.
+
+**Diseñados con radio=1.0 unidad Blender a propósito**: a diferencia de
+los árboles (que escalan a un target de altura fijo), el pad necesita un
+radio distinto por instancia (el `pr := cs*(0.09+rng*0.07)` que ya sorteaba
+la versión vieja) — con el modelo construido a radio 1.0 exacto,
+`LILY_MODEL_SPECS[...].scale = 1.0` y la escala real en `DrawModelEx` es
+directamente `pr * lm.scale`, sin necesidad de medir bounding box ni
+calcular ningún factor (a diferencia de `TREE_MODEL_SPECS`). Cada pad
+también recibe un yaw aleatorio propio (`rng(&s) * 360`) que la versión
+vieja no necesitaba — el disco de `DrawCylinder` era perfectamente
+simétrico, pero el modelo real tiene una muesca en el borde (ver abajo).
+
+**Geometría del pad**: disco con un hundimiento tipo "plato hondo" en el
+centro (inset + extrude hacia abajo de la cara superior) y una muesca en V
+en el borde, imitando la hendidura típica de una hoja de nenúfar — más
+carácter que el cilindro liso de antes.
+
+**Flor (`PAD_FLOWER`) estilo loto, dos capas** (pedido explícito — la
+primera versión era un rosetón simple de 5 pétalos): capa exterior de 11
+pétalos lanceolados (base angosta, ancho máximo cerca del 40-55% del
+largo, punta afinada), abiertos casi horizontales (pitch 14-26° desde el
+plano); capa interior de 9 pétalos más chicos y verticales (pitch 55-70°),
+a menor radio y con un offset de yaw de medio paso respecto a la exterior
+(intercalados, no uno detrás del otro — patrón real de flor). Ambas capas
+usan la misma función `petal()` (perfil de ancho + un `curl_extra` que
+aumenta el pitch efectivo hacia la punta, así la hoja se curva en vez de
+quedar recta) armada a mano vía `bmesh` (2 columnas de vértices —
+izquierda/derecha— por segmento, sin nervadura central; con 20 pétalos en
+pantalla la silueta ya lee bien sin ese detalle extra). Un cono chico
+(`LilyCenterMat`, amarillo/dorado `Kd≈(255,230,80)/255`, material nuevo
+agregado al `.mtl`) hace de receptáculo floral en el centro, apenas por
+encima de las puntas de la capa interior.
+
+**Trampa ya pisada — la primera versión de la flor quedaba invisible**: el
+pad es un disco SÓLIDO (cilindro real, no una cáscara), volumen completo
+desde `y=0` hasta `y=0.16` en espacio del modelo. La primera versión de
+`PAD_FLOWER` ubicó los pétalos en `y≈0.11..0.175` — adentro o al ras de
+ese volumen, así que la flor quedaba tapada por el propio pad (invisible
+en el juego, aunque el modelo "se veía bien" en un preview de Blender
+donde es fácil no notar que dos mallas se solapan). El fix fue trasladar
+toda la geometría de la flor claramente por encima del tope del disco
+(`y≈0.21` a `y≈0.48` en la versión final de dos capas, con margen de sobra
+sobre el mínimo de 0.17 que se había fijado como piso de seguridad) — la
+lección general: con geometría sólida (no cáscaras finas), verificar el
+rango Y real de cada parte contra el de las demás antes de dar por buena
+la posición relativa, no alcanza con que "se vea bien" desde un solo
+ángulo de cámara.
+
+**Trampa ya pisada — primera versión de las palmas de DESERT leía como
+"estrella"**: el primer intento de las 7 hojas de la palmera eran cajas
+finas rígidas sin curvatura, irradiando derecho desde el ápice del tronco
+— la silueta resultante se leía como una estrella/llama apuntando hacia
+arriba, no como hojas de palmera caídas. El fix reconstruyó cada hoja como
+una tira de varios segmentos con ancho variable (angosta en la base, pico
+cerca del 20-25% del largo, afinándose a punta), curvatura de caída
+progresiva a lo largo de la hoja (no lineal — crece más rápido hacia la
+punta) y una nervadura central (3 columnas de vértices por segmento en vez
+de 2, con la columna del medio levemente más alta) para que tenga relieve
+real bajo la iluminación. También hizo falta subir el pitch base de
+inclinación de las hojas (40-65° desde la vertical en vez de un rango más
+chico) — con la curvatura sola no alcanzaba, la base de cada hoja también
+tenía que arrancar más inclinada para que la corona completa se leyera
+como caída y no como corona rígida hacia arriba.
 
 ## Fondo animado (nebula.glsl)
 

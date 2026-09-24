@@ -128,6 +128,11 @@ main :: proc() {
 	systems.tree_models_init()
 	defer systems.tree_models_unload()
 
+	// Nenúfares reales (dos variantes, con/sin flor) — mismo tree_shader,
+	// misma dependencia de orden (shader cargado antes).
+	systems.lily_models_init()
+	defer systems.lily_models_unload()
+
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
 	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)

@@ -697,16 +697,15 @@ tree_shader_unload :: proc() {
 }
 
 // Un modelo real por bioma, cargado una sola vez (LoadModel resuelve las
-// texturas del .mtl solo, relativas a la carpeta del .obj). Los cuatro
-// archivos fuente vienen con convenciones de origen distintas — algunos
-// Z-up (exportados de herramientas que usan Z como altura), otros ya
-// Y-up, y todos en escalas de diseño ajenas al mundo del juego
-// (WORLD_CELL_SIZE = 1) — `needs_z_up_fix`/`scale` por entrada corrigen eso
-// una sola vez acá, no en cada draw.
+// texturas del .mtl solo, relativas a la carpeta del .obj). `needs_z_up_fix`
+// queda como mecanismo general por si algún asset futuro viene Z-up (ver
+// _fix_model_z_up) — los 4 modelos actuales, modelados en Blender para este
+// proyecto, ya se exportan Y-up con base en y=0, así que ninguno lo usa hoy.
+// `scale` corrige la escala de diseño (ajena a WORLD_CELL_SIZE = 1) una sola
+// vez acá, no en cada draw.
 Tree_Model :: struct {
 	model: raylib.Model,
 	scale: f32,
-	valid: bool,
 }
 
 tree_models: [constants.Biome]Tree_Model
@@ -717,23 +716,31 @@ Tree_Model_Spec :: struct {
 	needs_z_up_fix: bool,
 }
 
-// Escalas calculadas a mano desde el bounding box real de cada fuente
-// (ver el chequeo hecho por fuera del juego antes de este commit) para que
-// la altura del árbol quede en el mismo orden que el cono procedural viejo
-// (~0.85 unidades de mundo) — punto de partida, no un valor final: ajustar
-// acá si en pantalla se ven grandes/chicos de más.
+// Modelos propios, modelados en Blender (color plano, sin texturas) para
+// esta run — reemplazan los 4 assets de terceros que había antes (uno de
+// ellos, el de MOUNTAIN, era directamente un llavero decorativo sin
+// textura de 107k triángulos, ver el commit anterior a este). Todos se
+// construyeron ya Y-up (base en y=0, centrados en x=0/z=0) usando el
+// exportador de Blender con forward_axis='NEGATIVE_Z'/up_axis='Y', así que
+// ninguno necesita needs_z_up_fix. Escalas calculadas a mano desde el
+// bounding box real reportado por Blender al exportar, mismo criterio que
+// ya usaba este archivo: altura_blender_z medida, scale = 0.85 /
+// altura_blender_z para que el árbol quede en el mismo orden que el cono
+// procedural viejo (~0.85 unidades de mundo).
 TREE_MODEL_SPECS := [constants.Biome]Tree_Model_Spec{
-	// tree/: exportado Z-up (altura real en Z, 0..204.93) — _fix_model_z_up
-	// lo para, la base (z=0) queda en y=0.
-	.PLAIN    = {"models/tree/LowPoly_Tree_v1.obj", 0.85 / 204.933, true},
-	// pine/: ya Y-up (altura 0..3.8143), sin corrección.
-	.FOREST   = {"models/pine/lowpoyltree.obj", 0.85 / 3.8143, false},
-	// palm/: convertido de FBX con assimp (ver models/palm/palmera.obj),
-	// ya Y-up (altura 0..2767.43), sin corrección.
-	.DESERT   = {"models/palm/palmera.obj", 0.85 / 2767.4282, false},
-	// bush/: mismo criterio que tree/ — el eje con más rango horizontal
-	// (Z, 0..11.19) es el candidato a "altura" tras pararlo.
-	.MOUNTAIN = {"models/bush/15254_Key_Ring_Wall_Mount-Tree_v1.obj", 0.85 / 11.1888, true},
+	// plain_tree.obj: tronco + 3 icosferas solapadas, altura Blender 1.0600.
+	.PLAIN    = {"models/tree/plain_tree.obj", 0.85 / 1.0600, false},
+	// forest_pine.obj: tronco fino + 4 conos apilados, altura Blender 1.3000.
+	.FOREST   = {"models/pine/forest_pine.obj", 0.85 / 1.3000, false},
+	// desert_palm.obj: tronco de 5 segmentos + 8 palmas curvas (ancho
+	// variable, caída progresiva, nervadura central — reconstruidas tras un
+	// primer intento con cajas rígidas que leía como "estrella"), altura
+	// Blender 1.3883.
+	.DESERT   = {"models/palm/desert_palm.obj", 0.85 / 1.3883, false},
+	// mountain_bush.obj: 6 icosferas achaparradas sin tronco, altura Blender
+	// 0.6800 — target de altura en mundo más bajo que los demás (0.45 en vez
+	// de 0.85) a propósito: es un arbusto, no un árbol de tamaño completo.
+	.MOUNTAIN = {"models/bush/mountain_bush.obj", 0.45 / 0.6800, false},
 }
 
 // Corrige un mesh Z-up a Y-up rotando vértices/normales A MANO —
@@ -785,16 +792,54 @@ tree_models_init :: proc() {
 		tree_models[biome] = Tree_Model{
 			model = model,
 			scale = spec.scale,
-			valid = true,
 		}
 	}
 }
 
 tree_models_unload :: proc() {
 	for biome in constants.Biome {
-		if tree_models[biome].valid {
-			raylib.UnloadModel(tree_models[biome].model)
+		raylib.UnloadModel(tree_models[biome].model)
+	}
+}
+
+// Nenúfares reales — mismo mecanismo que tree_models (Tree_Model/tree_shader
+// reusados tal cual, ver render_water_lily_3d), dos variantes en vez de una
+// por bioma: PAD (disco solo) y PAD_FLOWER (disco + rosetón de pétalos),
+// para preservar el 50% de chance de flor por pad que ya tenía la versión
+// procedural vieja. Ambos modelados con radio=1.0 unidad Blender por
+// diseño (`scale = 1.0` acá abajo, sin necesidad de medir bounding box) —
+// el radio final en pantalla sale de escalar uniformemente por `pr` (el
+// radio real 0.09..0.16*cs que ya sorteaba render_water_lily_3d), no de
+// este spec.
+Lily_Model_Kind :: enum {
+	PAD,
+	PAD_FLOWER,
+}
+
+lily_models: [Lily_Model_Kind]Tree_Model
+
+LILY_MODEL_SPECS := [Lily_Model_Kind]Tree_Model_Spec{
+	.PAD        = {"models/waterlily/lily_pad.obj", 1.0, false},
+	.PAD_FLOWER = {"models/waterlily/lily_pad_flower.obj", 1.0, false},
+}
+
+lily_models_init :: proc() {
+	for kind in Lily_Model_Kind {
+		spec := LILY_MODEL_SPECS[kind]
+		model := raylib.LoadModel(spec.path)
+		for i in 0 ..< int(model.materialCount) {
+			model.materials[i].shader = tree_shader.shader
 		}
+		lily_models[kind] = Tree_Model{
+			model = model,
+			scale = spec.scale,
+		}
+	}
+}
+
+lily_models_unload :: proc() {
+	for kind in Lily_Model_Kind {
+		raylib.UnloadModel(lily_models[kind].model)
 	}
 }
 
@@ -865,6 +910,22 @@ _terrain_push_tri :: proc(
 	_terrain_push_vertex(positions, normals, texcoords, colors, v2, n, uv2, c2)
 }
 
+// Triángulo con normal DADA A MANO, no calculada del propio triángulo —
+// para las paredes de orilla (ver _terrain_add_bank_wall): son casi
+// verticales (n.y ≈ 0), así que el "flip si n.y<0" de _terrain_push_tri
+// (pensado para las pendientes suaves del resto del terreno, casi siempre
+// mirando hacia arriba) no tiene un lado claro que elegir ahí y podría
+// voltear la normal para un lado o el otro según ruido de punto flotante,
+// dando sombreado inconsistente pared por pared.
+_terrain_push_wall_tri :: proc(
+	positions, normals, texcoords: ^[dynamic]f32, colors: ^[dynamic]u8,
+	v0, v1, v2: raylib.Vector3, n: raylib.Vector3, uv0, uv1, uv2: raylib.Vector2, c0, c1, c2: raylib.Color,
+) {
+	_terrain_push_vertex(positions, normals, texcoords, colors, v0, n, uv0, c0)
+	_terrain_push_vertex(positions, normals, texcoords, colors, v1, n, uv1, c1)
+	_terrain_push_vertex(positions, normals, texcoords, colors, v2, n, uv2, c2)
+}
+
 // Altura y color "de terreno" (sin camino, eso lo resuelve el shader) de un
 // tile — el agua es plana a WORLD_WATER_HEIGHT, el resto sigue el heightmap.
 _terrain_tile_height_color :: proc(m: ^entities.Map, row, col: i32, biome_colors: constants.Biome_Colors) -> (h: f32, color: raylib.Color) {
@@ -874,12 +935,27 @@ _terrain_tile_height_color :: proc(m: ^entities.Map, row, col: i32, biome_colors
 	return m.heightmap[row][col] * constants.WORLD_HEIGHT_SCALE, biome_colors.bg_grid
 }
 
+// ANY: promedia los hasta 4 tiles que tocan la esquina sin distinguir
+// agua de tierra (comportamiento viejo, el que producía el error que
+// arregla esto — agua no perfectamente plana cerca de la orilla, ver
+// terrain_cache_ensure). LAND/WATER: promedia SOLO los tiles de esa
+// categoría — con esto un tile de agua nunca mezcla su altura con la
+// tierra vecina (todas las esquinas de agua dan exactamente
+// WORLD_WATER_HEIGHT, agua perfectamente plana) y un tile de tierra
+// nunca se hunde/levanta por el agua de al lado (sigue su propio
+// heightmap sin interrupción). El escalón resultante entre las dos
+// categorías se tapa con geometría real, no con una interpolación —
+// ver _terrain_add_bank_wall.
+Terrain_Corner_Category :: enum { ANY, LAND, WATER }
+
 // Altura/color de una esquina de grilla (r,c en [0,height]×[0,width]) —
-// promedio de los hasta 4 tiles que la tocan. Esto es lo que produce el
-// desnivel diagonal: dos tiles vecinos con distinta altura comparten esta
-// esquina, así que la arista entre ellos interpola en vez de cortar en
-// escalón.
-_terrain_corner :: proc(m: ^entities.Map, r, c: i32, biome_colors: constants.Biome_Colors) -> (h: f32, color: [3]f32) {
+// promedio de los tiles que la tocan (los 4, o solo los de `category` si
+// no es .ANY). Con .ANY es lo que produce el desnivel diagonal: dos tiles
+// vecinos con distinta altura comparten esta esquina, así que la arista
+// entre ellos interpola en vez de cortar en escalón — deliberado para
+// tierra-tierra (mismo criterio que siempre), evitado a propósito para
+// agua-tierra (ver arriba).
+_terrain_corner :: proc(m: ^entities.Map, r, c: i32, biome_colors: constants.Biome_Colors, category := Terrain_Corner_Category.ANY) -> (h: f32, color: [3]f32) {
 	sum_h := f32(0)
 	sum_c := [3]f32{0, 0, 0}
 	n := f32(0)
@@ -887,6 +963,10 @@ _terrain_corner :: proc(m: ^entities.Map, r, c: i32, biome_colors: constants.Bio
 		for dc in -1 ..= 0 {
 			tr, tc := r + i32(dr), c + i32(dc)
 			if tr < 0 || tr >= m.height || tc < 0 || tc >= m.width { continue }
+			if category != .ANY {
+				wants_water := category == .WATER
+				if m.water_grid[tr][tc] != wants_water { continue }
+			}
 			th, tcol := _terrain_tile_height_color(m, tr, tc, biome_colors)
 			sum_h += th
 			sum_c += [3]f32{f32(tcol.r), f32(tcol.g), f32(tcol.b)}
@@ -903,11 +983,11 @@ _terrain_corner :: proc(m: ^entities.Map, r, c: i32, biome_colors: constants.Bio
 // ya arma el mesh sin subdividir, así que en u,v ∈ {0,1} da exactamente lo
 // mismo que antes — la subdivisión no cambia el terreno, solo lo hace más
 // denso para poder tallar el camino (ver terrain_cache_ensure).
-_terrain_corner_lerp :: proc(m: ^entities.Map, row, col: i32, u, v: f32, biome_colors: constants.Biome_Colors) -> (h: f32, color: [3]f32) {
-	h_tl, c_tl := _terrain_corner(m, row, col, biome_colors)
-	h_tr, c_tr := _terrain_corner(m, row, col + 1, biome_colors)
-	h_bl, c_bl := _terrain_corner(m, row + 1, col, biome_colors)
-	h_br, c_br := _terrain_corner(m, row + 1, col + 1, biome_colors)
+_terrain_corner_lerp :: proc(m: ^entities.Map, row, col: i32, u, v: f32, biome_colors: constants.Biome_Colors, category := Terrain_Corner_Category.ANY) -> (h: f32, color: [3]f32) {
+	h_tl, c_tl := _terrain_corner(m, row, col, biome_colors, category)
+	h_tr, c_tr := _terrain_corner(m, row, col + 1, biome_colors, category)
+	h_bl, c_bl := _terrain_corner(m, row + 1, col, biome_colors, category)
+	h_br, c_br := _terrain_corner(m, row + 1, col + 1, biome_colors, category)
 
 	h_top := h_tl + (h_tr - h_tl) * u
 	h_bot := h_bl + (h_br - h_bl) * u
@@ -976,11 +1056,80 @@ _path_strip_mask :: proc(m: ^entities.Map, row, col: i32, u, v: f32) -> f32 {
 // jugador realmente ve dibujado.
 terrain_surface_height :: proc(m: ^entities.Map, row, col: i32, u, v: f32) -> f32 {
 	if m.water_grid[row][col] { return constants.WORLD_WATER_HEIGHT }
-	h, _ := _terrain_corner_lerp(m, row, col, u, v, constants.Biome_Colors{})
+	h, _ := _terrain_corner_lerp(m, row, col, u, v, constants.Biome_Colors{}, .LAND)
 	wu := (f32(col) + u) / f32(m.width)
 	wv := (f32(row) + v) / f32(m.height)
 	h -= _path_mask_sample(wu, wv) * constants.PATH_EMBOSS_DEPTH
 	return h
+}
+
+// Pared vertical (banco/orilla) donde un tile de TIERRA linda con uno de
+// AGUA — conecta la altura real de la tierra (su propia interpolación
+// .LAND, sin promediar con el agua) con el nivel plano del agua
+// (WORLD_WATER_HEIGHT), tapando el escalón entre las dos categorías que
+// ahora deja _terrain_corner al no mezclarlas. `land_row`/`land_col` son
+// SIEMPRE el tile de tierra (nunca el de agua) — la pared se arma desde
+// su propio borde, con el mismo _terrain_corner_lerp(.LAND) que ya usa
+// sub_vertex para ese tile, así que el borde superior de la pared
+// coincide vértice a vértice con el borde real de la malla de tierra (sin
+// costura). El borde inferior es agua perfectamente plana en todos lados,
+// así que coincide con CUALQUIER tile de agua vecino sin más cálculo.
+//
+// `fixed_is_u`+`fixed_value` ubican el borde del tile de tierra que da al
+// agua (u=1 borde derecho, u=0 izquierdo, v=1 abajo, v=0 arriba);
+// `outward_normal` apunta hacia el agua (lejos de la tierra) — se pasa a
+// mano en vez de calcularla del triángulo porque una pared casi vertical
+// (n.y≈0) no tiene un lado "hacia arriba" claro del que _terrain_push_tri
+// pueda partir (ver _terrain_push_wall_tri).
+//
+// Funciona sin importar si la tierra queda más alta o más baja que el
+// agua en cada tramo — el agua se pinta a mano en el editor, sin relación
+// con el heightmap de abajo, así que no hay que asumir ninguna de las dos
+// direcciones (ver el pedido original que motivó esto).
+_terrain_add_bank_wall :: proc(
+	positions, normals, texcoords: ^[dynamic]f32, colors: ^[dynamic]u8,
+	m: ^entities.Map, land_row, land_col: i32, biome_colors: constants.Biome_Colors,
+	fixed_is_u: bool, fixed_value: f32, outward_normal: raylib.Vector3,
+) {
+	cs := constants.WORLD_CELL_SIZE
+	SUBDIV :: constants.TERRAIN_MESH_SUBDIV
+	for i in i32(0) ..< SUBDIV {
+		t0 := f32(i) / f32(SUBDIV)
+		t1 := f32(i + 1) / f32(SUBDIV)
+
+		u0 := fixed_value if fixed_is_u else t0
+		v0 := t0 if fixed_is_u else fixed_value
+		u1 := fixed_value if fixed_is_u else t1
+		v1 := t1 if fixed_is_u else fixed_value
+
+		h0, col3_0 := _terrain_corner_lerp(m, land_row, land_col, u0, v0, biome_colors, .LAND)
+		h1, col3_1 := _terrain_corner_lerp(m, land_row, land_col, u1, v1, biome_colors, .LAND)
+		c0 := raylib.Color{u8(col3_0.r), u8(col3_0.g), u8(col3_0.b), 255}
+		c1 := raylib.Color{u8(col3_1.r), u8(col3_1.g), u8(col3_1.b), 255}
+
+		wx0 := (f32(land_col) + u0) * cs
+		wz0 := (f32(land_row) + v0) * cs
+		wx1 := (f32(land_col) + u1) * cs
+		wz1 := (f32(land_row) + v1) * cs
+
+		top0 := raylib.Vector3{wx0, h0, wz0}
+		top1 := raylib.Vector3{wx1, h1, wz1}
+		bot0 := raylib.Vector3{wx0, constants.WORLD_WATER_HEIGHT, wz0}
+		bot1 := raylib.Vector3{wx1, constants.WORLD_WATER_HEIGHT, wz1}
+
+		// UV en espacio de mundo normalizado (wc/width, wr/height) — el
+		// MISMO convenio que sub_vertex, no un UV local 0..1 por segmento:
+		// esta pared entra al mismo mesh que el resto del terreno, bajo el
+		// mismo lighting_shader con useTerrainMask activo, así que su
+		// texcoord tiene que apuntar al lugar correcto de texture0/texture1
+		// (máscaras de camino/agua) — un UV local samplearía esas texturas
+		// en un punto cualquiera y podría pintar camino/agua donde no va.
+		uv0 := raylib.Vector2{wx0 / (f32(m.width) * cs), wz0 / (f32(m.height) * cs)}
+		uv1 := raylib.Vector2{wx1 / (f32(m.width) * cs), wz1 / (f32(m.height) * cs)}
+
+		_terrain_push_wall_tri(positions, normals, texcoords, colors, bot0, bot1, top1, outward_normal, uv0, uv1, uv1, c0, c1, c1)
+		_terrain_push_wall_tri(positions, normals, texcoords, colors, bot0, top1, top0, outward_normal, uv0, uv1, uv0, c0, c1, c0)
+	}
 }
 
 terrain_cache_ensure :: proc(m: ^entities.Map) {
@@ -1009,7 +1158,12 @@ terrain_cache_ensure :: proc(m: ^entities.Map) {
 	sub_vertex :: proc(m: ^entities.Map, row, col, su, sv: i32, biome_colors: constants.Biome_Colors, cs: f32) -> (pos: raylib.Vector3, uv: raylib.Vector2, color: raylib.Color) {
 		u := f32(su) / f32(SUBDIV)
 		v := f32(sv) / f32(SUBDIV)
-		h, col3 := _terrain_corner_lerp(m, row, col, u, v, biome_colors)
+		// Categoría del PROPIO tile — un tile de agua nunca promedia con la
+		// tierra vecina (queda perfectamente plano) y viceversa (ver
+		// Terrain_Corner_Category). El escalón resultante se tapa aparte,
+		// ver la pasada de _terrain_add_bank_wall más abajo.
+		category := Terrain_Corner_Category.WATER if m.water_grid[row][col] else Terrain_Corner_Category.LAND
+		h, col3 := _terrain_corner_lerp(m, row, col, u, v, biome_colors, category)
 		wc := f32(col) + u
 		wr := f32(row) + v
 		pos = {wc * cs, h, wr * cs}
@@ -1030,6 +1184,61 @@ terrain_cache_ensure :: proc(m: ^entities.Map) {
 					// 2 triángulos por sub-quad, CCW visto desde +Y en ambos.
 					_terrain_push_tri(&positions, &normals, &texcoords, &colors, p_tl, p_bl, p_tr, uv_tl, uv_bl, uv_tr, c_tl, c_bl, c_tr)
 					_terrain_push_tri(&positions, &normals, &texcoords, &colors, p_tr, p_bl, p_br, uv_tr, uv_bl, uv_br, c_tr, c_bl, c_br)
+				}
+			}
+		}
+	}
+
+	// Un tile de agua que además es PATH/SPAWN/GOAL es un puente (piso
+	// propio dibujado por render_bridge_3d, a nivel de la tierra — ver el
+	// comentario ahí) y no una orilla real. La pared NO debe salir ahí: el
+	// puente ya resuelve la conexión visual con la tierra por su cuenta
+	// (piso + barandas), una pared cortando justo donde arranca se vería
+	// mal. Mismo criterio de clasificación que is_path_like en
+	// render_bridge_3d, pero mirando el tile en sí (no sus vecinos).
+	_is_bridge_water :: proc(m: ^entities.Map, r, c: i32) -> bool {
+		if !m.water_grid[r][c] { return false }
+		t := m.grid[r][c]
+		return t == .PATH || t == .SPAWN || t == .GOAL
+	}
+
+	// Paredes de orilla — un solo barrido por borde HORIZONTAL (col/col+1)
+	// y otro por VERTICAL (row/row+1) entre tiles de categoría distinta,
+	// cada arista visitada una sola vez (solo se mira el vecino de la
+	// derecha/abajo, nunca el de la izquierda/arriba — si se miraran los
+	// dos, cada borde saldría duplicado). Ver _terrain_add_bank_wall para
+	// el porqué completo.
+	for row in 0 ..< m.height {
+		for col in 0 ..< m.width {
+			is_water := m.water_grid[row][col]
+
+			if col + 1 < m.width && m.water_grid[row][col + 1] != is_water {
+				if is_water {
+					// este tile es agua, el de la derecha es tierra: la
+					// pared la arma el de tierra, por su borde IZQUIERDO
+					// (u=0), mirando hacia -X (hacia el agua).
+					if !_is_bridge_water(m, row, col) {
+						_terrain_add_bank_wall(&positions, &normals, &texcoords, &colors, m, row, col + 1, biome_colors, true, 0, {-1, 0, 0})
+					}
+				} else {
+					// este tile es tierra, el de la derecha es agua: la
+					// pared la arma este mismo tile, por su borde DERECHO
+					// (u=1), mirando hacia +X.
+					if !_is_bridge_water(m, row, col + 1) {
+						_terrain_add_bank_wall(&positions, &normals, &texcoords, &colors, m, row, col, biome_colors, true, 1, {1, 0, 0})
+					}
+				}
+			}
+
+			if row + 1 < m.height && m.water_grid[row + 1][col] != is_water {
+				if is_water {
+					if !_is_bridge_water(m, row, col) {
+						_terrain_add_bank_wall(&positions, &normals, &texcoords, &colors, m, row + 1, col, biome_colors, false, 0, {0, 0, -1})
+					}
+				} else {
+					if !_is_bridge_water(m, row + 1, col) {
+						_terrain_add_bank_wall(&positions, &normals, &texcoords, &colors, m, row, col, biome_colors, false, 1, {0, 0, 1})
+					}
 				}
 			}
 		}
@@ -1440,12 +1649,13 @@ render_shadow_depth_pass :: proc(app: ^entities.App_State, m: ^entities.Map, sun
 				}
 			case .ACCESSORY_TREE:
 				if !m.water_grid[row][col] {
-					// Misma altura real que la pasada visible (ver la nota en
-					// render_map_objects_3d) — si no, la sombra se proyecta
+					// Mismo offset+altura real que la pasada visible (ver la nota
+					// en render_map_objects_3d) — si no, la sombra se proyecta
 					// desde una posición distinta a donde el árbol realmente
 					// se ve, y queda notoriamente desalineada del propio árbol.
-					tree_y := terrain_surface_height(m, row, col, 0.5, 0.5)
-					tree_surface := raylib.Vector3{surface.x, tree_y, surface.z}
+					u, v, dx, dz := tree_tile_offset(row, col)
+					tree_y := terrain_surface_height(m, row, col, u, v)
+					tree_surface := raylib.Vector3{surface.x + dx, tree_y, surface.z + dz}
 					render_tree_shadow_3d(tree_surface, m.biome, row, col)
 				}
 			case .ACCESSORY_BLOCK:
@@ -1697,9 +1907,29 @@ render_tower_3d :: proc(tower: ^entities.Tower, m: ^entities.Map) {
 // no vive ahí — quedó horneada en los vértices del mesh en
 // tree_models_init (_fix_model_z_up), así que acá no hay dos rotaciones
 // que combinar, una sola.
+// Offset determinístico (mismo hash-por-tile que el resto de la variación
+// visual) para que el árbol no quede plantado justo en el centro exacto de
+// la celda — usado tanto por la pasada visible como por la de sombra (ver
+// las dos llamadas a esta función), con los MISMOS índices de hash_random,
+// para que la sombra no se desalinee del árbol que la tira (mismo criterio
+// que ya aplica el yaw). Devuelve u,v en [0,1] (para sampleear la altura
+// real del terreno en ese punto exacto vía terrain_surface_height, no en
+// el centro) y el offset ya convertido a unidades de mundo en x/z. Rango
+// ±0.25 de la celda — deja margen para no cruzar al tile vecino ni pisar
+// el camino en una esquina/unión.
+tree_tile_offset :: proc(row, col: i32) -> (u, v, world_dx, world_dz: f32) {
+	cs := constants.WORLD_CELL_SIZE
+	ju := (hash_random(row, col, 11) - 0.5) * 0.5
+	jv := (hash_random(row, col, 13) - 0.5) * 0.5
+	u = 0.5 + ju
+	v = 0.5 + jv
+	world_dx = ju * cs
+	world_dz = jv * cs
+	return
+}
+
 render_tree_3d :: proc(center: raylib.Vector3, biome: constants.Biome, row, col: i32) {
 	tm := tree_models[biome]
-	if !tm.valid { return }
 	yaw := hash_random(row, col, 7) * 360.0
 	raylib.DrawModelEx(tm.model, center, {0, 1, 0}, yaw, {tm.scale, tm.scale, tm.scale}, raylib.WHITE)
 	raylib.BeginShaderMode(lighting_shader.shader)
@@ -1724,7 +1954,6 @@ render_tree_3d :: proc(center: raylib.Vector3, biome: constants.Biome, row, col:
 // todos los demás casters.
 render_tree_shadow_3d :: proc(center: raylib.Vector3, biome: constants.Biome, row, col: i32) {
 	tm := tree_models[biome]
-	if !tm.valid { return }
 	// Mismo yaw que render_tree_3d (mismo hash, mismo row/col) — si no, la
 	// sombra proyectada gira distinto que el árbol que la tira.
 	yaw := hash_random(row, col, 7) * 360.0
@@ -1857,13 +2086,18 @@ render_bridge_3d :: proc(m: ^entities.Map) {
 	}
 }
 
-// Nenúfar 3D — versión del viejo render_water_lily (2D, eliminado) para
-// árboles que caen en tile de agua. Discos chatos (cilindros muy bajos,
-// simulan un círculo plano — raylib no tiene un DrawCircle3D relleno)
-// apoyados sobre el agua en vez de círculos de pantalla; misma semilla
-// determinística por tile (hash_position/hash_random, definidas más abajo)
-// y misma deriva animada que la versión 2D, ahora usando
-// lighting_shader.caustics_anim_time (water_shader ya no existe).
+// Nenúfar 3D — modelos reales (lily_models, ver arriba) en vez de los
+// cilindros a mano de la versión anterior. Misma semilla determinística por
+// tile (hash_position/hash_random, definidas más abajo), misma cantidad de
+// pads, mismo rango de radio/posición/deriva animada (lighting_shader.
+// caustics_anim_time) y mismo 50% de chance de flor por pad — lo único que
+// cambia es CÓMO se dibuja cada pad (DrawModelEx en vez de DrawCylinder) y
+// que ahora tiene un yaw aleatorio propio (el disco viejo era perfectamente
+// simétrico así que no le hacía falta; el modelo real tiene una muesca en
+// el borde, así que sí). DrawModelEx ignora el BeginShaderMode activo del
+// llamador (usa material.shader directo, mismo caso que render_tree_3d) —
+// por eso reactiva lighting_shader.shader al final, para las formas
+// inmediatas que el resto del loop siga dibujando después.
 render_water_lily_3d :: proc(center: raylib.Vector3, row, col: i32) {
 	cs := constants.WORLD_CELL_SIZE
 	seed := hash_position(row, col)
@@ -1880,6 +2114,7 @@ render_water_lily_3d :: proc(center: raylib.Vector3, row, col: i32) {
 		local_x := (rng(&s) * 0.70 + 0.15 - 0.5) * cs
 		local_z := (rng(&s) * 0.70 + 0.15 - 0.5) * cs
 		pr := cs * (0.09 + rng(&s) * 0.07)  // radio 0.09..0.16 de cs
+		yaw := rng(&s) * 360.0
 
 		// Deriva suave sobre el agua — fase y frecuencia propias por pad.
 		phase := rng(&s) * 6.2832
@@ -1889,25 +2124,16 @@ render_water_lily_3d :: proc(center: raylib.Vector3, row, col: i32) {
 		dz := math.sin(t * freq * 0.8 + phase) * amp * 0.6
 
 		pad_pos := raylib.Vector3{center.x + local_x + dx, center.y + 0.02, center.z + local_z + dz}
-		raylib.DrawCylinder(pad_pos, pr, pr, 0.02, 12, raylib.Color{40, 110, 50, 230})
-		raylib.DrawCylinderWires(pad_pos, pr, pr, 0.02, 12, raylib.Color{70, 150, 70, 160})
 
-		// 50% de chance de una florcita rosa sobre el pad.
+		kind := Lily_Model_Kind.PAD
 		if rng(&s) > 0.5 {
-			fr := cs * (0.016 + rng(&s) * 0.023)
-			flower_pos := raylib.Vector3{pad_pos.x, pad_pos.y + 0.015, pad_pos.z}
-			for p in 0 ..< 5 {
-				a := f32(p) * 1.2566  // 2π/5
-				ppos := raylib.Vector3{
-					flower_pos.x + math.cos(a) * fr * 1.6,
-					flower_pos.y,
-					flower_pos.z + math.sin(a) * fr * 1.6,
-				}
-				raylib.DrawCylinder(ppos, fr, fr, 0.015, 8, raylib.Color{255, 150, 190, 240})
-			}
-			raylib.DrawCylinder(flower_pos, fr * 0.6, fr * 0.6, 0.018, 8, raylib.Color{255, 230, 80, 255})
+			kind = .PAD_FLOWER
 		}
+		lm := lily_models[kind]
+		sc := pr * lm.scale
+		raylib.DrawModelEx(lm.model, pad_pos, {0, 1, 0}, yaw, {sc, sc, sc}, raylib.WHITE)
 	}
+	raylib.BeginShaderMode(lighting_shader.shader)
 }
 
 render_tower_ranges_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
@@ -2011,7 +2237,6 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	// ── Objetos del mapa ── (formas sólidas con normal — se iluminan; los
 	// rings/reticles/overlays de arriba y abajo se quedan con el shader
 	// default a propósito, ver Lighting_Shader).
-	biome_colors := constants.BIOME_COLORS[m.biome]  // para el promedio de altura de agua bajo los nenúfares, ver caso ACCESSORY_TREE
 	raylib.BeginShaderMode(lighting_shader.shader)
 	for row in 0 ..< m.height {
 		for col in 0 ..< m.width {
@@ -2049,23 +2274,14 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 				raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_specular_strength, &tower_spec_off, .FLOAT)
 			case .ACCESSORY_TREE:
 				if m.water_grid[row][col] {
-					// La malla del terreno promedia la altura por ESQUINA
-					// compartida entre tiles vecinos (ver _terrain_corner) —
-					// un tile de agua junto a tierra no queda perfectamente
-					// plano en WORLD_WATER_HEIGHT cerca del borde. Promediar
-					// las 4 esquinas del tile da la altura real de la
-					// superficie en el centro (donde se planta el nenúfar),
-					// para que quede apoyado en el agua y no floreciendo por
-					// encima o hundido.
-					water_y := f32(0)
-					for dr in 0 ..= 1 {
-						for dc in 0 ..= 1 {
-							h, _ := _terrain_corner(m, row + i32(dr), col + i32(dc), biome_colors)
-							water_y += h
-						}
-					}
-					water_y *= 0.25
-					lily_center := raylib.Vector3{surface.x, water_y, surface.z}
+					// El agua es perfectamente plana en toda la malla ahora
+					// (_terrain_corner por categoría, ver Terrain_Corner_Category
+					// más arriba — un tile de agua nunca promedia su altura
+					// con la tierra vecina), así que no hace falta promediar
+					// esquinas para saber dónde apoyar el nenúfar: es
+					// WORLD_WATER_HEIGHT en cualquier punto de un tile de
+					// agua, sin excepción.
+					lily_center := raylib.Vector3{surface.x, constants.WORLD_WATER_HEIGHT, surface.z}
 					render_water_lily_3d(lily_center, row, col)
 				} else {
 					// surface.y es la altura CRUDA del tile (tile_world_top, sin
@@ -2074,8 +2290,9 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 					// y el nenúfar de arriba), así que plantar el árbol ahí lo
 					// dejaba flotando o hundido según cómo diera el heightmap
 					// crudo contra el promedio real en ese punto.
-					tree_y := terrain_surface_height(m, row, col, 0.5, 0.5)
-					tree_surface := raylib.Vector3{surface.x, tree_y, surface.z}
+					u, v, dx, dz := tree_tile_offset(row, col)
+					tree_y := terrain_surface_height(m, row, col, u, v)
+					tree_surface := raylib.Vector3{surface.x + dx, tree_y, surface.z + dz}
 					render_tree_3d(tree_surface, m.biome, row, col)
 				}
 			case .ACCESSORY_BLOCK:
@@ -2636,6 +2853,32 @@ draw_grid_line_ribbon_3d :: proc(p0, p1: raylib.Vector3, width: f32, color: rayl
 	rlgl.End()
 }
 
+// Dibuja un segmento de grilla entre dos puntos de esquina (r0,c0)-(r1,c1),
+// con la altura resuelta para UNA categoría (agua o tierra) — ver el
+// comentario grande en render_grid_lines_3d sobre por qué hace falta
+// elegir categoría acá también, no solo en la malla real. En un punto de
+// esquina exacto (u,v ∈ {0,1}), _terrain_corner_lerp se reduce exactamente
+// a _terrain_corner sin pasar por ningún tile "dueño" — por eso alcanza
+// con pedirle la esquina directo, igual que hace terrain_cache_ensure.
+_grid_draw_segment :: proc(m: ^entities.Map, biome_colors: constants.Biome_Colors, r0, c0, r1, c1: i32, x0, z0, x1, z1: f32, is_water: bool, lift: f32) {
+	category := Terrain_Corner_Category.WATER if is_water else .LAND
+	h0, _ := _terrain_corner(m, r0, c0, biome_colors, category)
+	h1, _ := _terrain_corner(m, r1, c1, biome_colors, category)
+	draw_grid_line_ribbon_3d({x0, h0 + lift, z0}, {x1, h1 + lift, z1}, GRID_LINE_WIDTH, constants.COLOR_GRID_LINE)
+}
+
+// La grilla no puede seguir usando _terrain_corner sin categoría (.ANY):
+// desde que el agua es plana de verdad y la tierra tiene su propio
+// desnivel sin mezclarse (Terrain_Corner_Category, ver más arriba), un
+// punto de esquina compartido entre un tile de agua y uno de tierra YA NO
+// tiene una única altura — tiene DOS, una por lado, con un escalón real
+// entre ellas (la pared de orilla). Un segmento de grilla que cruza ese
+// borde necesita la misma categoría que el tile al que pertenece: si los
+// dos tiles que tocan el segmento son de la MISMA categoría, una sola
+// línea alcanza (da la altura de siempre, sin cambios); si son de
+// categorías DISTINTAS, se dibujan DOS líneas superpuestas en X/Z pero a
+// la altura de cada lado — la grilla también "escalona" en la orilla, en
+// vez de flotar a una altura promedio que no es ninguna de las dos reales.
 render_grid_lines_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 	cs := constants.WORLD_CELL_SIZE
 	biome_colors := constants.BIOME_COLORS[m.biome]
@@ -2649,20 +2892,40 @@ render_grid_lines_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 
 	for r in 0 ..= m.height {
 		for c in 0 ..= m.width {
-			// _terrain_corner ya devuelve la altura final en unidades de mundo
-			// (la escala se aplica adentro, en _terrain_tile_height_color) —
-			// no volver a multiplicar por WORLD_HEIGHT_SCALE acá.
-			h, _ := _terrain_corner(m, r, c, biome_colors)
-			y := h + LIFT
+			// Segmento horizontal (r,c)-(r,c+1): lo bordean el tile de
+			// ARRIBA (r-1,c) y el de ABAJO (r,c) — la fila de tiles a cada
+			// lado de esta línea de grilla en Z.
 			if c < m.width {
-				h2, _ := _terrain_corner(m, r, c + 1, biome_colors)
-				y2 := h2 + LIFT
-				draw_grid_line_ribbon_3d({f32(c) * cs, y, f32(r) * cs}, {f32(c + 1) * cs, y2, f32(r) * cs}, GRID_LINE_WIDTH, constants.COLOR_GRID_LINE)
+				x0, x1 := f32(c) * cs, f32(c + 1) * cs
+				z := f32(r) * cs
+				has_above := r > 0
+				has_below := r < m.height
+				cat_above := m.water_grid[r - 1][c] if has_above else false
+				cat_below := m.water_grid[r][c] if has_below else false
+				if has_above && has_below && cat_above != cat_below {
+					_grid_draw_segment(m, biome_colors, r, c, r, c + 1, x0, z, x1, z, cat_above, LIFT)
+					_grid_draw_segment(m, biome_colors, r, c, r, c + 1, x0, z, x1, z, cat_below, LIFT)
+				} else if has_above || has_below {
+					cat := cat_above if has_above else cat_below
+					_grid_draw_segment(m, biome_colors, r, c, r, c + 1, x0, z, x1, z, cat, LIFT)
+				}
 			}
+			// Segmento vertical (r,c)-(r+1,c): lo bordean el tile de la
+			// IZQUIERDA (r,c-1) y el de la DERECHA (r,c).
 			if r < m.height {
-				h2, _ := _terrain_corner(m, r + 1, c, biome_colors)
-				y2 := h2 + LIFT
-				draw_grid_line_ribbon_3d({f32(c) * cs, y, f32(r) * cs}, {f32(c) * cs, y2, f32(r + 1) * cs}, GRID_LINE_WIDTH, constants.COLOR_GRID_LINE)
+				x := f32(c) * cs
+				z0, z1 := f32(r) * cs, f32(r + 1) * cs
+				has_left := c > 0
+				has_right := c < m.width
+				cat_left := m.water_grid[r][c - 1] if has_left else false
+				cat_right := m.water_grid[r][c] if has_right else false
+				if has_left && has_right && cat_left != cat_right {
+					_grid_draw_segment(m, biome_colors, r, c, r + 1, c, x, z0, x, z1, cat_left, LIFT)
+					_grid_draw_segment(m, biome_colors, r, c, r + 1, c, x, z0, x, z1, cat_right, LIFT)
+				} else if has_left || has_right {
+					cat := cat_left if has_left else cat_right
+					_grid_draw_segment(m, biome_colors, r, c, r + 1, c, x, z0, x, z1, cat, LIFT)
+				}
 			}
 		}
 	}
