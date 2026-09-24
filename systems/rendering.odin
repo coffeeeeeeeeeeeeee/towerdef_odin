@@ -843,6 +843,68 @@ lily_models_unload :: proc() {
 	}
 }
 
+// Casas/rocas por bioma para ACCESSORY_BLOCK — mismo mecanismo que
+// tree_models (Tree_Model/tree_shader reusados tal cual). Reemplazan al
+// cubo genérico que dibujaba antes render_block_3d. MOUNTAIN no es una
+// casa (el ícono 2D de referencia, render_block más abajo en este mismo
+// archivo, ya lo dibuja como rocas, no como construcción) — un cluster de
+// rocas angulares en vez de una cuarta casa, a pedido explícito.
+BLOCK_MODEL_SPECS := [constants.Biome]Tree_Model_Spec{
+	// plain_house.obj: paredes + techo a dos aguas terracota + chimenea,
+	// altura Blender 0.5600.
+	.PLAIN    = {"models/house_plain/plain_house.obj", 0.35 / 0.5600, false},
+	// forest_cabin.obj: mismo esquema, madera oscura + techo más oscuro,
+	// altura Blender 0.5200.
+	.FOREST   = {"models/house_forest/forest_cabin.obj", 0.35 / 0.5200, false},
+	// desert_adobe.obj: bloque bajo + anexo asimétrico, techo plano. A
+	// diferencia de las demás, esta NO escala por altura (0.2200, muy baja
+	// por diseño — es una construcción chata de adobe) sino por ANCHO
+	// (footprint Blender X 0.6400) igualado al ancho final que ya dan
+	// PLAIN/FOREST tras su propio scale (~0.379) — escalar por altura como
+	// las demás inflaba el ancho final a ~0.95 (2.5x más ancha que el
+	// resto) porque el adobe es mucho más ancho que alto en su diseño
+	// original. Resultado: mismo footprint que el resto, más baja (según
+	// corresponde a su diseño), en vez de mismo alto y desproporcionada.
+	.DESERT   = {"models/house_desert/desert_adobe.obj", 0.379 / 0.6400, false},
+	// mountain_rocks.obj: 2 rocas angulares (polígonos irregulares
+	// ahusados), altura Blender 0.2993.
+	.MOUNTAIN = {"models/rocks_mountain/mountain_rocks.obj", 0.35 / 0.2993, false},
+}
+
+block_models: [constants.Biome]Tree_Model
+
+block_models_init :: proc() {
+	for biome in constants.Biome {
+		spec := BLOCK_MODEL_SPECS[biome]
+		model := raylib.LoadModel(spec.path)
+		for i in 0 ..< int(model.materialCount) {
+			model.materials[i].shader = tree_shader.shader
+		}
+		block_models[biome] = Tree_Model{
+			model = model,
+			scale = spec.scale,
+		}
+	}
+}
+
+block_models_unload :: proc() {
+	for biome in constants.Biome {
+		raylib.UnloadModel(block_models[biome].model)
+	}
+}
+
+// Multiplicador de escala por nivel de obstáculo (1-3) — mismo ratio que
+// ya usaba el cubo genérico viejo (`h := cs*(0.35 + (lvl-1)*0.15)`),
+// normalizado contra el nivel 1 (que es la altura de referencia de
+// BLOCK_MODEL_SPECS): nivel 2 queda ~1.43x más grande que nivel 1, nivel 3
+// ~1.86x — escala el modelo ENTERO (no solo la altura como hacía el
+// cubo), así que en nivel 3 la casa también se ve más ancha/imponente,
+// no solo más alta.
+block_level_scale :: proc(level: i32) -> f32 {
+	lvl := clamp(level, 1, 3)
+	return (0.35 + f32(lvl - 1) * 0.15) / 0.35
+}
+
 // ── Malla cacheada del terreno (plano continuo, desniveles diagonales) ─────
 // Se construye una sola vez por run (invalidada en simulation_fit_camera):
 // una grilla de (width+1)×(height+1) vértices — un vértice por esquina
@@ -1660,7 +1722,7 @@ render_shadow_depth_pass :: proc(app: ^entities.App_State, m: ^entities.Map, sun
 				}
 			case .ACCESSORY_BLOCK:
 				blk_level := entities.map_get_obstacle_level(m, row, col)
-				render_block_3d(surface, m.biome, blk_level)
+				render_block_shadow_3d(surface, m.biome, blk_level, row, col)
 			}
 		}
 	}
@@ -1966,13 +2028,38 @@ render_tree_shadow_3d :: proc(center: raylib.Vector3, biome: constants.Biome, ro
 	}
 }
 
-render_block_3d :: proc(center: raylib.Vector3, biome: constants.Biome, level: i32) {
-	cs := constants.WORLD_CELL_SIZE
-	lvl := clamp(level, 1, 3)
-	h := cs * (0.35 + f32(lvl - 1) * 0.15)
-	color := constants.BIOME_TREE_COLORS[biome].trunk
-	pos := raylib.Vector3{center.x, center.y + h * 0.5, center.z}
-	raylib.DrawCube(pos, cs * 0.75, h, cs * 0.75, color)
+// Yaw en pasos de 90° (no un ángulo libre como los árboles) — la silueta
+// es rectangular, no radialmente simétrica, así que un giro arbitrario
+// haría que la casa sobresalga del tile en las esquinas; 4 orientaciones
+// alcanzan para que no todas miren para el mismo lado sin arriesgar eso.
+block_tile_yaw :: proc(row, col: i32) -> f32 {
+	step := i32(hash_random(row, col, 17) * 4)
+	return f32(step) * 90.0
+}
+
+render_block_3d :: proc(center: raylib.Vector3, biome: constants.Biome, level: i32, row, col: i32) {
+	bm := block_models[biome]
+	sc := bm.scale * block_level_scale(level)
+	yaw := block_tile_yaw(row, col)
+	raylib.DrawModelEx(bm.model, center, {0, 1, 0}, yaw, {sc, sc, sc}, raylib.WHITE)
+	raylib.BeginShaderMode(lighting_shader.shader)
+}
+
+// Sombra real — mismo modelo/yaw/escala que render_block_3d, mismo patrón
+// de pisar el shader del material a shadow_map.depth_shader (ver la nota
+// larga en render_tree_shadow_3d, aplica igual acá: DrawModelEx usa
+// material.shader directo, no lo que esté activo vía BeginShaderMode).
+render_block_shadow_3d :: proc(center: raylib.Vector3, biome: constants.Biome, level: i32, row, col: i32) {
+	bm := block_models[biome]
+	sc := bm.scale * block_level_scale(level)
+	yaw := block_tile_yaw(row, col)
+	for i in 0 ..< int(bm.model.materialCount) {
+		bm.model.materials[i].shader = shadow_map.depth_shader
+	}
+	raylib.DrawModelEx(bm.model, center, {0, 1, 0}, yaw, {sc, sc, sc}, raylib.WHITE)
+	for i in 0 ..< int(bm.model.materialCount) {
+		bm.model.materials[i].shader = tree_shader.shader
+	}
 }
 
 // Barrera de obstáculo simplificada: caja orientada según a qué lado del
@@ -2297,7 +2384,7 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 				}
 			case .ACCESSORY_BLOCK:
 				blk_level := entities.map_get_obstacle_level(m, row, col)
-				render_block_3d(surface, m.biome, blk_level)
+				render_block_3d(surface, m.biome, blk_level, row, col)
 			}
 		}
 	}

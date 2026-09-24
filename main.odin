@@ -133,6 +133,10 @@ main :: proc() {
 	systems.lily_models_init()
 	defer systems.lily_models_unload()
 
+	// Casas/rocas por bioma (ACCESSORY_BLOCK) — mismo tree_shader.
+	systems.block_models_init()
+	defer systems.block_models_unload()
+
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
 	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)

@@ -1470,6 +1470,50 @@ también (se detectó y arregló un leak real: `hit_particles` no se liberaba).
   ghost se pinta rojo con X). Criterio: ≥3 vecinos path = junction, 2
   vecinos no opuestos = corner.
 
+### Casas/rocas reales por bioma (`block_models`, `render_block_3d`)
+
+`ACCESSORY_BLOCK` (los obstáculos "de construcción", no las barreras del
+camino de arriba) dibujaba un `DrawCube` genérico del color de tronco del
+bioma (`BIOME_TREE_COLORS[...].trunk`) — reemplazado por 4 modelos reales
+propios, mismo mecanismo que `tree_models`/`lily_models` (`Tree_Model`/
+`tree_shader` reusados, `BLOCK_MODEL_SPECS` con la misma forma que
+`TREE_MODEL_SPECS`, `block_models_init/unload` hookeados en `main.odin`
+después de `lily_models_init`). El ícono top-down 2D que ya existía de
+referencia (`render_block`, más abajo en este mismo archivo — sigue
+usándose para el preview de obstáculo en la paleta del editor, ver
+`systems/menus.odin:688`) define el estilo por bioma que estos modelos
+respetan: PLAIN y FOREST son casas (techo a dos aguas terracota/oscuro +
+chimenea), DESERT es una construcción de adobe (bloque bajo + anexo
+asimétrico, techo plano, sin chimenea), y MOUNTAIN **no es una casa** — el
+ícono 2D de ese bioma dibuja rocas, así que `mountain_rocks.obj` es un
+cluster de 2 rocas angulares (polígonos irregulares ahusados, no
+esferas/prismas lisos) en vez de una cuarta construcción.
+
+**Escala por nivel** (`block_level_scale`): los obstáculos tienen 1-3
+niveles (`map_get_obstacle_level`); el cubo viejo solo crecía en altura
+(`h := cs*(0.35 + (lvl-1)*0.15)`). Con modelos reales, `block_level_scale`
+reproduce el mismo ratio (nivel 2 ≈1.43×, nivel 3 ≈1.86× el nivel 1) pero
+escalando el modelo ENTERO vía `DrawModelEx` — en nivel 3 la casa también
+se ve más ancha/imponente, no solo más alta. `BLOCK_MODEL_SPECS[...].scale`
+usa como target de altura 0.35 (la altura de nivel 1 del cubo viejo), y
+`render_block_3d`/`render_block_shadow_3d` multiplican ese `scale` por
+`block_level_scale(level)` en cada draw.
+
+**Yaw en pasos de 90°, no libre** (`block_tile_yaw`): a diferencia de los
+árboles (silueta radialmente simétrica, cualquier ángulo sirve), una casa
+tiene una silueta rectangular — un yaw arbitrario la haría sobresalir del
+tile en las esquinas. `block_tile_yaw` sortea uno de 4 pasos de 90° por
+tile (mismo `hash_random` determinístico de siempre, índice 17 — no pisa
+el 7 del yaw de árbol, ni el 11/13 del offset, ni el 0 del nenúfar).
+
+**Pasada de sombra separada** (`render_block_shadow_3d`), mismo criterio
+que `render_tree_shadow_3d`: `DrawModelEx` usa `material.shader` directo,
+así que hay que pisarlo a `shadow_map.depth_shader` antes de dibujar y
+devolverlo a `tree_shader` después, o el modelo queda "roto" la próxima
+vez que se dibuje en la pasada visible. Mismo yaw que la pasada visible
+(mismo `row,col` → mismo `hash_random`), si no la sombra rota distinto que
+la casa que la tira.
+
 ## Modal de confirmación Sí/No (`Confirm_Modal`)
 
 `app.confirm_modal` (`entities/app.odin`, `Confirm_Modal{active, text, action}`)
