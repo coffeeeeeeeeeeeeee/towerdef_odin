@@ -1768,14 +1768,14 @@ render_shadow_depth_pass :: proc(app: ^entities.App_State, m: ^entities.Map, sun
 				found := false
 				for &tower in app.sim.towers {
 					if tower.r == row && tower.c == col {
-						render_tower_3d(&tower, m)
+						render_tower_shadow_3d(&tower, m)
 						found = true
 						break
 					}
 				}
 				if !found {
 					tower_type := tile_to_tower_type(tile)
-					draw_tower_shape_3d(surface, constants.WORLD_CELL_SIZE, 0, 0, raylib.WHITE, 255, tower_type_has_barrel(tower_type))
+					draw_tower_model_shadow_3d(tower_type, surface, 0, 0)
 				}
 			case .ACCESSORY_TREE:
 				if !m.water_grid[row][col] {
@@ -1882,153 +1882,145 @@ tile_world_top :: proc(m: ^entities.Map, row, col: i32) -> (center: raylib.Vecto
 	return
 }
 
-// Cuerpo (cilindro) + cañón orientado por `angle` (mismo ángulo 2D que ya usa
-// el juego: atan2(dz, dx) sobre el plano XZ) — usado tanto por torres reales
-// como por el ghost de construcción. `alpha` permite semitransparencia (ghost).
-// `has_barrel` lo apaga para hielo/potenciador — no apuntan a un blanco como
-// las torres de daño directo, no tiene sentido que tengan cañón.
-// raylib.DrawCylinder()/DrawCylinderEx() no llaman rlNormal3f — el atributo
-// de normal que le llega al shader es el que haya quedado de la última
-// llamada a rlNormal3f en TODO el frame (constante, no varía por vértice),
-// así que bajo un shader de iluminación por normal el objeto entero queda
-// con una sola intensidad de luz: se ve como una silueta plana de un solo
-// tono en vez de una forma tallada. El fix de "locations explícitas" en
-// lighting.vs (ver comentario ahí) solo garantiza que ESE valor constante
-// aterrice en el atributo correcto — nunca resolvió que el valor variara.
-// Estos dos helpers dibujan la misma geometría a mano vía rlgl, con
-// rlNormal3f real por vértice (radial en el cuerpo, plana en las tapas),
-// para que las torres (lo único donde esto se nota a simple vista) se vean
-// sombreadas de verdad. El resto de los DrawCylinder del proyecto
-// (nenúfares, sombras de contacto, spawn/goal, proyectiles) quedan como
-// estaban — están fuera del shader de iluminación o son demasiado chicos/
-// finos como para que la falta de normal se note.
-draw_cylinder_lit_3d :: proc(base: raylib.Vector3, radius, height: f32, sides: i32, color: raylib.Color) {
-	rlgl.Begin(rlgl.TRIANGLES)
-	rlgl.Color4ub(color.r, color.g, color.b, color.a)
-
-	step := 2 * math.PI / f32(sides)
-	for i in 0 ..< sides {
-		a0 := f32(i) * step
-		a1 := f32(i + 1) * step
-		x0, z0 := math.sin(a0), math.cos(a0)
-		x1, z1 := math.sin(a1), math.cos(a1)
-
-		bl := base + raylib.Vector3{x0 * radius, 0, z0 * radius}
-		br := base + raylib.Vector3{x1 * radius, 0, z1 * radius}
-		tr := base + raylib.Vector3{x1 * radius, height, z1 * radius}
-		tl := base + raylib.Vector3{x0 * radius, height, z0 * radius}
-
-		rlgl.Normal3f(x0, 0, z0); rlgl.Vertex3f(bl.x, bl.y, bl.z)
-		rlgl.Normal3f(x1, 0, z1); rlgl.Vertex3f(br.x, br.y, br.z)
-		rlgl.Normal3f(x1, 0, z1); rlgl.Vertex3f(tr.x, tr.y, tr.z)
-
-		rlgl.Normal3f(x0, 0, z0); rlgl.Vertex3f(bl.x, bl.y, bl.z)
-		rlgl.Normal3f(x1, 0, z1); rlgl.Vertex3f(tr.x, tr.y, tr.z)
-		rlgl.Normal3f(x0, 0, z0); rlgl.Vertex3f(tl.x, tl.y, tl.z)
-	}
-
-	// Tapa superior — plana, normal (0,1,0). La inferior no hace falta:
-	// nunca queda visible, apoyada sobre el tile.
-	rlgl.Normal3f(0, 1, 0)
-	top := base + raylib.Vector3{0, height, 0}
-	for i in 0 ..< sides {
-		a0 := f32(i) * step
-		a1 := f32(i + 1) * step
-		p0 := base + raylib.Vector3{math.sin(a0) * radius, height, math.cos(a0) * radius}
-		p1 := base + raylib.Vector3{math.sin(a1) * radius, height, math.cos(a1) * radius}
-		rlgl.Vertex3f(top.x, top.y, top.z)
-		rlgl.Vertex3f(p0.x, p0.y, p0.z)
-		rlgl.Vertex3f(p1.x, p1.y, p1.z)
-	}
-
-	rlgl.End()
+// Modelos reales por tipo de torre (base fija + torreta que rota/recula),
+// mismo mecanismo Tree_Model/tree_shader que árboles/casas/caja/avión.
+// Reemplaza al viejo cilindro+cañón genérico (`draw_tower_shape_3d`,
+// `draw_cylinder_lit_3d`/`draw_cylinder_ex_lit_3d` — el motivo original de
+// esos dos helpers, la falta de normal real de `raylib.DrawCylinder`, ya no
+// aplica: los modelos reales traen su propia normal por vértice desde
+// Blender). ICE y ENHANCE no tienen torreta (no apuntan a nada, mismo
+// criterio que el viejo `has_barrel`) — un solo modelo estático cada una.
+Tower_Model_Path_Spec :: struct {
+	base_path:   cstring,
+	turret_path: cstring, // "" si la torre no tiene torreta (ICE, ENHANCE)
+	mount_y_raw: f32,     // altura Blender (sin escalar) de la base — punto de montaje de la torreta
+	has_turret:  bool,
 }
 
-// Igual que arriba, pero entre dos puntos arbitrarios y con radio propio en
-// cada extremo (cono) — usado por el cañón. La normal ignora la leve
-// inclinación del cono por el cambio de radio (aproximación radial pura);
-// con radios tan parecidos (0.08cs → 0.06cs) el error es imperceptible.
-draw_cylinder_ex_lit_3d :: proc(start_pos, end_pos: raylib.Vector3, start_radius, end_radius: f32, sides: i32, color: raylib.Color) {
-	axis := end_pos - start_pos
-	axis_len := linalg.length(axis)
-	if axis_len < 0.0001 { return }
-	dir := axis / axis_len
-
-	up_ref := raylib.Vector3{0, 1, 0}
-	if math.abs(linalg.dot(dir, up_ref)) > 0.99 {
-		up_ref = raylib.Vector3{1, 0, 0}
-	}
-	right := linalg.normalize(linalg.cross(dir, up_ref))
-	up := linalg.cross(right, dir)
-
-	rlgl.Begin(rlgl.TRIANGLES)
-	rlgl.Color4ub(color.r, color.g, color.b, color.a)
-
-	step := 2 * math.PI / f32(sides)
-	for i in 0 ..< sides {
-		a0 := f32(i) * step
-		a1 := f32(i + 1) * step
-		radial0 := right * math.cos(a0) + up * math.sin(a0)
-		radial1 := right * math.cos(a1) + up * math.sin(a1)
-
-		bl := start_pos + radial0 * start_radius
-		br := start_pos + radial1 * start_radius
-		tr := end_pos + radial1 * end_radius
-		tl := end_pos + radial0 * end_radius
-
-		rlgl.Normal3f(radial0.x, radial0.y, radial0.z); rlgl.Vertex3f(bl.x, bl.y, bl.z)
-		rlgl.Normal3f(radial1.x, radial1.y, radial1.z); rlgl.Vertex3f(br.x, br.y, br.z)
-		rlgl.Normal3f(radial1.x, radial1.y, radial1.z); rlgl.Vertex3f(tr.x, tr.y, tr.z)
-
-		rlgl.Normal3f(radial0.x, radial0.y, radial0.z); rlgl.Vertex3f(bl.x, bl.y, bl.z)
-		rlgl.Normal3f(radial1.x, radial1.y, radial1.z); rlgl.Vertex3f(tr.x, tr.y, tr.z)
-		rlgl.Normal3f(radial0.x, radial0.y, radial0.z); rlgl.Vertex3f(tl.x, tl.y, tl.z)
-	}
-
-	// Tapa del extremo (boca del cañón) — normal = dirección del eje.
-	rlgl.Normal3f(dir.x, dir.y, dir.z)
-	for i in 0 ..< sides {
-		a0 := f32(i) * step
-		a1 := f32(i + 1) * step
-		p0 := end_pos + (right * math.cos(a0) + up * math.sin(a0)) * end_radius
-		p1 := end_pos + (right * math.cos(a1) + up * math.sin(a1)) * end_radius
-		rlgl.Vertex3f(end_pos.x, end_pos.y, end_pos.z)
-		rlgl.Vertex3f(p0.x, p0.y, p0.z)
-		rlgl.Vertex3f(p1.x, p1.y, p1.z)
-	}
-
-	rlgl.End()
+TOWER_MODEL_PATHS := [constants.Tower_Type]Tower_Model_Path_Spec{
+	.ARCHER  = {"models/towers/archer_base.obj",  "models/towers/archer_turret.obj",  0.45, true},
+	.CANNON  = {"models/towers/cannon_base.obj",  "models/towers/cannon_turret.obj",  0.40, true},
+	.SNIPER  = {"models/towers/sniper_base.obj",  "models/towers/sniper_turret.obj",  0.35, true},
+	.MISSILE = {"models/towers/missile_base.obj", "models/towers/missile_turret.obj", 0.40, true},
+	.LASER   = {"models/towers/laser_base.obj",   "models/towers/laser_turret.obj",   0.45, true},
+	.ICE     = {"models/towers/ice_tower.obj",    "",                                 0,    false},
+	.ENHANCE = {"models/towers/enhance_tower.obj","",                                 0,    false},
+	.TESLA   = {"models/towers/tesla_base.obj",   "models/towers/tesla_turret.obj",   0.31, true},
+	.MORTAR  = {"models/towers/mortar_base.obj",  "models/towers/mortar_turret.obj",  0.22, true},
 }
 
-draw_tower_shape_3d :: proc(base: raylib.Vector3, cs: f32, angle, recoil: f32, color: raylib.Color, alpha: u8 = 255, has_barrel: bool = true) {
-	c := color
-	c.a = alpha
-	body_r := cs * 0.32
-	body_h := cs * 0.45
-	draw_cylinder_lit_3d(base, body_r, body_h, 24, c)
+// Los 9 modelos se modelaron a una escala de diseño consistente entre sí
+// (~1.0 unidad Blender de diámetro de base, ver el blueprint que se le dio
+// a Blender) — un solo factor global alcanza, a diferencia de árboles/casas
+// donde cada fuente tenía su propia escala de diseño dispareja.
+TOWER_MODEL_SCALE :: f32(0.85)
 
-	if !has_barrel { return }
+Tower_Model :: struct {
+	base:       raylib.Model,
+	turret:     raylib.Model,
+	has_turret: bool,
+	mount_y:    f32, // ya multiplicado por TOWER_MODEL_SCALE
+}
 
+tower_models: [constants.Tower_Type]Tower_Model
+
+tower_models_init :: proc() {
+	for t in constants.Tower_Type {
+		spec := TOWER_MODEL_PATHS[t]
+		base := raylib.LoadModel(spec.base_path)
+		for i in 0 ..< int(base.materialCount) {
+			base.materials[i].shader = tree_shader.shader
+		}
+		tm := Tower_Model{
+			base       = base,
+			has_turret = spec.has_turret,
+			mount_y    = spec.mount_y_raw * TOWER_MODEL_SCALE,
+		}
+		if spec.has_turret {
+			turret := raylib.LoadModel(spec.turret_path)
+			for i in 0 ..< int(turret.materialCount) {
+				turret.materials[i].shader = tree_shader.shader
+			}
+			tm.turret = turret
+		}
+		tower_models[t] = tm
+	}
+}
+
+tower_models_unload :: proc() {
+	for t in constants.Tower_Type {
+		tm := tower_models[t]
+		raylib.UnloadModel(tm.base)
+		if tm.has_turret {
+			raylib.UnloadModel(tm.turret)
+		}
+	}
+}
+
+// Dibuja una torre completa (base + torreta si tiene) con tree_shader ya
+// activo — pasada visible. `angle`/`recoil`: mismo significado que siempre
+// (`Tower.angle`/`Tower.recoil`, ver simulation.odin). La torreta se monta
+// en `mount_y` sobre la base y se retrae en la dirección opuesta a `angle`
+// al disparar, mismo criterio que el viejo cañón cilíndrico.
+//
+// Convención de yaw: igual que el avión F-16 (ver render_airdrop_plane_3d)
+// — los modelos se modelaron con el frente del arma en el eje local +X, y
+// `angle` es el mismo ángulo 2D de siempre (`dir := {cos(angle),0,sin(angle)}`).
+// Una rotación positiva de DrawModelEx alrededor de {0,1,0} manda +X hacia
+// -Z (regla de la mano derecha) — el sentido CONTRARIO a como crece
+// `angle` — por eso `yaw = -angle`, no `angle` directo.
+draw_tower_model_3d :: proc(tower_type: constants.Tower_Type, base_pos: raylib.Vector3, angle, recoil: f32, tint: raylib.Color) {
+	tm := tower_models[tower_type]
+	sc := TOWER_MODEL_SCALE
+	raylib.DrawModelEx(tm.base, base_pos, {0, 1, 0}, 0, {sc, sc, sc}, tint)
+	if !tm.has_turret { return }
+
+	yaw := -angle * (180.0 / math.PI)
+	cs := constants.WORLD_CELL_SIZE
 	dir := raylib.Vector3{math.cos(angle), 0, math.sin(angle)}
 	recoil_pull := recoil * cs * constants.TOWER_RECOIL_DISTANCE_RATIO
-	barrel_len := cs * 0.5 - recoil_pull
-	start := raylib.Vector3{base.x, base.y + body_h * 0.75, base.z}
-	end := start + dir * barrel_len
-	barrel := raylib.Color{40, 40, 40, alpha}
-	draw_cylinder_ex_lit_3d(start, end, cs * 0.08, cs * 0.06, 16, barrel)
+	mount := raylib.Vector3{base_pos.x, base_pos.y + tm.mount_y, base_pos.z}
+	turret_pos := mount - dir * recoil_pull
+	raylib.DrawModelEx(tm.turret, turret_pos, {0, 1, 0}, yaw, {sc, sc, sc}, tint)
 }
 
-// Tipos que no apuntan/disparan un proyectil hacia un blanco — no llevan cañón.
-tower_type_has_barrel :: proc(t: constants.Tower_Type) -> bool {
-	return t != .ICE && t != .ENHANCE
+// Sombra real — mismo patrón shader-swap que el resto de los modelos de la
+// sesión (DrawModelEx usa material.shader directo, ignora el BeginShaderMode
+// activo del llamador).
+draw_tower_model_shadow_3d :: proc(tower_type: constants.Tower_Type, base_pos: raylib.Vector3, angle, recoil: f32) {
+	tm := tower_models[tower_type]
+	for i in 0 ..< int(tm.base.materialCount) {
+		tm.base.materials[i].shader = shadow_map.depth_shader
+	}
+	if tm.has_turret {
+		for i in 0 ..< int(tm.turret.materialCount) {
+			tm.turret.materials[i].shader = shadow_map.depth_shader
+		}
+	}
+	draw_tower_model_3d(tower_type, base_pos, angle, recoil, raylib.WHITE)
+	for i in 0 ..< int(tm.base.materialCount) {
+		tm.base.materials[i].shader = tree_shader.shader
+	}
+	if tm.has_turret {
+		for i in 0 ..< int(tm.turret.materialCount) {
+			tm.turret.materials[i].shader = tree_shader.shader
+		}
+	}
 }
 
 render_tower_3d :: proc(tower: ^entities.Tower, m: ^entities.Map) {
 	_, top_y := tile_world_top(m, tower.r, tower.c)
 	cs := constants.WORLD_CELL_SIZE
 	base := raylib.Vector3{f32(tower.c) * cs + cs * 0.5, top_y, f32(tower.r) * cs + cs * 0.5}
-	color := constants.TOWER_SPECS[tower.type].color
-	draw_tower_shape_3d(base, cs, tower.angle, tower.recoil, color, 255, tower_type_has_barrel(tower.type))
+	draw_tower_model_3d(tower.type, base, tower.angle, tower.recoil, raylib.WHITE)
+	raylib.BeginShaderMode(lighting_shader.shader)
+}
+
+render_tower_shadow_3d :: proc(tower: ^entities.Tower, m: ^entities.Map) {
+	_, top_y := tile_world_top(m, tower.r, tower.c)
+	cs := constants.WORLD_CELL_SIZE
+	base := raylib.Vector3{f32(tower.c) * cs + cs * 0.5, top_y, f32(tower.r) * cs + cs * 0.5}
+	draw_tower_model_shadow_3d(tower.type, base, tower.angle, tower.recoil)
 }
 
 // Árbol real (ver tree_models) — dibuja con tree_shader (asignado a los
@@ -2473,11 +2465,6 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 			#partial switch tile {
 			case .TOWER_ARCHER, .TOWER_CANNON, .TOWER_SNIPER, .TOWER_MISSILE, .TOWER_LASER,
 			     .TOWER_ICE, .TOWER_ENHANCE, .TOWER_TESLA, .TOWER_MORTAR:
-				// Especular suave prendido solo mientras se dibuja la torre —
-				// ver SPECULAR_STRENGTH_WATER en lighting.fs para el agua,
-				// que no necesita este bracket (siempre activo vía isWater).
-				tower_spec := constants.LIGHT_SPECULAR_STRENGTH_TOWER
-				raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_specular_strength, &tower_spec, .FLOAT)
 				found := false
 				for &tower in app.sim.towers {
 					if tower.r == row && tower.c == col {
@@ -2488,16 +2475,13 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 				}
 				if !found {
 					// Sin torre real en la simulación (EDITOR, o el preview
-					// del browser de mapas) — dibujar una forma genérica a
-					// partir del tipo de tile en vez de nada, mismo criterio
-					// que usaba el render 2D (tile_to_tower_type +
-					// draw_tower_tile) pero con la primitiva 3D.
+					// del browser de mapas) — dibujar el modelo real igual,
+					// solo que en ángulo neutro (no hay `Tower.angle` del que
+					// tomar la orientación).
 					tower_type := tile_to_tower_type(tile)
-					color := constants.TOWER_SPECS[tower_type].color
-					draw_tower_shape_3d(surface, constants.WORLD_CELL_SIZE, 0, 0, color, 255, tower_type_has_barrel(tower_type))
+					draw_tower_model_3d(tower_type, surface, 0, 0, raylib.WHITE)
+					raylib.BeginShaderMode(lighting_shader.shader)
 				}
-				tower_spec_off := f32(0)
-				raylib.SetShaderValue(lighting_shader.shader, lighting_shader.loc_specular_strength, &tower_spec_off, .FLOAT)
 			case .ACCESSORY_TREE:
 				if m.water_grid[row][col] {
 					// El agua es perfectamente plana en toda la malla ahora
@@ -2576,7 +2560,8 @@ render_map_objects_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 		} else {
 			tower_type := tile_to_tower_type(app.sim.selected_build_tower)
 			spec := constants.TOWER_SPECS[tower_type]
-			draw_tower_shape_3d(surface, cs, 0, 0, spec.color, 160, tower_type_has_barrel(tower_type))
+			draw_tower_model_3d(tower_type, surface, 0, 0, raylib.Color{255, 255, 255, 160})
+			raylib.BeginShaderMode(lighting_shader.shader)
 			ring := raylib.Vector3{surface.x, 0.02, surface.z}
 			raylib.BeginShaderMode(range_disc_shader)
 			draw_range_disc_3d(m, ring, spec.range * cs, constants.TOWER_RANGE_PREVIEW)

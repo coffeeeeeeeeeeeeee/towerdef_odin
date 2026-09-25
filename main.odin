@@ -145,6 +145,10 @@ main :: proc() {
 	systems.bridge_models_init()
 	defer systems.bridge_models_unload()
 
+	// Las 9 torres — mismo tree_shader.
+	systems.tower_models_init()
+	defer systems.tower_models_unload()
+
 	// Set per-layer volumes from settings
 	systems.set_volume(.UI,  initial_settings.master_volume * initial_settings.ui_volume)
 	systems.set_volume(.SFX, initial_settings.master_volume * initial_settings.sfx_volume)

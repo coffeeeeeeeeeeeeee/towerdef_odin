@@ -928,32 +928,21 @@ no es 100% estático:
   vs `view*proj`, no las dos hipótesis anteriores (que también eran reales
   pero no alcanzaban solas).
 
-**Trampa real (no la de arriba) — `raylib.DrawCylinder`/`DrawCylinderEx` no
-tienen normal real:** el comentario de `lighting.vs` sobre "locations
-explícitas" solo resuelve que el atributo de normal aterrice en el slot
-correcto (2) — nunca garantizó que `rlgl` tuviera un valor *distinto por
-vértice* ahí adentro. `raylib.DrawCylinder`/`DrawCylinderEx` (a diferencia
-de `DrawCube`, que sí llama `rlNormal3f` por cara) no llaman `rlNormal3f`
-en absoluto: el atributo de normal que le llega al shader es el que haya
-quedado de la última llamada a `rlNormal3f` en TODO el frame — constante
-para el objeto entero. Efecto visible: el cuerpo/cañón de las torres (las
-únicas formas del juego dibujadas con `DrawCylinder`/`DrawCylinderEx` bajo
-el shader de iluminación) se veían como una silueta plana de un solo tono,
-sin gradiente de luz/sombra, en vez de un cilindro tallado. Fix: dos
-helpers nuevos en `rendering.odin` (`draw_cylinder_lit_3d` para el cuerpo,
-`draw_cylinder_ex_lit_3d` para el cañón) que dibujan la misma geometría a
-mano vía `rlgl.Begin/Normal3f/Vertex3f/End`, con normal radial real por
-vértice (más plana en las tapas). `draw_tower_shape_3d` los usa en vez de
-`raylib.DrawCylinder`/`DrawCylinderEx`. **No se tocó nada más** — el resto
-de los `DrawCylinder` del proyecto (nenúfares, sombras de contacto,
-spawn/goal, proyectiles, árboles/bloques que usan `DrawCube`) no se
-corrigieron: o están fuera del shader de iluminación (no les importa la
-normal) o son formas chicas/finas donde la falta de normal real no se nota
-a simple vista. Si en algún momento se nota lo mismo en otro objeto bajo
-`BeginShaderMode(lighting_shader...)` — confirmado que `DrawCube` sí llama
-`rlNormal3f` por cara (no tiene este problema); no se verificó `DrawSphere`
-(usada por enemigos) — el mismo patrón de helpers manuales por `rlgl`
-aplicaría si hiciera falta.
+**Nota histórica — ya no aplica, las torres dejaron de ser cilindros**: esta
+sección documentaba un fix real (`draw_cylinder_lit_3d`/
+`draw_cylinder_ex_lit_3d`, normal radial a mano vía `rlgl` porque
+`raylib.DrawCylinder`/`DrawCylinderEx` no llaman `rlNormal3f`) para el
+cuerpo/cañón cilíndrico genérico que dibujaba `draw_tower_shape_3d`. Esa
+función y los dos helpers se borraron por completo: las 9 torres pasaron a
+modelos reales (ver "Torres reales por tipo" más abajo), que ya traen su
+propia normal por vértice desde Blender. El resto de los `DrawCylinder`
+del proyecto (nenúfares — bah, tampoco, ya son modelos — sombras de
+contacto, spawn/goal, proyectiles) sigue sin este problema por las mismas
+razones de siempre: están fuera del shader de iluminación o son formas
+chicas/finas donde no se nota. Si en algún momento hace falta este patrón
+de nuevo (normal real a mano vía `rlgl` para una forma inmediata bajo
+`lighting_shader`), el código sigue en el historial de git de este
+archivo.
 
 ## Color del camino por bioma (`BIOME_COLORS[...].path`)
 
@@ -1598,7 +1587,76 @@ con base en y=0):
   ancho al eje Z sin distorsionar la geometría de postes/cables, mismo
   resultado que el swap manual pero sin duplicar la lógica de escala.
 
-## Obstáculos en el camino
+## Torres reales por tipo (`tower_models`, `draw_tower_model_3d`)
+
+Reemplaza al cilindro genérico (cuerpo + cañón, un solo par de formas
+reusado por las 9 torres, diferenciadas solo por color) por un modelo real
+por `Tower_Type` — a pedido explícito, modelado a partir de una imagen de
+referencia que el usuario pasó (arte 2D isométrico semi-realista por
+torre). Mismo mecanismo `tree_shader` que el resto de los modelos de la
+sesión, pero acá cada torre son DOS piezas independientes en vez de una:
+
+- **Base** (`Tower_Model.base`): fija, no rota, se dibuja siempre con
+  `yaw=0`.
+- **Torreta** (`Tower_Model.turret`): la parte que apunta al enemigo —
+  rota en vivo según `Tower.angle` y se retrae (recoil) al disparar, mismo
+  comportamiento gameplay que tenía el cañón cilíndrico viejo. Se monta
+  sobre la base a `mount_y` (altura Blender de la base, medida del archivo
+  exportado, × `TOWER_MODEL_SCALE`) — el punto de apoyo de la torreta
+  coincide con la altura real de la base de ESA torre en particular, no
+  una constante pareja para las 9.
+- **ICE y ENHANCE no tienen torreta** — son un solo modelo estático
+  (`has_turret=false` en `TOWER_MODEL_PATHS`), estas dos torres no apuntan
+  a nada (mismo criterio que ya tenía el `has_barrel` viejo, confirmado
+  con el usuario: "el potenciador y la torre de hielo no giran"). El resto
+  (ARCHER, CANNON, SNIPER, MISSILE, LASER, TESLA, MORTAR) sí tiene el par
+  base+torreta completo.
+
+**Convención de yaw** (`draw_tower_model_3d`): igual que el avión F-16 (ver
+`render_airdrop_plane_3d`) — los 7 modelos de torreta se modelaron con el
+frente del arma/cañón en el eje local +X, y `angle` es el mismo ángulo 2D
+de siempre (`dir := {cos(angle),0,sin(angle)}`, el que ya usaba el cañón
+cilíndrico). Una rotación positiva de `DrawModelEx` alrededor de
+`{0,1,0}` manda +X hacia -Z (regla de la mano derecha) — el sentido
+CONTRARIO a como crece `angle` — por eso `yaw := -angle * (180/π)`, no
+`angle` directo. Mismo signo que el avión, mismo motivo.
+
+**`TOWER_MODEL_SCALE` es UN SOLO factor global (0.85), no una tabla por
+torre** — a diferencia de árboles/casas (cada fuente con su propia escala
+de diseño dispareja, `TREE_MODEL_SPECS`/`BLOCK_MODEL_SPECS` con un
+`scale` calculado por entrada), acá el blueprint que se le dio a Blender
+pidió las 9 torres a una escala de diseño CONSISTENTE entre sí (~1.0
+unidad Blender de diámetro de base) — no hace falta normalizar cada una
+por separado.
+
+**MORTAR no necesita rotación compuesta** — se pensó por un momento que el
+mortero necesitaría un cañón con inclinación fija hacia arriba (el viejo
+ícono 2D top-down lo dibuja "disparando hacia arriba" como convención
+visual) más el yaw horizontal encima, lo cual hubiera requerido componer
+dos rotaciones — imposible con un solo `rotationAxis`+ángulo de
+`DrawModelEx` sin matrices (`raylib.odin` no trae `MatrixMultiply`
+bindeada, ver la nota de Z-up de árboles más arriba). Se descartó al
+confirmar que en el mundo 3D real `draw_tower_shape_3d` (ahora borrado)
+NUNCA tuvo ese caso especial — el tilt hacia arriba era pura decoración
+del ícono 2D (`draw_tower_components_mortar`, sigue existiendo, es la capa
+de íconos de UI/paleta, separada del render 3D). El mortero rota horizontal
+igual que las demás 7 torres con torreta, sin ningún caso especial.
+
+**Sombra real** (`draw_tower_model_shadow_3d`/`render_tower_shadow_3d`),
+mismo patrón shader-swap de siempre: pisa el shader de los materiales de
+base Y torreta (si tiene) a `shadow_map.depth_shader`, dibuja, devuelve a
+`tree_shader`. Los 4 sitios que antes usaban el cilindro genérico
+(torre real en la pasada visible, torre real en sombra, fallback sin torre
+real en las dos pasadas — EDITOR/preview del browser de mapas —, y el
+ghost de construcción semitransparente) se actualizaron todos a
+`draw_tower_model_3d`/`draw_tower_model_shadow_3d`.
+
+**El ícono 2D top-down de las torres (`draw_tower_components_*`, la paleta
+de compra/mano de cartas) NO se tocó** — sigue siendo dibujo 2D con
+`DrawRectangleRoundedLinesEx` y compañía, ajeno al render 3D del mundo,
+mismo patrón que ya existía para árboles (`render_tree`) y obstáculos
+(`render_block`): el ícono de la UI es un asset visual aparte, no tiene
+que coincidir 1:1 con el modelo 3D real del mundo.
 
 - `obstacle_bar_dims(m, row, col, cs)` determina dimensiones de la barrera
   según si el camino es horizontal o vertical en esa celda — se usa tanto
