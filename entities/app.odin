@@ -207,6 +207,11 @@ Editor :: struct {
 	browser:          Map_Browser_State,
 	campaign_editor:  Campaign_Editor_State,
 
+	// Edición del nombre editable del mapa (Map.display_name), independiente
+	// del nombre de archivo — ver botón "Nombre" en el toolbar del editor.
+	map_name_editing: bool,
+	map_name_input:   Input_State,
+
 	// Undo / Redo
 	undo_stack: [dynamic]Map_Snapshot, // Snapshots anteriores (el último es el más reciente)
 	redo_stack: [dynamic]Map_Snapshot, // Snapshots para rehacer
@@ -258,12 +263,28 @@ Confirm_Modal :: struct {
 
 // Spawn_Point and Path_Node are defined in map.odin and enemy.odin
 
+// Transición de pantalla completa a negro entre un estado y otro — ver
+// app_begin_state_fade/app_screen_fade_update/app_screen_fade_alpha.
+Screen_Fade :: struct {
+	active:        bool,
+	elapsed:       f32,
+	revealing:     bool,                 // false = oscureciendo a negro; true = revelando pending_state
+	pending_state: constants.Game_State, // estado al que saltar apenas la pantalla está en negro total
+}
+
 // Global application state
 App_State :: struct {
 	// State
 	state: constants.Game_State,
 	previous_state: constants.Game_State,
-	
+	screen_fade: Screen_Fade,
+
+	// True mientras el último dispositivo de input usado fue el mando (no
+	// el mouse) — gatea el anillo de foco de gamepad en los botones y
+	// decide si render_button acepta gamepad_focused. Ver
+	// systems/gamepad.odin, gamepad_nav_update.
+	gamepad_nav_active: bool,
+
 	// Sub-systems
 	sim: Simulation,
 	editor: Editor,
@@ -349,6 +370,20 @@ App_State :: struct {
 	current_campaign_node:  i32,   // -1 = el run actual no es de campaña; >=0 = índice del nodo
 	campaign_file_mtime:    i64,   // mtime de campaign.bin para hot-reload (DEVELOPER only)
 
+	// Nombre editable (Map.display_name) del .map de cada nodo, cacheado al
+	// cargar/recargar campaign.bin — ver campaign_refresh_map_display_names.
+	// Vacío = el mapa no tiene nombre asignado (fallback a display_name del
+	// nodo o al filename, ver render_campaign_map).
+	campaign_map_display_names: [constants.CAMPAIGN_MAX_NODES]string,
+
+	// Bioma del .map de cada nodo — mismo cacheo/momento que
+	// campaign_map_display_names (un solo map_load por nodo, no por frame).
+	// campaign_map_biome_valid[i] = false cuando el .map no se pudo cargar
+	// (ej. archivo borrado) — evita mostrar un bioma inventado (PLAIN, el
+	// zero value de Biome) para un nodo cuyo mapa ya no existe.
+	campaign_map_biomes:     [constants.CAMPAIGN_MAX_NODES]constants.Biome,
+	campaign_map_biome_valid: [constants.CAMPAIGN_MAX_NODES]bool,
+
 	// Modo "seleccionar tile/torre" para cartas de acción con target.
 	// .TOWER (zero value) = inactivo. Cualquier otro kind = carta esperando selección.
 	// Lumberjack espera un árbol; Overdrive espera una torre.
@@ -403,10 +438,11 @@ Airdrop :: struct {
 Tooltip_Kind :: enum { NONE, LABEL, CARD }
 
 Pending_Tooltip :: struct {
-	kind:    Tooltip_Kind,
-	trigger: raylib.Rectangle,
-	label:   string,         // used when kind == .LABEL
-	card:    Card,           // used when kind == .CARD
+	kind:     Tooltip_Kind,
+	trigger:  raylib.Rectangle,
+	label:    string,         // used when kind == .LABEL
+	sublabel: string,         // opcional, kind == .LABEL — segunda línea en gris (vacío = una sola línea)
+	card:     Card,           // used when kind == .CARD
 }
 
 // Get selected tower by searching sim.towers for the stored (r, c).
@@ -445,6 +481,52 @@ app_set_state :: proc(app: ^App_State, new_state: constants.Game_State) {
 	app_meta_flush(app)
 }
 
+// Inicia una transición a negro antes de cambiar de estado — usado en
+// victoria/derrota para no cortar en seco a la pantalla de Ganaste/Perdiste.
+// El cambio de estado real (app_set_state) ocurre recién cuando la pantalla
+// llega a negro total (ver app_screen_fade_update), así el jugador nunca ve
+// el salto directo, sólo negro → nueva pantalla.
+app_begin_state_fade :: proc(app: ^App_State, new_state: constants.Game_State) {
+	app.screen_fade = Screen_Fade{
+		active        = true,
+		elapsed       = 0,
+		revealing     = false,
+		pending_state = new_state,
+	}
+}
+
+// Avanza la transición de fade activa, si hay alguna. Llamar una vez por
+// frame, antes de renderizar. Cambia de estado en el instante exacto en que
+// la pantalla llega a negro total.
+app_screen_fade_update :: proc(app: ^App_State, dt: f32) {
+	if !app.screen_fade.active { return }
+	app.screen_fade.elapsed += dt
+	if !app.screen_fade.revealing {
+		if app.screen_fade.elapsed >= constants.SCREEN_FADE_OUT_DURATION {
+			app_set_state(app, app.screen_fade.pending_state)
+			app.screen_fade.revealing = true
+			app.screen_fade.elapsed   = 0
+		}
+	} else {
+		if app.screen_fade.elapsed >= constants.SCREEN_FADE_IN_DURATION {
+			app.screen_fade.active = false
+		}
+	}
+}
+
+// Alpha actual (0..255) del velo negro de la transición — 0 = transparente,
+// 255 = negro total. El render dibuja un rectángulo pantalla-completa con
+// este alpha encima de absolutamente todo lo demás.
+app_screen_fade_alpha :: proc(app: ^App_State) -> u8 {
+	if !app.screen_fade.active { return 0 }
+	if !app.screen_fade.revealing {
+		t := clamp(app.screen_fade.elapsed / constants.SCREEN_FADE_OUT_DURATION, f32(0), f32(1))
+		return u8(t * 255)
+	}
+	t := clamp(app.screen_fade.elapsed / constants.SCREEN_FADE_IN_DURATION, f32(0), f32(1))
+	return u8((1 - t) * 255)
+}
+
 // Marca el meta como sucio. El próximo flush lo persistirá a disco.
 app_meta_mark_dirty :: proc(app: ^App_State) {
 	app.meta_dirty = true
@@ -471,6 +553,11 @@ app_take_damage :: proc(app: ^App_State, damage: i32) {
 
 // Finalize a run (victory or defeat), tally cristales, persist meta, then transition to RUN_COMPLETE.
 app_finish_run :: proc(app: ^App_State, victory: bool) {
+	// Reentrancia: mientras dura el fade a negro, la simulación queda
+	// congelada (ver main.odin), pero por las dudas evita procesar el
+	// resultado dos veces si algo más dispara otro finish_run en el medio.
+	if app.screen_fade.active { return }
+
 	app.sim.is_victory = victory
 	lives := app.sim.health if victory else 0
 	cristales := meta_calc_cristales(app.sim.enemies_killed, lives, app.sim.wave_number)
@@ -495,13 +582,13 @@ app_finish_run :: proc(app: ^App_State, victory: bool) {
 		}
 		app.meta_dirty = true
 		app.current_campaign_node = -1
-		app_set_state(app, .GAME_OVER)  // app_set_state hace flush
+		app_begin_state_fade(app, .GAME_OVER)
 		return
 	}
 
 	// Path no-campaña: comportamiento original.
 	app.meta_dirty = true
-	app_set_state(app, .RUN_COMPLETE)  // app_set_state hace flush
+	app_begin_state_fade(app, .RUN_COMPLETE)
 }
 
 // Add money

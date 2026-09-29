@@ -2787,7 +2787,11 @@ render_airdrop_boxes_3d :: proc(app: ^entities.App_State, m: ^entities.Map) {
 		if drop.phase != .BOX_LANDED { continue }
 		center, top_y := tile_world_top(m, drop.target_row, drop.target_col)
 		pos := raylib.Vector3{center.x, top_y, center.z}
-		yaw := hash_random(drop.target_row, drop.target_col, 21) * 360.0
+		// Alineada a la grilla (pasos de 90°, mismo criterio que
+		// block_tile_yaw para casas) en vez de un ángulo libre — a pedido
+		// explícito, una caja apoyada en el piso debería quedar a escuadra
+		// con el tile, no en cualquier ángulo.
+		yaw := block_tile_yaw(drop.target_row, drop.target_col)
 		raylib.DrawModelEx(crate_model.model, pos, {0, 1, 0}, yaw, {sc, sc, sc}, raylib.WHITE)
 	}
 	raylib.BeginShaderMode(lighting_shader.shader)
@@ -2803,7 +2807,7 @@ render_airdrop_boxes_shadow_3d :: proc(app: ^entities.App_State, m: ^entities.Ma
 		if drop.phase != .BOX_LANDED { continue }
 		center, top_y := tile_world_top(m, drop.target_row, drop.target_col)
 		pos := raylib.Vector3{center.x, top_y, center.z}
-		yaw := hash_random(drop.target_row, drop.target_col, 21) * 360.0
+		yaw := block_tile_yaw(drop.target_row, drop.target_col)
 		raylib.DrawModelEx(crate_model.model, pos, {0, 1, 0}, yaw, {sc, sc, sc}, raylib.WHITE)
 	}
 	for i in 0 ..< int(crate_model.model.materialCount) {
@@ -2934,8 +2938,8 @@ render_game :: proc(app: ^entities.App_State) {
 		(app.state == .MENU ||
 		app.state == .RUN_COMPLETE ||
 		app.state == .CAMPAIGN_MAP ||
-		app.state == .PROGRESSION ||
-		app.state == .LIBRARY) {
+		app.state == .LIBRARY ||
+		app.state == .CREDITS) {
 			nebula_draw()
 	}
 
@@ -3027,6 +3031,15 @@ render_game :: proc(app: ^entities.App_State) {
 	render_ui(app)
 	render_tooltip_layer(app) // Siempre antes de la consola
 	render_console(app)       // La consola va encima de absolutamente todo
+
+	// Velo de fade a negro (fin de partida) — encima de absolutamente todo,
+	// incluida la consola, porque es una transición de pantalla completa.
+	fade_alpha := entities.app_screen_fade_alpha(app)
+	if fade_alpha > 0 {
+		sw := raylib.GetScreenWidth()
+		sh := raylib.GetScreenHeight()
+		raylib.DrawRectangle(0, 0, sw, sh, raylib.Color{0, 0, 0, fade_alpha})
+	}
 }
 
 // Genera el thumbnail del browser de mapas con el mismo pipeline 3D

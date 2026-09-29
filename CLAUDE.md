@@ -311,17 +311,16 @@ algo esté pendiente — permite vender la carta armada misma (cancela y
 reembolsa) pero no otra. No relajar ese guard sin resolver el problema de
 raíz (usar un handle estable en vez de un índice crudo).
 
-## Biblioteca de cartas (`Game_State.LIBRARY`)
+## Biblioteca de cartas (`Game_State.LIBRARY`) — también el lugar de compra/reembolso
 
 `render_card_library_ui` (`systems/menus.odin`), accesible desde el botón
 "Biblioteca de Cartas" del menú principal. Catálogo de **todas** las torres
-(`ALL_TOWERS`, 9) y reliquias (`entities.RELIC_SPECS`) del juego — no
-incluye obstáculos. `library_row_cards(rarity)` arma cada fila (torres
-primero, después reliquias, en su orden de declaración) en un array fijo
-`[16]Card` — 16 alcanza de sobra (la fila más grande hoy, UNCOMMON, tiene
-10). Una fila por rareza (`COMMON..UNIQUE`), con scroll vertical (mismo
-patrón que `render_progression_ui`: `library_scroll`, clamp contra
-`content_bottom`).
+(`ALL_TOWERS`, 9) y reliquias (`entities.RELIC_SPECS`) del juego, más el
+obstáculo genérico. `library_row_cards(rarity)` arma cada fila (obstáculo
+sólo en COMMON, torres, después reliquias) en un array fijo `[16]Card` — 16
+alcanza de sobra (la fila más grande hoy, UNCOMMON, tiene 10). Una fila por
+rareza (`COMMON..UNIQUE`), con scroll vertical (`library_scroll`, clamp
+contra `content_bottom`).
 
 Cada fila reusa **el mismo mecanismo de abanico** que `render_card_hand`
 (overlap por `step`/`card_draw_x`, dos pasadas — todas menos la hovereada,
@@ -330,12 +329,83 @@ inventar un layout nuevo. Diferencia con la mano: usa casi todo el ancho de
 pantalla (`max_w := sw * 0.92`, la mano usa 60% para dejarle sitio a otros
 paneles del HUD que acá no existen).
 
+**Centrado vertical + levantada suave.** `card_y` (posición en reposo de
+las cartas) NO arranca pegado al badge de rareza — se centra el bloque
+`CARD_H + hover_lift` (la carta más todo el recorrido posible de
+levantada) dentro de `band_h` (el espacio real entre esta línea separadora
+y la siguiente), vía `top_of_block`/`card_y` en `render_card_library_ui`.
+El badge de rareza y el costo quedan arriba a la izquierda, fuera de ese
+centrado — sólo se centran las cartas. El levantado en sí ya no es
+instantáneo: `library_hover_lift_t` (static persistente, 0..1) interpola
+con `app.delta_time` en `LIBRARY_HOVER_LIFT_SECONDS` (0.12s) hacia 1
+mientras hay una carta hovereada y hacia 0 apenas deja de haberla
+(`found_hover_this_frame`, chequeado una vez después del loop de las 5
+filas) — `cy := card_y - hover_lift * library_hover_lift_t` en la pasada 2.
+Pedido explícito del usuario tras ver el salto de golpe.
+
 `library_card_unlocked(app, card)` decide gris/color pasando el booleano de
 "desbloqueado" al parámetro `can_afford` de `render_card` — ese parámetro
 originalmente significa "¿el jugador puede pagarlo?" (uso en el shop), pero
 la lógica de grayscale que dispara (`!can_afford → escala de grises`) es
 exactamente la que hace falta acá, así que se reusa tal cual en vez de
-tocar `render_card`.
+tocar `render_card`. El color refleja **exclusivamente** si la carta ya
+está comprada — a propósito no se adelanta el color por afford, para que
+"en color = comprada" sea una regla sin excepciones.
+
+Línea separadora entre categorías: `raylib.DrawLine` con
+`UI_MAP_BROWSER_SEPARATOR_COLOR` (mismo color que separa secciones en el
+Map Browser), dibujada a mitad de camino en el `row_gap` entre filas — no
+antes de la primera.
+
+**Ex-pantalla "Progression" absorbida acá.** Ya no existe
+`Game_State.PROGRESSION` ni `render_progression_ui` — comprar/reembolsar
+torres y reliquias con cristales vive dentro de esta pantalla, sin botón
+dibujado en ninguna carta:
+- **Costo único por rareza** (`entities.meta_rarity_unlock_cost`,
+  COMMON=1, UNCOMMON=3, RARE=6, EPIC=10, UNIQUE=15), mostrado UNA vez
+  junto al badge de rareza, no repetido por carta — reemplaza los costos
+  viejos de Progresión (`meta_tower_unlock_cost`/`meta_relic_unlock_cost`,
+  eliminados), que ni siquiera eran uniformes dentro de una misma rareza
+  (MISSILE=10 vs LASER=15, ambas RARE) ni comparables entre torres y
+  reliquias de la "misma" rareza nominal. Pedido explícito del usuario al
+  ver el botón por carta: "los cristales sirven para toda la categoría".
+- **Comprar**: click izquierdo directo sobre una carta bloqueada y
+  accionable. Si no alcanza el saldo, toast de error
+  (`LIBRARY_NOT_ENOUGH_CRISTALES`) en vez de un botón deshabilitado (ya
+  no hay botón que deshabilitar).
+- **Vender/reembolsar**: click derecho directo sobre una carta ya
+  desbloqueada, mismo gesto que `render_card_hand` (ver "Card Hand:
+  activar reliquia activa vs. vender" más abajo). Ambos gestos se
+  resuelven en el mismo loop que ya detectaba hover — no dependen de que
+  la carta esté levantada, porque ninguno dibuja nada permanente.
+- Sin tooltip de hover en las cartas (se probó un hint de precio por
+  carta — `LIBRARY_BUY_HINT`/`LIBRARY_SELL_HINT` — y se sacó a pedido del
+  usuario). El único lugar donde se ve el costo es el número fijo junto
+  al badge de rareza.
+- `library_card_actionable(card)` excluye OBSTACLE y las 3 torres base
+  (ARCHER/CANNON/SNIPER, siempre gratis) — ni click ni nada hacen efecto
+  en esas cartas.
+
+Los dos botones de RUN_COMPLETE (derrota y victoria, antes "ir a
+Progression") ahora llevan a `.LIBRARY`. El botón Volver de esta pantalla
+(y el ESC en `input.odin`) usan `app.previous_state`, no `.MENU` fijo —
+preserva volver a la pantalla de fin de run cuando se entra desde ahí.
+
+## Pantalla de créditos (`Game_State.CREDITS`)
+
+`render_credits_ui` (`systems/menus.odin`), accesible desde "Créditos" en el
+menú principal (entre Biblioteca y Salir). A diferencia de
+Progression/Library, **no tiene scroll** — el contenido es corto y fijo,
+así que se dibuja centrado de arriba a abajo con un `y` acumulador simple
+(`draw_credit_block`/`draw_tech_line`, helpers locales de la proc, mismo
+patrón que `draw_badge` en el editor de campaña). Crédito de diseño/
+desarrollo hardcodeado ("Posta Argentina", pedido explícito del usuario —
+no inferir un nombre del autor de git, que es un username, no un nombre
+para mostrar) + atribución de terceros (lenguaje Odin, raylib, fuente
+Orbitron bajo SIL OFL). Mismo back-button al pie que Progression/Library
+(reusa la clave `PROGRESSION_BACK`), ESC vuelve a `.MENU` (`input.odin`),
+fondo de nébula activado igual que el resto de las pantallas de menú
+(`render_game`, `rendering.odin`).
 
 ## Sistema de oleadas y enemigos
 
@@ -418,6 +488,103 @@ exclusión. Los hijos de un boss+SPLIT no heredan `BOSS`/`SPLIT`/`BONUS`
   repetir el chequeo `.INVISIBLE in enemy.flags && !can_target_invisible_tower(...)`.
   Visualmente se dibuja con alpha reducido (`constants.ENEMY_INVISIBLE_ALPHA`).
 
+## Sistema de color de botones: afirmativo vs. toggle activo vs. default
+
+Un solo color afirmativo (`UI_BUTTON_AFFIRMATIVE_COLOR`/`_HOVER`/`_PRESS`,
+azul acero desaturado) para **cualquier botón cuya acción es aceptar/
+confirmar/llevar adelante algo**: "Sí" del modal de confirmación,
+"Confirmar" (rename de mapa, edición de nombre del mapa), "Guardar"/
+"Overwrite"/"Guardar Nuevo Mapa" del editor, "Agregar"/"Guardar" del editor
+de campaña, "Jugar" del panel de detalle de campaña, "Iniciar oleada",
+Reroll de la tienda cuando es pagable. Todo lo demás usa el color por
+defecto (`UI_BUTTON_COLOR`, blanco) salvo que ya tenga su propia semántica
+de color (venta/eliminar = `UI_BUTTON_SELL_COLOR` rojo, pausa activa =
+amarillo). "No"/Cancelar/Salir usan el color por defecto — pedido
+explícito del usuario, ya no existe `UI_MODAL_CANCEL_BUTTON_COLOR` (era el
+único uso del rojo fuera de venta/eliminar, se eliminó la constante).
+
+**No confundir con `UI_BUTTON_TOGGLE_ACTIVE_COLOR`** (el verde que antes se
+llamaba `UI_BUTTON_ACTION_COLOR` y se usaba, sin distinción, tanto para
+botones afirmativos como para indicadores de "esta opción está activa"
+— skip-shop, flags BOSS/OPT/FIN del editor de campaña). Un toggle activo
+NO es un botón afirmativo: es una marca de selección/estado, y perdería su
+función si se volviera azul (se confundiría con "confirmar") o default (se
+volvería indistinguible de un botón inactivo). Al agregar un botón nuevo,
+la pregunta es "¿esto ACEPTA/CONFIRMA/EJECUTA una acción, o sólo INDICA qué
+opción está seleccionada ahora mismo?" — lo primero es azul, lo segundo
+sigue siendo verde-toggle, y cualquier otra cosa es el blanco por defecto.
+
+**Excepción explícita: velocidad x1/x2/x3.** Pedido directo del usuario —
+el botón de la velocidad activa usa el azul afirmativo
+(`active_speed`/`_hover`/`_press` en `render_game_ui`, `systems/menus.odin`),
+no el verde de toggle, pese a ser conceptualmente un indicador de estado
+igual que skip-shop. No generalizar esta excepción a otros toggles sin que
+el usuario lo pida explícitamente para ese caso puntual.
+
+## Soporte de mando — primera etapa: navegación de menús (`systems/gamepad.odin`)
+
+Todo el input crudo de mando vive en `systems/gamepad.odin` — un solo
+mando soportado por ahora (`GAMEPAD_INDEX :: 0`). `gamepad_nav_update(app,
+dt)` se llama **una sola vez por frame**, al principio de `input_handle`
+(`systems/input.odin`), antes del switch por estado; devuelve la
+`Gamepad_Nav_Dir` (`.NONE`/`.UP`/`.DOWN`/`.LEFT`/`.RIGHT`) a mover este
+frame y queda cacheada en `current_nav_dir` (static de paquete) para que
+las pantallas de `menus.odin`/`campaign.odin` la lean sin recalcularla.
+raylib no tiene repeat para botones de mando (sólo `IsKeyPressedRepeat`
+para teclado) — `_gamepad_dir_check` lo hand-rollea con un timer propio
+por dirección (`GAMEPAD_NAV_REPEAT_DELAY`/`_INTERVAL`), mismo espíritu que
+el repeat de flechas de `render_input` pero sin el helper nativo.
+`App_State.gamepad_nav_active` decide qué dispositivo "ganó" por última
+vez: se prende con cualquier input de mando, se apaga con movimiento real
+de mouse o un click real — así el anillo de foco nunca aparece si el
+jugador usa mouse.
+
+**Integración mínima en `render_button`/`render_icon_button`
+(`systems/interface.odin`)**: `Button_Opts` ganó `gamepad_focused: bool`.
+Si está en `true`, el botón se trata como hovereado (mismo color/estado
+visual que un hover de mouse, cero código nuevo de dibujo) y además dibuja
+`draw_gamepad_focus_ring(rect)` encima (anillo blanco, mismo patrón que el
+anillo de nodo activo del mapa de campaña). El click gana una rama:
+`opts.gamepad_focused && gamepad_confirm_pressed()` (botón A/Cruz,
+`RIGHT_FACE_DOWN`), evaluada contra `ui_is_modal_blocked` en el **centro
+del rect del botón**, no en la posición del mouse (que puede estar en
+cualquier lado mientras se navega con mando) — el chequeo de bloqueo por
+mouse real sigue usando la posición del mouse como siempre. Cada pantalla
+es responsable de poner `gamepad_focused = true` en UN SOLO botón por
+frame; nada dentro de `render_button` lo garantiza.
+
+**Por pantalla — índice de foco como static de paquete** (mismo criterio
+que `library_scroll`/`campaign_map_scroll`): `menu_focused_idx` (menú
+principal, navegación vertical con `.UP`/`.DOWN`, clamp no wrap contra
+`slot_count`, ya existente) y `run_complete_focused_idx` (fin de partida,
+horizontal con `.LEFT`/`.RIGHT`, clamp contra `num_btns` — ambas ramas
+derrota/victoria comparten el mismo conteo y usan el helper local
+`focused(app, idx)`). Créditos y los botones sueltos de "Volver" en
+Biblioteca/Mapa de campaña no necesitan índice — son un único widget
+focuseable, `gamepad_focused = app.gamepad_nav_active` directo.
+
+**Cancelar** (botón B/Círculo, `RIGHT_FACE_RIGHT`,
+`gamepad_cancel_pressed()`) se sumó con `||` a los `if
+raylib.IsKeyPressed(.ESCAPE)` que ya existían en SETTINGS/LIBRARY/
+CAMPAIGN_MAP/CREDITS (`input.odin`) — no se inventó un mecanismo nuevo, el
+mando dispara exactamente la misma rama que ya disparaba ESC.
+
+**Explícitamente fuera de esta etapa** (no construido, no tocar sin que el
+usuario lo pida de nuevo): Settings (sliders + dropdown, necesitan su
+propia lógica de ajuste-con-stick), navegación 2D de los nodos del mapa de
+campaña (grafo, no lista), navegación de las cartas en abanico de la
+Biblioteca (layout con overlap, no lista lineal), el modal de confirmación
+Sí/No (el botón que lo abre queda con foco visual pero Sí/No en sí no son
+navegables con mando todavía), y cualquier input de gameplay (PLAYING:
+cámara, colocar/vender torres, tienda).
+
+**Limitación conocida, aceptada para esta etapa**: `menu_focused_idx`/
+`run_complete_focused_idx` no se resetean al entrar a la pantalla — si el
+conteo de botones visible cambió desde la última visita (ej. RUN_COMPLETE
+con o sin el botón de Campaña), el anillo de foco puede no mostrarse hasta
+el primer input direccional, que lo re-clampea. No rompe nada, sólo tarda
+un input en aparecer.
+
 ## Sistema de UI blocking
 
 `ui_blocks_clear()` se llama al inicio de cada frame desde `render_game`.
@@ -427,6 +594,79 @@ exclusión. Los hijos de un boss+SPLIT no heredan `BOSS`/`SPLIT`/`BONUS`
 - **`ui_modal_blocks`**: evita que botones de capas inferiores respondan.
   Usado por el shop overlay (`render_ui` agrega un rect pantalla-completa
   cuando el shop está activo).
+
+## Visualizador de campaña (`Game_State.CAMPAIGN_MAP`, `systems/campaign.odin`)
+
+El grafo de nodos (`render_campaign_map`) crece **verticalmente**: el main
+path (nodos sin `.OPTIONAL`) se distribuye en Y de 0 a 1
+(`compute_campaign_layout`), y los `.OPTIONAL` cuelgan a los costados
+(izquierda/derecha) de su `requires_node`, no arriba/abajo — es el eje
+invertido respecto a como era originalmente (main path en X).
+
+**Scroll vertical sin tocar `campaign_pos_to_screen`.** La función sigue
+interpolando `pos∈[0,1]²` entre `x_lef..x_rig`/`y_top..y_bot` sin cambios de
+firma. El scroll se logra pasándole un rango Y "efectivo" más alto que el
+viewport visible (`canvas_h`, dimensionado por
+`entities.campaign_main_path_count` × `CAMPAIGN_NODE_SPACING_PX`) y
+corrido por `campaign_map_scroll` (statics del archivo, mismo patrón que
+`progression_scroll`/`library_scroll` en `menus.odin`). Las tres pasadas
+(conexiones, nodos, y el propio hover/click) van envueltas en
+`BeginScissorMode`/`EndScissorMode` para que los nodos scrolleados fuera de
+vista no se dibujen sobre el título o el botón Volver — el panel de
+detalle se dibuja DESPUÉS de cerrar el scissor, a propósito, para poder
+sobresalir del área del grafo si hace falta. El rect del scissor se infla
+con `CAMPAIGN_SCISSOR_MARGIN_PX` en las cuatro direcciones — sin ese
+margen, los nodos del primer/último tramo del main path (que caen justo en
+`y_top`/`y_bot`) quedan cortados a la mitad por el propio recorte.
+
+**Nombre del mapa (`Map.display_name`, guardado dentro del `.map`).** El
+título mostrado para cada nodo (tooltip de hover y panel de detalle) sale
+de `campaign_node_title`, con prioridad: `display_name` propio del
+`Campaign_Node` (seteado a mano en el editor de campaña) > `display_name`
+del `.map` referenciado (cacheado por nodo en
+`app.campaign_map_display_names`, ver `campaign_refresh_map_display_names`
+— se recalcula al cargar/recargar `campaign.bin`, cargando cada `.map` UNA
+sola vez, no por frame) > nombre de archivo, como último fallback. El
+campo en sí (`Map.display_name`, `[MAP_DISPLAY_NAME_LEN]u8`) se edita desde
+un botón "Nombre" nuevo en el toolbar del editor (`systems/menus.odin`,
+`render_editor_ui`) que abre un `render_input` inline, y se persiste en
+`Map_Bin_File` reusando bytes que antes eran `_trailing_pad` — el tamaño
+del struct no cambió, así que mapas guardados antes de este cambio siguen
+cargando igual (se leen con `display_name` vacío).
+
+El mismo `map_load` de `campaign_refresh_map_display_names` también cachea
+el **bioma** de cada nodo (`app.campaign_map_biomes`/
+`campaign_map_biome_valid` — este último en `false` si el `.map` no se
+pudo cargar, para no mostrar un bioma inventado). El tooltip de hover lo
+muestra junto al nombre de archivo, en la segunda línea gris (ver
+`sublabel` de `render_label_tooltip` más abajo).
+
+**Click ya no lanza la run directamente.** Selecciona el nodo
+(`campaign_map_selected_node`) y abre `render_campaign_node_detail_panel`,
+que muestra dificultad (con tier de texto), oleadas, recompensa bonus,
+razón de bloqueo (nombre del nodo predecesor) y mejor resultado — todo de
+campos que ya existían en `Campaign_Node`, ninguno nuevo. `launch_campaign_node`
+sólo se llama desde el botón "Jugar" del panel.
+
+Este es el primer lugar donde una superficie clickeable **circular** (no un
+`render_button` rectangular) se registra en `ui_click_blocks` y respeta
+`ui_is_modal_blocked` — antes esta pantalla no chequeaba ninguno de los
+dos, así que un click podía "pasar a través" de un modal abierto. Sirve de
+precedente si hace falta otro hit-test no rectangular en el futuro.
+
+**Click afuera del panel lo cierra.** `node_click_handled` (local a
+`render_campaign_map`) evita que el mismo click que abre/cambia la
+selección la cierre en el mismo frame; `render_campaign_node_detail_panel`
+devuelve su propio rect para que el caller detecte un click fuera de él.
+
+**Tooltip de hover con segunda línea en gris.** `render_label_tooltip`
+(`interface.odin`) ahora acepta un `sublabel` opcional — una segunda línea
+en `UI_MAP_BROWSER_MUTED_COLOR` debajo de la principal, mismo tratamiento
+que el nombre de archivo en el Map Browser. El tooltip rápido del mapa de
+campaña lo usa para mostrar siempre el nombre real del `.map` (
+`campaign_node_map_filename`) debajo del título (que puede ser un
+`display_name`), así el archivo real queda visible aunque el título
+mostrado sea otro.
 
 ## Conversión string → cstring (patrón obligatorio)
 
@@ -1383,7 +1623,7 @@ como caída y no como corona rígida hacia arriba.
 
 Activado vía `constants.NEBULA_BACKGROUND_ENABLED :: true` (gatea la
 llamada a `nebula_draw()` en `render_game`, usado en MENU, RUN_COMPLETE,
-CAMPAIGN_MAP, PROGRESSION, LIBRARY). Poner el flag en `false` lo desactiva
+CAMPAIGN_MAP, LIBRARY, CREDITS). Poner el flag en `false` lo desactiva
 sin tocar nada más — la infraestructura (`nebula_init/unload/draw`) queda
 cargada igual.
 
@@ -1477,12 +1717,40 @@ con base en y=0):
 - **Caja de madera** (`crate_model`, `models/crate/wooden_crate.obj`):
   reemplaza el `DrawCube`+`DrawCubeWires` liso que dibujaba
   `render_airdrop_boxes_3d` para la fase `BOX_LANDED`. Cajón con tablones
-  verticales marcados por cara, listones de refuerzo en las aristas y
-  cruz diagonal en la tapa. Yaw aleatorio por drop
-  (`hash_random(target_row, target_col, 21)`, índice que no pisa el 7/11/13
-  de árboles ni el 17 de casas). Con sombra real
-  (`render_airdrop_boxes_shadow_3d`) — antes no tenía (el `DrawCube` nunca
-  se llamaba desde la pasada de sombra).
+  verticales marcados por cara, tablones de esquina gruesos (más anchos
+  que los listones finos de la primera versión, a pedido explícito —
+  sobresalen del footprint de las paredes para no quedar coincidentes con
+  ellas y evitar z-fighting), bandas horizontales de refuerzo en los
+  márgenes superior e inferior de cada cara, y cruz diagonal de TABLONES
+  gruesos en la tapa (mismo pedido que los tablones de esquina — la cruz
+  original era un par de listones finos, ahora son dos tablones anchos
+  que sobresalen apenas por encima de la tapa, con la misma técnica de
+  "agregar geometría nueva más grande encima de la vieja" que los
+  tablones de esquina, en vez de intentar aislar/borrar los listones
+  finos originales del mesh multi-pieza).
+  Yaw alineado a la grilla en pasos de 90° (`block_tile_yaw`, mismo
+  criterio que las casas — a pedido explícito, "una caja apoyada en el
+  piso debería quedar a escuadra con el tile"; antes era un ángulo libre
+  vía `hash_random(target_row, target_col, 21) * 360`, índice que se
+  mantiene reusado pero ahora a través de `block_tile_yaw`). Con sombra
+  real (`render_airdrop_boxes_shadow_3d`) — antes no tenía (el `DrawCube`
+  viejo nunca se llamaba desde la pasada de sombra).
+
+  **Trampa real al reimportar un `.obj` ya exportado para retocarlo en
+  Blender**: `bpy.ops.wm.obj_import(..., forward_axis='NEGATIVE_Z',
+  up_axis='Y')` — los MISMOS parámetros que ya se usaron para EXPORTAR el
+  archivo — no deshace la conversión de ejes como cabría esperar: la
+  altura del modelo (columna Y del `.obj`) termina en el eje LOCAL Y de
+  Blender tras reimportar, no en Z como sería la convención Z-up nativa
+  con la que se construyó el modelo originalmente. Ya había pasado antes
+  con `enhance_tower` (ver esa sección) — acá se confirmó que pasa
+  SIEMPRE al reimportar (no es un caso aislado), así que el patrón a
+  seguir es: medir `mesh.vertices` del objeto reimportado ANTES de asumir
+  qué eje es cuál, trabajar en el marco de ejes que efectivamente aparece
+  (no en el que "debería" ser), y listo — el round-trip de export es
+  consistente mientras se usen los mismos parámetros de export de
+  siempre, así que no hace falta corregir nada a mano, solo no dar por
+  sentado el eje.
 
 - **Avión F-16** (`plane_model`, `models/plane/cargo_plane.obj`): el avión
   de los airdrops (fase `PLANE_FLYING`) pasó de ser un dibujo 100%
@@ -1641,6 +1909,65 @@ NUNCA tuvo ese caso especial — el tilt hacia arriba era pura decoración
 del ícono 2D (`draw_tower_components_mortar`, sigue existiendo, es la capa
 de íconos de UI/paleta, separada del render 3D). El mortero rota horizontal
 igual que las demás 7 torres con torreta, sin ningún caso especial.
+
+**Retoque de diseño — ENHANCE** (`models/towers/enhance_tower.obj`, ya
+exportado, sin cambios de código): la primera versión tenía, además de las
+4 antenas gruesas que se abren desde el pedestal, un segundo grupo de
+"rayos" finos convergiendo directo hacia la esfera (material
+`EnhanceAntennaMat.002`, radio de spread bien menor que el de las antenas
+gruesas — `EnhanceAntennaMatV2`) — a pedido explícito se borraron esas 80
+caras (identificadas por material, no por posición a ojo) y se agregó un
+anillo real (un toroide armado a mano vía `bmesh`, 32×8 segmentos,
+`MAJOR_R=0.15`/`MINOR_R=0.018`, inclinado 18° — no perfectamente
+horizontal, look más dinámico tipo anillo de Saturno) alrededor de la
+esfera existente (centro `y≈0.85`, radio de la esfera `≈0.1`). Mismo
+patrón de esta sesión para reimportar y retocar un modelo ya exportado:
+medir ejes reales tras reimportar (acá también quedó la altura en Y local,
+ver la trampa de la caja de madera más arriba) antes de tocar nada.
+
+Segunda pasada (pedido explícito: "saca los demás rayos... agrega más
+anillos"): resultó que las 4 antenas gruesas ORIGINALES (`EnhanceAntennaMatV2`)
+también contaban como "rayos" para el usuario — se borraron esas 80 caras
+también (mismo criterio, por material), dejando la esfera SIN ningún
+soporte físico rígido, flotando sobre el pedestal (gap real de ~0.2
+unidades) sostenida solo visualmente por los anillos.
+
+**Tercera pasada — los anillos NO deben tocarse entre sí** (pedido
+explícito): la versión anterior tenía 3 anillos a distinto tilt/spin
+(look esfera armilar, cruzándose a propósito) — el usuario pidió lo
+contrario, que no se toquen. Rediseño: 3 anillos CONCÉNTRICOS, mismo
+tilt (18°, sin spin — coplanares entre sí, un solo plano inclinado, no 3
+planos distintos), radios crecientes con margen explícito entre
+superficies de tubo consecutivas (`major_r - minor_r` del anillo N+1
+menos `major_r + minor_r` del anillo N, todos ≥0.025 — verificado
+numéricamente, no a ojo). **Bug real pisado en el camino**: el primer
+intento de esta versión concéntrica usó `major_r=0.11` para el anillo
+interior, con `minor_r=0.016` — borde interior en `0.094`, MENOR que el
+radio de la esfera (`0.1`), así que el anillo clipeaba/atravesaba la
+esfera. Fix: `major_r=0.14` para el anillo interior (borde interior
+`0.124`, con margen real de `0.024` sobre el radio de la esfera) — mismo
+tipo de chequeo que los gaps entre anillos, pero contra la esfera en vez
+de contra el siguiente anillo. Radios finales: 0.14/0.195/0.246 con
+minor_r 0.016/0.014/0.012.
+
+**Cuarta pasada — cada anillo en un plano distinto, pero SIN volver a
+tocarse** (pedido explícito, combinando los dos anteriores): la clave es
+que la garantía de "no se tocan" de la pasada anterior no depende de que
+sean coplanares. Todo punto de la SUPERFICIE de un toroide (radio mayor
+`R`, radio de tubo `r`) cae a una distancia del centro del toroide
+acotada en `[R-r, R+r]` — por desigualdad triangular, sin importar la
+orientación/tilt/spin del anillo. Entonces, si las franjas `[R-r, R+r]`
+de dos anillos (y de la esfera) NO se solapan, esos dos anillos no pueden
+tocarse sin importar en qué plano esté cada uno. Se reusaron los mismos
+3 radios/`minor_r` ya verificados (franjas disjuntas con margen ≥0.024
+contra la esfera y ≥0.025 entre anillos consecutivos) y solo se les dio
+tilt/spin distinto a cada uno (15°/0°, 75°/55°, 45°/130°) — mismo
+resultado visual "esfera armilar" que la segunda pasada, pero sin
+reintroducir el problema de contacto que motivó la tercera. Este
+principio (franjas de distancia-al-centro disjuntas) es el criterio
+general a usar si en algún momento hace falta agregar más anillos o
+piezas concéntricas en órbitas distintas sin que se toquen — más robusto
+que ajustar ángulos a ojo y revisar con captura de pantalla.
 
 **Sombra real** (`draw_tower_model_shadow_3d`/`render_tower_shadow_3d`),
 mismo patrón shader-swap de siempre: pisa el shader de los materiales de
@@ -1804,9 +2131,26 @@ agrega otro shader animado por tiempo, replicar este mismo patrón.
 
 ## Victoria / derrota
 
-- Derrota: `app.sim.health <= 0` → `app_set_state(.GAME_OVER)`, `is_victory = false`.
+- Derrota: `app.sim.health <= 0` → `app_finish_run(false)`, `is_victory = false`.
 - Victoria: se completa la oleada `RUN_MAX_WAVES` con salud restante → `is_victory = true`.
 - `render_game_over_ui` usa `GAME_VICTORY_TITLE` (verde) o `GAME_OVER_TITLE` (rojo) según `is_victory`.
+
+**Fade a negro al terminar la run.** `app_finish_run` ya NO llama
+`app_set_state(.GAME_OVER/.RUN_COMPLETE)` directo — hace
+`app_begin_state_fade(app, ...)` (`entities/app.odin`), que arranca un
+`App_State.screen_fade` (oscurecer → cambiar de estado en negro total →
+revelar). `app_screen_fade_update` se llama una vez por frame desde
+`main.odin`, ANTES de `render_game`, y es quien hace el `app_set_state`
+real justo en el instante en que la pantalla queda completamente negra —
+así el jugador nunca ve el salto directo a Ganaste/Perdiste, sólo
+negro → pantalla nueva. El velo se dibuja en `render_game` (`rendering.odin`)
+como el último `DrawRectangle` de todo el frame, encima incluso de la
+consola, porque es una transición de pantalla completa. Mientras
+`screen_fade.active`, `main.odin` congela `simulation_update` (el jugador ve
+el último frame de la partida quieto mientras oscurece, no torres/enemigos
+siguiendo en movimiento) y `app_finish_run` se auto-bloquea al reentrar
+(evita tallar cristales dos veces si algo dispara otro finish_run en esa
+ventana).
 
 ## Trampas conocidas
 

@@ -285,10 +285,17 @@ main :: proc() {
 		                 (app.state == .PLAYING && app.sim.shop.active)
 		systems.music_update(app.state, dt, music_muffled)
 
-		// Update simulation (if playing)
-		if app.state == .PLAYING {
+		// Update simulation (if playing) — congelada durante el fade a negro
+		// de fin de partida, para que el jugador vea el último frame quieto
+		// mientras oscurece, en vez de seguir viendo torres/enemigos moverse.
+		if app.state == .PLAYING && !app.screen_fade.active {
 			systems.simulation_update(&app, dt)
 		}
+
+		// Avanza la transición de fade a negro (victoria/derrota), si hay
+		// alguna en curso — antes de renderizar, así el cambio de estado se
+		// refleja en el mismo frame en que la pantalla llega a negro total.
+		entities.app_screen_fade_update(&app, dt)
 
 		// Update console slide animation (always)
 		systems.console_update(&app, dt)

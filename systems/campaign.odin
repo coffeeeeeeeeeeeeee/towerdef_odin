@@ -53,7 +53,7 @@ campaign_editor_enter :: proc(app: ^entities.App_State) {
 // pulsado Guardar antes. Si tiene cambios sin guardar muestra warning.
 campaign_editor_exit :: proc(app: ^entities.App_State) {
 	if app.editor.campaign_editor.dirty {
-		entities.add_toast(app, "Saliste sin guardar — cambios perdidos", .WARNING, 3.0)
+		entities.add_toast(app, "Saliste sin guardar - cambios perdidos", .WARNING, 3.0)
 	}
 	app.editor.campaign_editor.active        = false
 	app.editor.campaign_editor.selected_node = -1
@@ -296,14 +296,15 @@ render_campaign_editor_right_panel :: proc(
 	gap    : f32 = 4
 	x      := f32(preview_x)
 
-	// Toggles de flags
-	flag_active_color   := constants.UI_BUTTON_ACTION_COLOR
+	// Toggles de flags — indicador de estado "activo", no un botón afirmativo
+	// (ver UI_BUTTON_TOGGLE_ACTIVE_COLOR).
+	flag_active_color   := constants.UI_BUTTON_TOGGLE_ACTIVE_COLOR
 	flag_inactive_color := constants.COLOR_NONE
 	if render_button("BOSS", {x, f32(btn_y2), btn_w2, btn_h2}, {
 		text_color    = constants.UI_TEXT_COLOR,
 		button_color  = flag_active_color if .BOSS in node.flags else flag_inactive_color,
-		hover_color   = constants.UI_BUTTON_ACTION_HOVER,
-		pressed_color = constants.UI_BUTTON_ACTION_PRESS,
+		hover_color   = constants.UI_BUTTON_TOGGLE_ACTIVE_HOVER,
+		pressed_color = constants.UI_BUTTON_TOGGLE_ACTIVE_PRESS,
 	}) {
 		campaign_editor_toggle_flag(app, .BOSS)
 	}
@@ -312,8 +313,8 @@ render_campaign_editor_right_panel :: proc(
 	if render_button("OPT", {x, f32(btn_y2), btn_w2, btn_h2}, {
 		text_color    = constants.UI_TEXT_COLOR,
 		button_color  = flag_active_color if .OPTIONAL in node.flags else flag_inactive_color,
-		hover_color   = constants.UI_BUTTON_ACTION_HOVER,
-		pressed_color = constants.UI_BUTTON_ACTION_PRESS,
+		hover_color   = constants.UI_BUTTON_TOGGLE_ACTIVE_HOVER,
+		pressed_color = constants.UI_BUTTON_TOGGLE_ACTIVE_PRESS,
 	}) {
 		campaign_editor_toggle_flag(app, .OPTIONAL)
 	}
@@ -322,8 +323,8 @@ render_campaign_editor_right_panel :: proc(
 	if render_button("FIN", {x, f32(btn_y2), btn_w2, btn_h2}, {
 		text_color    = constants.UI_TEXT_COLOR,
 		button_color  = flag_active_color if .FINALE in node.flags else flag_inactive_color,
-		hover_color   = constants.UI_BUTTON_ACTION_HOVER,
-		pressed_color = constants.UI_BUTTON_ACTION_PRESS,
+		hover_color   = constants.UI_BUTTON_TOGGLE_ACTIVE_HOVER,
+		pressed_color = constants.UI_BUTTON_TOGGLE_ACTIVE_PRESS,
 	}) {
 		campaign_editor_toggle_flag(app, .FINALE)
 	}
@@ -369,19 +370,19 @@ render_campaign_editor_footer :: proc(
 
 	if render_button(constants.get_text("CAMPAIGN_EDITOR_ADD"), {f32(add_x), f32(btn_y), f32(btn_w), f32(btn_h)}, {
 		text_color    = constants.UI_TEXT_COLOR,
-		button_color  = constants.UI_BUTTON_ACTION_COLOR,
-		hover_color   = constants.UI_BUTTON_ACTION_HOVER,
-		pressed_color = constants.UI_BUTTON_ACTION_PRESS,
+		button_color  = constants.UI_BUTTON_AFFIRMATIVE_COLOR,
+		hover_color   = constants.UI_BUTTON_AFFIRMATIVE_HOVER,
+		pressed_color = constants.UI_BUTTON_AFFIRMATIVE_PRESS,
 	}) {
 		campaign_editor_add_selected_map(app)
 	}
 
-	save_color := constants.UI_BUTTON_ACTION_COLOR if app.editor.campaign_editor.dirty else constants.COLOR_NONE
+	save_color := constants.UI_BUTTON_AFFIRMATIVE_COLOR if app.editor.campaign_editor.dirty else constants.COLOR_NONE
 	if render_button(constants.get_text("CAMPAIGN_EDITOR_SAVE"), {f32(save_x), f32(btn_y), f32(btn_w), f32(btn_h)}, {
 		text_color    = constants.UI_TEXT_COLOR,
 		button_color  = save_color,
-		hover_color   = constants.UI_BUTTON_ACTION_HOVER,
-		pressed_color = constants.UI_BUTTON_ACTION_PRESS,
+		hover_color   = constants.UI_BUTTON_AFFIRMATIVE_HOVER,
+		pressed_color = constants.UI_BUTTON_AFFIRMATIVE_PRESS,
 	}) {
 		campaign_editor_save(app)
 	}
@@ -407,21 +408,23 @@ compute_campaign_layout :: proc(c: ^entities.Campaign_File) -> [constants.CAMPAI
 	}
 	if main_count == 0 { return layout }
 
-	// Distribuir nodos del main path sobre la línea horizontal central
+	// Distribuir nodos del main path sobre la línea vertical central —
+	// el camino principal crece hacia abajo (estilo mapa de niveles).
 	main_idx := 0
 	for i in 0 ..< int(c.node_count) {
 		if .OPTIONAL in c.nodes[i].flags { continue }
-		x: f32
+		y: f32
 		if main_count == 1 {
-			x = 0.5
+			y = 0.5
 		} else {
-			x = f32(main_idx) / f32(main_count - 1)
+			y = f32(main_idx) / f32(main_count - 1)
 		}
-		layout[i] = {x, 0.5}
+		layout[i] = {0.5, y}
 		main_idx += 1
 	}
 
-	// Posicionar OPTIONAL cerca de su parent (requires_node)
+	// Posicionar OPTIONAL cerca de su parent (requires_node), colgando a los
+	// costados (izquierda/derecha) en vez de arriba/abajo.
 	for i in 0 ..< int(c.node_count) {
 		if .OPTIONAL not_in c.nodes[i].flags { continue }
 		parent_idx := c.nodes[i].requires_node
@@ -441,10 +444,10 @@ compute_campaign_layout :: proc(c: ^entities.Campaign_File) -> [constants.CAMPAI
 			}
 		}
 
-		// Alternar arriba/abajo; cada par adicional se aleja más en X
-		y_offset: f32 = 0.22
-		if sibling_idx % 2 == 1 { y_offset = -0.22 }
-		x_offset := f32(0.06) + f32(sibling_idx / 2) * 0.06
+		// Alternar izquierda/derecha; cada par adicional se aleja más en Y
+		x_offset: f32 = 0.22
+		if sibling_idx % 2 == 1 { x_offset = -0.22 }
+		y_offset := f32(0.06) + f32(sibling_idx / 2) * 0.06
 
 		layout[i] = {parent_x + x_offset, parent_y + y_offset}
 	}
@@ -487,6 +490,46 @@ launch_campaign_node :: proc(app: ^entities.App_State, node_idx: i32) {
 		entities.add_toast(app, constants.get_text("EDITOR_ERROR_NO_PATH"), .ERROR, 3.0)
 		play_sound(.ERROR, .UI)
 	}
+}
+
+// Refresca el cache de nombre + bioma de mapa por nodo — se llama al
+// cargar/recargar campaign.bin. Carga cada .map una sola vez acá (no por
+// frame) sólo para leer su nombre editable y su bioma.
+campaign_refresh_map_display_names :: proc(app: ^entities.App_State) {
+	for i in 0 ..< len(app.campaign_map_display_names) {
+		if len(app.campaign_map_display_names[i]) > 0 {
+			delete(app.campaign_map_display_names[i])
+			app.campaign_map_display_names[i] = ""
+		}
+		app.campaign_map_biome_valid[i] = false
+	}
+	c := &app.campaign
+	for i in 0 ..< int(c.node_count) {
+		fname   := entities.campaign_node_map_filename(&c.nodes[i])
+		scratch := entities.map_init()
+		if entities.map_load(&scratch, fname) {
+			name := entities.map_display_name(&scratch)
+			if len(name) > 0 {
+				app.campaign_map_display_names[i] = strings.clone(name)
+			}
+			app.campaign_map_biomes[i]      = scratch.biome
+			app.campaign_map_biome_valid[i] = true
+		}
+		entities.map_destroy(&scratch)
+	}
+}
+
+// Título a mostrar para un nodo: display_name propio del nodo (seteado a
+// mano en el editor de campaña) > nombre editable del .map (cacheado) >
+// nombre del archivo, en ese orden de prioridad.
+campaign_node_title :: proc(app: ^entities.App_State, node_idx: int) -> string {
+	node := &app.campaign.nodes[node_idx]
+	disp := entities.campaign_node_display_name(node)
+	if len(disp) > 0 { return disp }
+	if node_idx < len(app.campaign_map_display_names) && len(app.campaign_map_display_names[node_idx]) > 0 {
+		return app.campaign_map_display_names[node_idx]
+	}
+	return entities.campaign_node_map_filename(node)
 }
 
 // Convierte una posición [0..1]² a coordenadas de pantalla dentro del área dada.
@@ -533,6 +576,11 @@ draw_campaign_connection :: proc(from, to: [2]f32, thickness: f32, color: raylib
 	raylib.DrawLineEx(p2, p3, thickness, color)
 }
 
+// Estado del visualizador de campaña (scroll vertical + nodo seleccionado
+// para el panel de detalle). Se resetea al salir (botón Volver o ESC).
+campaign_map_scroll:        f32 = 0
+campaign_map_selected_node: i32 = -1
+
 // Render del visualizador de campaña — Game_State.CAMPAIGN_MAP.
 render_campaign_map :: proc(app: ^entities.App_State) {
 	// Carga lazy de campaign.bin la primera vez que se entra.
@@ -545,6 +593,7 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 			if ok {
 				app.campaign = loaded
 				app.campaign_file_mtime = current_mtime
+				campaign_refresh_map_display_names(app)
 				entities.add_toast(app, "campaign.bin recargado (hot-reload)", .INFO, 2.0)
 			}
 		}
@@ -558,6 +607,7 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 			app.campaign = entities.Campaign_File{}
 		}
 		app.campaign_loaded = true
+		campaign_refresh_map_display_names(app)
 		when constants.DEVELOPER {
 			app.campaign_file_mtime = entities.campaign_file_mtime()
 		}
@@ -611,6 +661,21 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 		mouse  := raylib.GetMousePosition()
 		t      := f32(raylib.GetTime())
 
+		// El main path crece verticalmente — si hay más nodos de los que
+		// entran en el viewport, el canvas se estira y se scrollea con la
+		// rueda (mismo patrón que progression_scroll/library_scroll, eje Y).
+		main_count := entities.campaign_main_path_count(c)
+		canvas_h   := max(vis_y_bot - vis_y_top, f32(max(main_count - 1, 0)) * constants.CAMPAIGN_NODE_SPACING_PX)
+		max_scroll := max(f32(0), canvas_h - (vis_y_bot - vis_y_top))
+
+		wheel := raylib.GetMouseWheelMove()
+		if wheel != 0 { campaign_map_scroll -= wheel * 60 }
+		if campaign_map_scroll < 0          { campaign_map_scroll = 0 }
+		if campaign_map_scroll > max_scroll { campaign_map_scroll = max_scroll }
+
+		y_top_eff := vis_y_top - campaign_map_scroll
+		y_bot_eff := y_top_eff + canvas_h
+
 		// Nodo "activo" — primer nodo NO opcional, desbloqueado y no completado.
 		// Recibe un anillo blanco para destacar visualmente "lo que sigue".
 		active_idx := -1
@@ -624,26 +689,41 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 			}
 		}
 
-		// 1ª pasada: conexiones (atrás)
+		scissor_margin := constants.CAMPAIGN_SCISSOR_MARGIN_PX
+		raylib.BeginScissorMode(
+			i32(vis_x_lef - scissor_margin), i32(vis_y_top - scissor_margin),
+			i32(vis_x_rig - vis_x_lef + scissor_margin*2), i32(vis_y_bot - vis_y_top + scissor_margin*2),
+		)
+
+		// 1ª pasada: conexiones (atrás). Las ramas OPTIONAL se dibujan más
+		// finas y apagadas para distinguirlas del main path.
 		for i in 0 ..< int(c.node_count) {
 			node := &c.nodes[i]
 			if node.requires_node < 0 { continue }
 			parent_idx := int(node.requires_node)
 			if parent_idx < 0 || parent_idx >= int(c.node_count) { continue }
 
-			from := campaign_pos_to_screen(layout[parent_idx], vis_x_lef, vis_y_top, vis_x_rig, vis_y_bot)
-			to   := campaign_pos_to_screen(layout[i],          vis_x_lef, vis_y_top, vis_x_rig, vis_y_bot)
+			from := campaign_pos_to_screen(layout[parent_idx], vis_x_lef, y_top_eff, vis_x_rig, y_bot_eff)
+			to   := campaign_pos_to_screen(layout[i],          vis_x_lef, y_top_eff, vis_x_rig, y_bot_eff)
 
 			unlocked := entities.campaign_is_node_unlocked(c, app.meta.campaign_completed[:], i)
-			line_col := constants.COLOR_CAMPAIGN_CONNECTION_ACTIVE if unlocked else constants.COLOR_CAMPAIGN_CONNECTION_INACTIVE
-			draw_campaign_connection({from[0], from[1]}, {to[0], to[1]}, 2, line_col)
+			line_col: raylib.Color
+			thickness: f32 = 2
+			if .OPTIONAL in node.flags {
+				line_col  = constants.COLOR_CAMPAIGN_CONNECTION_OPTIONAL
+				thickness = 1
+			} else {
+				line_col = constants.COLOR_CAMPAIGN_CONNECTION_ACTIVE if unlocked else constants.COLOR_CAMPAIGN_CONNECTION_INACTIVE
+			}
+			draw_campaign_connection({from[0], from[1]}, {to[0], to[1]}, thickness, line_col)
 		}
 
 		// 2ª pasada: nodos (encima de las conexiones)
-		hovered_idx := -1
+		mouse_blocked      := ui_is_modal_blocked(i32(mouse.x), i32(mouse.y))
+		node_click_handled := false
 		for i in 0 ..< int(c.node_count) {
 			node := &c.nodes[i]
-			pos  := campaign_pos_to_screen(layout[i], vis_x_lef, vis_y_top, vis_x_rig, vis_y_bot)
+			pos  := campaign_pos_to_screen(layout[i], vis_x_lef, y_top_eff, vis_x_rig, y_bot_eff)
 
 			// Tamaño según flags
 			radius: f32 = constants.CAMPAIGN_NODE_RADIUS_DEFAULT
@@ -668,7 +748,8 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 				fill_col   = constants.COLOR_CAMPAIGN_LOCKED_FILL
 				border_col = constants.COLOR_CAMPAIGN_LOCKED_BORDER
 			}
-			// Outline especial para boss/finale (sobreescribe)
+			// Outline especial para boss/finale (sobreescribe), y anillo de
+			// selección si este es el nodo con el panel de detalle abierto.
 			if .FINALE in node.flags {
 				border_col = constants.COLOR_CAMPAIGN_FINALE_BORDER
 			} else if .BOSS in node.flags {
@@ -684,10 +765,10 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 				raylib.DrawCircleV({pos[0], pos[1]}, glow_r, pulse_col)
 			}
 
-			// Hover check
+			// Hover check (círculo, no hay widget compartido para esto)
 			dx := mouse.x - pos[0]
 			dy := mouse.y - pos[1]
-			hovered := dx*dx + dy*dy <= radius * radius
+			hovered := dx*dx + dy*dy <= radius*radius && !mouse_blocked
 
 			// Dibujar círculo + borde
 			raylib.DrawCircleV({pos[0], pos[1]}, radius, fill_col)
@@ -717,71 +798,64 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 				)
 			}
 
+			node_rect := raylib.Rectangle{pos[0] - radius, pos[1] - radius, radius * 2, radius * 2}
+			append(&ui_click_blocks, node_rect)
+
+			// Tooltip rápido de una línea en hover (widget compartido, no un
+			// DrawRectangleRounded a mano).
 			if hovered {
-				hovered_idx = i
+				disp := campaign_node_title(app, i)
+				status: string
+				switch {
+				case completed:
+					stars : u8 = 0
+					if i < len(app.meta.campaign_stars) { stars = app.meta.campaign_stars[i] }
+					best : i32 = 0
+					if i < len(app.meta.campaign_best) { best = app.meta.campaign_best[i] }
+					status = constants.get_text_f("CAMPAIGN_MAP_STATUS_COMPLETED", stars, best)
+				case unlocked:
+					status = constants.get_text("CAMPAIGN_MAP_STATUS_AVAILABLE")
+				case:
+					status = constants.get_text("CAMPAIGN_MAP_STATUS_LOCKED")
+				}
+				quick_line := fmt.tprintf("%s - %s", disp, status)
+				map_fname  := entities.campaign_node_map_filename(node)
+				sub_line   := map_fname
+				if i < len(app.campaign_map_biome_valid) && app.campaign_map_biome_valid[i] {
+					sub_line = fmt.tprintf("%s - %s", map_fname, constants.get_biome_name(app.campaign_map_biomes[i]))
+				}
+				render_label_tooltip(app, quick_line, node_rect, sub_line)
 			}
 
-			// Click sobre nodo disponible → lanzar run. En DEVELOPER, además,
-			// cualquier nodo bloqueado — para poder jugar cualquier mapa de
-			// la campaña sin tener que desbloquearlo primero.
-			playable := unlocked || constants.DEVELOPER
-			if hovered && playable && raylib.IsMouseButtonPressed(.LEFT) {
-				launch_campaign_node(app, i32(i))
+			// Click selecciona/deselecciona el nodo y abre el panel de
+			// detalle — ya NO lanza la run directamente (evita lanzamientos
+			// accidentales y permite ver info de nodos bloqueados).
+			if hovered && raylib.IsMouseButtonPressed(.LEFT) {
+				if campaign_map_selected_node == i32(i) {
+					campaign_map_selected_node = -1
+				} else {
+					campaign_map_selected_node = i32(i)
+				}
+				node_click_handled = true
+				play_sound(.CLICK, .UI)
 			}
 		}
 
-		// 3ª pasada: tooltip (encima de todo). Sólo el último hovered.
-		if hovered_idx >= 0 {
-			i := hovered_idx
-			node := &c.nodes[i]
-			pos  := campaign_pos_to_screen(layout[i], vis_x_lef, vis_y_top, vis_x_rig, vis_y_bot)
+		raylib.EndScissorMode()
 
-			unlocked  := entities.campaign_is_node_unlocked(c, app.meta.campaign_completed[:], i)
-			completed := i < len(app.meta.campaign_completed) && app.meta.campaign_completed[i]
+		// 3ª pasada: panel de detalle del nodo seleccionado (fuera del
+		// scissor — puede sobresalir del área del grafo si hace falta).
+		if campaign_map_selected_node >= 0 && int(campaign_map_selected_node) < int(c.node_count) {
+			sel := campaign_map_selected_node
+			pos := campaign_pos_to_screen(layout[sel], vis_x_lef, y_top_eff, vis_x_rig, y_bot_eff)
+			panel_rect := render_campaign_node_detail_panel(app, sel, {pos[0], pos[1]})
 
-			disp := entities.campaign_node_display_name(node)
-			if len(disp) == 0 { disp = entities.campaign_node_map_filename(node) }
-
-			status: string
-			switch {
-			case completed:
-				stars : u8 = 0
-				if i < len(app.meta.campaign_stars) { stars = app.meta.campaign_stars[i] }
-				best : i32 = 0
-				if i < len(app.meta.campaign_best) { best = app.meta.campaign_best[i] }
-				status = constants.get_text_f("CAMPAIGN_MAP_STATUS_COMPLETED", stars, best)
-			case unlocked:
-				status = constants.get_text("CAMPAIGN_MAP_STATUS_AVAILABLE")
-			case:
-				status = constants.get_text("CAMPAIGN_MAP_STATUS_LOCKED")
+			// Click fuera del panel (y no sobre el nodo que lo abrió/cerró
+			// este mismo frame) lo cierra.
+			if !node_click_handled && raylib.IsMouseButtonPressed(.LEFT) &&
+			   !raylib.CheckCollisionPointRec(mouse, panel_rect) {
+				campaign_map_selected_node = -1
 			}
-
-			line1_cs := strings.clone_to_cstring(disp,   context.temp_allocator)
-			line2_cs := strings.clone_to_cstring(status, context.temp_allocator)
-			fs : f32 = 13
-			tw1 := raylib.MeasureTextEx(constants.game_fonts.bold,    line1_cs, fs, 0).x
-			tw2 := raylib.MeasureTextEx(constants.game_fonts.regular, line2_cs, fs, 0).x
-			max_w := tw1 if tw1 > tw2 else tw2
-			pad : f32 = 8
-			tip_h : f32 = (fs + 2) * 2 + pad * 2
-			radius : f32 = constants.CAMPAIGN_NODE_RADIUS_FINALE  // approx max node radius
-			tip_y := pos[1] - radius - tip_h - 8
-			if tip_y < 100 { tip_y = pos[1] + radius + 8 }
-			tip_x := pos[0] - (max_w + pad * 2) / 2
-			raylib.DrawRectangleRounded(
-				{tip_x, tip_y, max_w + pad * 2, tip_h}, 0.3, 8,
-				constants.COLOR_CAMPAIGN_TOOLTIP_BG,
-			)
-			raylib.DrawTextEx(
-				constants.game_fonts.bold, line1_cs,
-				{tip_x + pad, tip_y + pad},
-				fs, 0, raylib.WHITE,
-			)
-			raylib.DrawTextEx(
-				constants.game_fonts.regular, line2_cs,
-				{tip_x + pad, tip_y + pad + fs + 2},
-				fs, 0, constants.COLOR_CAMPAIGN_TOOLTIP_DIM,
-			)
 		}
 	}
 
@@ -790,8 +864,133 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 	back_h : f32 = 32
 	back_x := sw / 2 - back_w / 2
 	back_y := sh - back_h - 24
-	if render_button(constants.get_text("CAMPAIGN_MAP_BACK"), {back_x, back_y, back_w, back_h}) {
+	if render_button(constants.get_text("CAMPAIGN_MAP_BACK"), {back_x, back_y, back_w, back_h},
+		{gamepad_focused = app.gamepad_nav_active},
+	) {
+		campaign_map_scroll        = 0
+		campaign_map_selected_node = -1
 		entities.app_set_state(app, .MENU)
 		play_sound(.CLICK, .UI)
 	}
+}
+
+// Panel de detalle de un nodo del mapa de campaña — reemplaza el rol
+// informativo del viejo tooltip hecho a mano. Se abre al clickear un nodo;
+// el botón "Jugar" es el único punto de entrada para lanzar la run.
+// Devuelve el rect ocupado por el panel (el caller lo usa para detectar
+// clicks afuera y cerrarlo).
+render_campaign_node_detail_panel :: proc(app: ^entities.App_State, node_idx: i32, anchor: raylib.Vector2) -> raylib.Rectangle {
+	c    := &app.campaign
+	node := &c.nodes[node_idx]
+
+	unlocked  := entities.campaign_is_node_unlocked(c, app.meta.campaign_completed[:], int(node_idx))
+	completed := int(node_idx) < len(app.meta.campaign_completed) && app.meta.campaign_completed[node_idx]
+
+	disp := campaign_node_title(app, int(node_idx))
+
+	// Tier de dificultad — puramente presentacional.
+	diff_tier: string
+	switch {
+	case node.difficulty_mult <= constants.CAMPAIGN_DIFFICULTY_EASY_MAX:
+		diff_tier = constants.get_text("CAMPAIGN_DIFFICULTY_EASY")
+	case node.difficulty_mult >= constants.CAMPAIGN_DIFFICULTY_VERY_HARD_MIN:
+		diff_tier = constants.get_text("CAMPAIGN_DIFFICULTY_VERY_HARD")
+	case node.difficulty_mult >= constants.CAMPAIGN_DIFFICULTY_HARD_MIN:
+		diff_tier = constants.get_text("CAMPAIGN_DIFFICULTY_HARD")
+	case:
+		diff_tier = constants.get_text("CAMPAIGN_DIFFICULTY_NORMAL")
+	}
+
+	waves := node.waves_override if node.waves_override != 0 else constants.RUN_MAX_WAVES
+
+	status: string
+	switch {
+	case completed:
+		stars : u8 = 0
+		if int(node_idx) < len(app.meta.campaign_stars) { stars = app.meta.campaign_stars[node_idx] }
+		best : i32 = 0
+		if int(node_idx) < len(app.meta.campaign_best) { best = app.meta.campaign_best[node_idx] }
+		status = constants.get_text_f("CAMPAIGN_MAP_STATUS_COMPLETED", stars, best)
+	case unlocked:
+		status = constants.get_text("CAMPAIGN_MAP_STATUS_AVAILABLE")
+	case:
+		status = constants.get_text("CAMPAIGN_MAP_STATUS_LOCKED")
+	}
+
+	// Armar las líneas de contenido primero para poder dimensionar el panel.
+	lines := make([dynamic]string, context.temp_allocator)
+	append(&lines, disp)
+	append(&lines, status)
+	if !unlocked && node.requires_node >= 0 && int(node.requires_node) < int(c.node_count) {
+		pred_name := campaign_node_title(app, int(node.requires_node))
+		append(&lines, constants.get_text_f("CAMPAIGN_MAP_DETAIL_LOCKED_REQUIRES", pred_name))
+	}
+	append(&lines, constants.get_text_f("CAMPAIGN_MAP_DETAIL_DIFFICULTY", diff_tier, node.difficulty_mult))
+	append(&lines, constants.get_text_f("CAMPAIGN_MAP_DETAIL_WAVES", waves))
+	if node.reward_cristales > 0 {
+		append(&lines, constants.get_text_f("CAMPAIGN_MAP_DETAIL_REWARD", node.reward_cristales))
+	}
+
+	fs        : f32 = 14
+	line_h    : f32 = fs + 6
+	pad       : f32 = 12
+	badge_h   : f32 = 20
+	button_h  : f32 = 32
+	panel_w   : f32 = 260
+	panel_h   := pad*2 + f32(len(lines))*line_h + badge_h + button_h + 8
+
+	sw := f32(raylib.GetScreenWidth())
+	sh := f32(raylib.GetScreenHeight())
+	px := anchor.x - panel_w/2
+	py := anchor.y - panel_h - 16
+	if py < 90         { py = anchor.y + 24 }
+	if px < 12          { px = 12 }
+	if px + panel_w > sw - 12 { px = sw - 12 - panel_w }
+	if py + panel_h > sh - 12 { py = sh - 12 - panel_h }
+
+	panel_rect := raylib.Rectangle{px, py, panel_w, panel_h}
+	content    := render_panel(panel_rect, "", 1.0)
+
+	y := content.y
+	for line, i in lines {
+		font := constants.game_fonts.bold if i == 0 else constants.game_fonts.regular
+		col  := raylib.WHITE if i == 0 else constants.UI_TEXT_COLOR
+		raylib.DrawTextEx(
+			font, strings.clone_to_cstring(line, context.temp_allocator),
+			{content.x + pad, y}, fs, 0, col,
+		)
+		y += line_h
+	}
+
+	// Badges de flags
+	badge_x := content.x + content.width - pad
+	draw_detail_badge :: proc(text: cstring, x_right: f32, y_center: f32, font: raylib.Font) -> f32 {
+		fs : f32 = 11
+		tw := raylib.MeasureTextEx(font, text, fs, 0).x
+		pad_h : f32 = 5
+		bw := tw + pad_h * 2
+		rect_b := raylib.Rectangle{x_right - bw, y_center - 8, bw, 16}
+		raylib.DrawRectangleRounded(rect_b, 0.3, 4, raylib.Color{120, 120, 120, 200})
+		raylib.DrawTextEx(font, text, {rect_b.x + pad_h, rect_b.y + 2}, fs, 0, raylib.WHITE)
+		return x_right - bw - 4
+	}
+	badge_y := y + badge_h/2 - 4
+	if .FINALE   in node.flags { badge_x = draw_detail_badge("FIN",   badge_x, badge_y, constants.game_fonts.bold) }
+	if .BOSS     in node.flags { badge_x = draw_detail_badge("BOSS",  badge_x, badge_y, constants.game_fonts.bold) }
+	if .OPTIONAL in node.flags { badge_x = draw_detail_badge("OPT",   badge_x, badge_y, constants.game_fonts.bold) }
+
+	// Botón Jugar
+	playable := unlocked || constants.DEVELOPER
+	btn_y := content.y + content.height - button_h
+	if render_button(constants.get_text("CAMPAIGN_MAP_PLAY_BUTTON"), {content.x, btn_y, content.width, button_h}, {
+		disabled      = !playable,
+		text_color    = raylib.WHITE,
+		button_color  = constants.UI_BUTTON_AFFIRMATIVE_COLOR,
+		hover_color   = constants.UI_BUTTON_AFFIRMATIVE_HOVER,
+		pressed_color = constants.UI_BUTTON_AFFIRMATIVE_PRESS,
+	}) {
+		launch_campaign_node(app, node_idx)
+	}
+
+	return panel_rect
 }

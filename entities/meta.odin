@@ -60,15 +60,21 @@ meta_tower_is_free :: proc(t: constants.Tower_Type) -> bool {
 	return false
 }
 
-// Cristales necesarios para desbloquear una torre (0 = siempre libre).
-meta_tower_unlock_cost :: proc(t: constants.Tower_Type) -> i32 {
-	#partial switch t {
-	case .ICE:     return 5
-	case .ENHANCE: return 5
-	case .MISSILE: return 10
-	case .LASER:   return 15
-	case .TESLA:   return 20
-	case .MORTAR:  return 20
+// Cristales necesarios para desbloquear cualquier carta (torre o reliquia)
+// de esta rareza — un único precio por categoría, igual para todo lo que
+// cae en esa fila de la Biblioteca (ver render_card_library_ui). Antes
+// había un costo por torre y otro por rareza de reliquia, con valores muy
+// dispares entre sí (una torre costaba mucho más que una reliquia de la
+// "misma" rareza, y MISSILE/LASER —ambas RARE— ni siquiera coincidían
+// entre sí) — no tenía sentido mostrar un solo precio por categoría con
+// esa base, así que se unificó.
+meta_rarity_unlock_cost :: proc(rarity: constants.Card_Rarity) -> i32 {
+	switch rarity {
+	case .COMMON:   return 1
+	case .UNCOMMON: return 3
+	case .RARE:     return 6
+	case .EPIC:     return 10
+	case .UNIQUE:   return 15
 	}
 	return 0
 }
@@ -79,37 +85,9 @@ meta_is_tower_unlocked :: proc(meta: ^Meta_State, t: constants.Tower_Type) -> bo
 	return meta.unlocked_towers[int(t)]
 }
 
-// Cristales necesarios para desbloquear una reliquia según su rareza.
-// COMMON=1, UNCOMMON=2, RARE=4, EPIC=6, UNIQUE=10
-meta_relic_unlock_cost :: proc(kind: Card_Kind) -> i32 {
-	spec, ok := relic_spec_for(kind)
-	if !ok { return 0 }
-	switch spec.rarity {
-	case .COMMON:   return 1
-	case .UNCOMMON: return 2
-	case .RARE:     return 4
-	case .EPIC:     return 6
-	case .UNIQUE:   return 10
-	}
-	return 0
-}
-
 // Reliquia desbloqueada si fue comprada con cristales.
 meta_is_relic_unlocked :: proc(meta: ^Meta_State, kind: Card_Kind) -> bool {
 	return meta.unlocked_relics[kind]
-}
-
-// Tier de una reliquia para agruparla en la pantalla de progresión (1-3).
-// Returns 0 para no-reliquias.
-meta_relic_tier :: proc(kind: Card_Kind) -> i32 {
-	spec, ok := relic_spec_for(kind)
-	if !ok { return 0 }
-	switch spec.rarity {
-	case .COMMON:            return 1
-	case .UNCOMMON:          return 2
-	case .RARE, .EPIC, .UNIQUE: return 3
-	}
-	return 0
 }
 
 // Per-component cristal contributions — used for the end-of-run breakdown.

@@ -31,9 +31,9 @@ Game_State :: enum {
 	GAME_OVER,
 	SETTINGS,
 	RUN_COMPLETE,
-	PROGRESSION,
 	CAMPAIGN_MAP,   // visualizador de la campaña (constelación de nodos)
-	LIBRARY,        // biblioteca de cartas: catálogo de torres/reliquias por rareza
+	LIBRARY,        // biblioteca de cartas: catálogo de torres/reliquias por rareza — también donde se compran/reembolsan desbloqueos con cristales
+	CREDITS,        // pantalla de créditos
 }
 
 // Fases del ciclo día/noche — ver DAY_NIGHT_KEYFRAMES y render_map_3d.
@@ -604,6 +604,10 @@ CAMPAIGN_MAX_NODES :: 64
 CAMPAIGN_MAP_NAME_LEN :: 48  // nombre del archivo .map (sin extensión)
 CAMPAIGN_DISPLAY_LEN  :: 64  // nombre mostrado al jugador
 
+// Longitud fija del nombre editable de un mapa (Map.display_name), guardado
+// dentro del propio .map — distinto del nombre de archivo. Ver Map_Bin_File.
+MAP_DISPLAY_NAME_LEN :: 48
+
 // Defaults para nodos nuevos creados desde el editor.
 CAMPAIGN_DEFAULT_DIFFICULTY :: f32(1.0)  // 1.0 = HP/speed normales
 CAMPAIGN_DEFAULT_WAVES      :: i32(0)    // 0 = usa RUN_MAX_WAVES
@@ -628,11 +632,27 @@ COLOR_CAMPAIGN_PULSE             :: raylib.Color{255, 240, 120, 255}
 // Conexiones entre nodos
 COLOR_CAMPAIGN_CONNECTION_ACTIVE   :: raylib.Color{180, 150,  70, 220}
 COLOR_CAMPAIGN_CONNECTION_INACTIVE :: raylib.Color{ 90,  90, 110, 120}
+// Ramas OPTIONAL: mismo tono pero más apagado, para distinguirlas del main path
+COLOR_CAMPAIGN_CONNECTION_OPTIONAL :: raylib.Color{140, 130, 150, 140}
 
-// Tooltip del visualizador
-COLOR_CAMPAIGN_TOOLTIP_BG    :: raylib.Color{ 20,  20,  30, 235}
-COLOR_CAMPAIGN_TOOLTIP_DIM   :: raylib.Color{200, 200, 220, 240}
 COLOR_CAMPAIGN_PROGRESS_DIM  :: raylib.Color{200, 200, 220, 220}
+
+// Separación vertical mínima (px) entre nodos del main path — dimensiona el
+// canvas scrolleable del visualizador (ver campaign_map_scroll).
+CAMPAIGN_NODE_SPACING_PX :: f32(140)
+
+// Margen extra (px) del recorte por scissor del visualizador, más allá del
+// área lógica de layout — sin esto, los nodos del borde (primero/último del
+// main path) quedan cortados a la mitad por el propio recorte. Cubre el
+// radio máximo de nodo (FINALE) + el halo pulsante (~1.4x) + el anillo
+// blanco del nodo activo.
+CAMPAIGN_SCISSOR_MARGIN_PX :: f32(40)
+
+// Umbrales puramente presentacionales para el tier de dificultad mostrado en
+// el panel de detalle del nodo (no afectan el gameplay, sólo el texto/label).
+CAMPAIGN_DIFFICULTY_EASY_MAX      :: f32(0.9)
+CAMPAIGN_DIFFICULTY_HARD_MIN      :: f32(1.3)
+CAMPAIGN_DIFFICULTY_VERY_HARD_MIN :: f32(1.6)
 
 // Radios de nodo según flags
 CAMPAIGN_NODE_RADIUS_OPTIONAL :: f32(10)
@@ -950,6 +970,12 @@ HIT_PARTICLE_SPEED_MIN    :: f32(1.0)   // Velocidad inicial mínima, unidades d
 HIT_PARTICLE_SPEED_MAX    :: f32(2.5)
 HIT_PARTICLE_COUNT_HIT    :: 2   // Chispas por instancia de daño
 
+// Transición de pantalla completa a negro al terminar una run (victoria o
+// derrota) — oscurece, cambia de estado en negro total, y revela la nueva
+// pantalla (GAME_OVER/RUN_COMPLETE). Ver App_State.screen_fade.
+SCREEN_FADE_OUT_DURATION :: f32(0.35)  // Oscurecer hacia negro
+SCREEN_FADE_IN_DURATION  :: f32(0.45)  // Revelar la nueva pantalla desde negro
+
 SCREEN_SHAKE_DECAY_PER_SEC   :: f32(2.2)   // Decaimiento lineal del trauma [0,1] por segundo
 SCREEN_SHAKE_MAX_OFFSET_PX   :: f32(14.0)  // Desplazamiento máximo de cámara en pixeles (trauma=1)
 SCREEN_SHAKE_BOSS_DEATH      :: f32(0.7)   // Trauma agregado al morir un boss
@@ -1059,10 +1085,23 @@ UI_BUTTON_HOVER_COLOR   :: raylib.Color{220, 220, 220, 255}
 UI_BUTTON_PRESSED_COLOR :: raylib.Color{255, 255,   0, 255}
 UI_BUTTON_SHADOW_COLOR  :: raylib.Color{  0,   0,   0,  30}
 
-// Botones de acción positiva (Iniciar oleada, velocidad activa)
-UI_BUTTON_ACTION_COLOR  :: raylib.Color{ 40, 167,  69, 255}
-UI_BUTTON_ACTION_HOVER  :: raylib.Color{ 30, 140,  55, 255}
-UI_BUTTON_ACTION_PRESS  :: raylib.Color{ 20, 110,  40, 255}
+// Botones afirmativos (Sí, Confirmar, Guardar, Jugar, Agregar, Reroll,
+// Iniciar oleada, etc.) — cualquier botón cuya acción es aceptar/confirmar/
+// llevar adelante algo. Azul acero desaturado, un solo tono para todo el
+// juego; los botones que NO son afirmativos usan el color por defecto
+// (UI_BUTTON_COLOR) salvo que tengan su propia semántica (venta, toggle
+// activo, etc. — ver más abajo).
+UI_BUTTON_AFFIRMATIVE_COLOR :: raylib.Color{ 85, 110, 140, 255}
+UI_BUTTON_AFFIRMATIVE_HOVER :: raylib.Color{105, 132, 162, 255}
+UI_BUTTON_AFFIRMATIVE_PRESS :: raylib.Color{ 62,  82, 108, 255}
+
+// Indicador de estado "activo" en un toggle (skip shop, velocidad x1/x2/x3,
+// flags BOSS/OPT/FIN del editor de campaña) — NO es un botón afirmativo,
+// es una marca de selección; se mantiene en su propio verde para no
+// confundirse ni con el azul de confirmación ni con el default.
+UI_BUTTON_TOGGLE_ACTIVE_COLOR :: raylib.Color{ 40, 167,  69, 255}
+UI_BUTTON_TOGGLE_ACTIVE_HOVER :: raylib.Color{ 30, 140,  55, 255}
+UI_BUTTON_TOGGLE_ACTIVE_PRESS :: raylib.Color{ 20, 110,  40, 255}
 
 // Botones de venta (vender carta, vender torre/obstáculo)
 UI_BUTTON_SELL_COLOR    :: raylib.Color{180,  40,  40, 255}
@@ -1092,9 +1131,6 @@ UI_PANEL_TITLE_COLOR :: raylib.GRAY
 UI_PANEL_LABEL_COLOR :: raylib.DARKGRAY
 UI_PANEL_TEXT_COLOR  :: raylib.BLACK
 UI_PANEL_COLOR       :: raylib.RAYWHITE
-
-UI_MODAL_CONFIRM_BUTTON_COLOR :: raylib.Color{0, 200, 0, 255}
-UI_MODAL_CANCEL_BUTTON_COLOR  :: raylib.Color{200, 0, 0, 255}
 
 UI_RETICLE_COLOR :: raylib.Color{255, 255, 255, 255}
 

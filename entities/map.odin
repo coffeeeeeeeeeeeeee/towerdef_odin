@@ -34,6 +34,11 @@ Map :: struct {
 	// Seed for random generation
 	seed: i32,
 
+	// Nombre editable del mapa, guardado dentro del propio .map (distinto del
+	// nombre de archivo). Vacío = sin nombre asignado — el visualizador de
+	// campaña usa el filename como fallback (ver campaign_node_display_name).
+	display_name: [constants.MAP_DISPLAY_NAME_LEN]u8,
+
 	// Tile data (for obstacle levels, etc.)
 	tile_data: map[string]constants.Tile_Data,
 
@@ -123,6 +128,16 @@ map_regenerate_heightmap :: proc(m: ^Map) {
 			m.heightmap[row][col] = _heightmap_fractal_noise(fx, fy, seed_u64, constants.HEIGHTMAP_OCTAVES)
 		}
 	}
+}
+
+// Devuelve el nombre editable del mapa como string (vacío si no se asignó).
+map_display_name :: proc(m: ^Map) -> string {
+	return campaign_bytes_to_string(m.display_name[:])
+}
+
+// Setea el nombre editable del mapa, truncando a MAP_DISPLAY_NAME_LEN.
+map_set_display_name :: proc(m: ^Map, name: string) {
+	campaign_string_to_bytes(m.display_name[:], name)
 }
 
 // Destroy map and free resources
@@ -612,7 +627,12 @@ Map_Bin_File :: struct {
 	// tile_levels[r][c] = nivel; 0 = sin entry (default = 1 en runtime).
 	tile_levels:   [constants.GRID_SIZE][constants.GRID_SIZE]i32,
 
-	_trailing_pad: [64]u8,
+	// Nombre editable del mapa — ocupa parte de lo que antes era
+	// _trailing_pad (64 bytes). El tamaño total del struct no cambia, así
+	// que archivos viejos (todo ceros acá) siguen cargando sin bump de
+	// versión: se leen simplemente como display_name vacío.
+	display_name:  [constants.MAP_DISPLAY_NAME_LEN]u8,
+	_trailing_pad: [64 - constants.MAP_DISPLAY_NAME_LEN]u8,
 }
 
 // Guarda el mapa en formato binario. Reemplaza el texto previamente usado.
@@ -631,6 +651,7 @@ map_save_bin :: proc(m: ^Map, filename: string) -> bool {
 	file.grid          = m.grid
 	file.obstacle_grid = m.obstacle_grid
 	file.water_grid    = m.water_grid
+	file.display_name  = m.display_name
 
 	// Codificar tile_data en la grilla fija.
 	for k, v in m.tile_data {
@@ -664,6 +685,7 @@ map_load_bin :: proc(m: ^Map, data: []u8) -> bool {
 	m.height        = file.height
 	m.biome         = constants.Biome(file.biome)
 	m.seed          = file.seed
+	m.display_name  = file.display_name
 
 	// Reconstruir tile_data desde la grilla.
 	for r in 0 ..< constants.GRID_SIZE {

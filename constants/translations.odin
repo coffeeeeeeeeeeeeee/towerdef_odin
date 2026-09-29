@@ -63,6 +63,21 @@ get_tower_name :: proc(tower_type: Tower_Type) -> string {
 	return "Unknown"
 }
 
+// Get biome display name (mismas claves que usa el selector de bioma del editor).
+get_biome_name :: proc(biome: Biome) -> string {
+	switch biome {
+	case .PLAIN:
+		return get_text("EDITOR_BIOME_PLAIN")
+	case .FOREST:
+		return get_text("EDITOR_BIOME_FOREST")
+	case .DESERT:
+		return get_text("EDITOR_BIOME_DESERT")
+	case .MOUNTAIN:
+		return get_text("EDITOR_BIOME_MOUNTAIN")
+	}
+	return "Unknown"
+}
+
 // Get formatted translation
 get_text_f :: proc(key: string, args: ..any) -> string {
 	base_text := get_text(key)

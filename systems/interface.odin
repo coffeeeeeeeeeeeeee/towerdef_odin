@@ -55,13 +55,16 @@ render_tooltip :: proc(rect: raylib.Rectangle) -> raylib.Rectangle {
 
 // Encola un tooltip de texto simple para que se dibuje al final del frame.
 // Solo el primer llamado por frame tiene efecto (first-writer wins).
-render_label_tooltip :: proc(app: ^entities.App_State, label: string, trigger_rect: raylib.Rectangle) {
+// sublabel opcional: segunda línea en gris (UI_MAP_BROWSER_MUTED_COLOR),
+// mismo tratamiento que el nombre de archivo en el Map Browser.
+render_label_tooltip :: proc(app: ^entities.App_State, label: string, trigger_rect: raylib.Rectangle, sublabel: string = "") {
 	if app.pending_tooltip.kind != .NONE { return }
 	if !raylib.CheckCollisionPointRec(raylib.GetMousePosition(), trigger_rect) { return }
 	app.pending_tooltip = {
-		kind    = .LABEL,
-		trigger = trigger_rect,
-		label   = label,
+		kind     = .LABEL,
+		trigger  = trigger_rect,
+		label    = label,
+		sublabel = sublabel,
 	}
 }
 
@@ -107,21 +110,41 @@ render_tooltip_layer :: proc(app: ^entities.App_State) {
 		return
 
 	case .LABEL:
-		tip   := &app.pending_tooltip
-		pad   := f32(10)
-		fsz   := f32(constants.UI_TOOLTIP_FONT_SIZE)
-		cs    := strings.clone_to_cstring(tip.label, context.temp_allocator)
-		lw    := raylib.MeasureTextEx(constants.game_fonts.bold, cs, fsz, 0).x
-		tip_w := lw + pad * 2
+		tip    := &app.pending_tooltip
+		pad    := f32(10)
+		fsz    := f32(constants.UI_TOOLTIP_FONT_SIZE)
+		sub_fsz := fsz - 2
+		cs     := strings.clone_to_cstring(tip.label, context.temp_allocator)
+		lw     := raylib.MeasureTextEx(constants.game_fonts.bold, cs, fsz, 0).x
+
+		has_sub := len(tip.sublabel) > 0
+		sub_cs  : cstring
+		sub_w   : f32 = 0
+		if has_sub {
+			sub_cs = strings.clone_to_cstring(tip.sublabel, context.temp_allocator)
+			sub_w  = raylib.MeasureTextEx(constants.game_fonts.regular, sub_cs, sub_fsz, 0).x
+		}
+
+		tip_w := max(lw, sub_w) + pad * 2
 		tip_h := fsz + pad
+		if has_sub { tip_h += sub_fsz + 2 }
 		tip_x := tip.trigger.x + tip.trigger.width/2 - tip_w/2
 		tip_y := tip.trigger.y - tip_h - f32(constants.UI_TOOLTIP_OFFSET)
 		r     := render_tooltip({tip_x, tip_y, tip_w, tip_h})
+
+		label_y := r.y + pad/2 if has_sub else r.y + r.height/2 - fsz/2
 		raylib.DrawTextEx(
 			constants.game_fonts.bold, cs,
-			{r.x + r.width/2 - lw/2, r.y + r.height/2 - fsz/2},
+			{r.x + r.width/2 - lw/2, label_y},
 			fsz, 0, constants.UI_PANEL_TEXT_COLOR,
 		)
+		if has_sub {
+			raylib.DrawTextEx(
+				constants.game_fonts.regular, sub_cs,
+				{r.x + r.width/2 - sub_w/2, label_y + fsz + 2},
+				sub_fsz, 0, constants.UI_MAP_BROWSER_MUTED_COLOR,
+			)
+		}
 
 	case .CARD:
 		tip      := &app.pending_tooltip
@@ -653,6 +676,22 @@ Button_Opts :: struct {
 	hover_color:   raylib.Color,
 	pressed_color: raylib.Color,
 	scale:         f32,  // 0 (default) == 1.0 — solo afecta el tamaño de fuente interno
+	// true = este botón tiene el foco de navegación por mando este frame —
+	// se dibuja como hovereado + un anillo de foco encima, y el botón de
+	// "confirmar" del mando (RIGHT_FACE_DOWN) lo activa igual que un click.
+	// El caller es responsable de sólo poner esto en true para UN botón por
+	// pantalla (ver render_menu_ui/render_run_complete_ui). Ver systems/gamepad.odin.
+	gamepad_focused: bool,
+}
+
+// Anillo blanco alrededor de un widget con foco de navegación por mando —
+// mismo doble-DrawRectangleLinesRounded que el anillo de nodo activo del
+// mapa de campaña (systems/campaign.odin), para que se lea como "esto es
+// lo que el mando tiene seleccionado", distinto del hover de mouse normal.
+draw_gamepad_focus_ring :: proc(rect: raylib.Rectangle) {
+	pad :: f32(3)
+	r := raylib.Rectangle{rect.x - pad, rect.y - pad, rect.width + pad*2, rect.height + pad*2}
+	raylib.DrawRectangleRoundedLinesEx(r, constants.UI_BUTTON_ROUNDNESS, 8, 2, raylib.WHITE)
 }
 
 render_button :: proc(
@@ -706,6 +745,9 @@ render_button :: proc(
 
 	if !enabled || ui_active_dropdown_id != "" {
 		hovered = false
+	}
+	if opts.gamepad_focused && enabled {
+		hovered = true
 	}
 
 	color := constants.UI_BUTTON_COLOR
@@ -773,8 +815,14 @@ render_button :: proc(
 
 	append(&ui_click_blocks, raylib.Rectangle{f32(x), f32(y), f32(actual_width), f32(height)})
 
-	if hovered && raylib.IsMouseButtonPressed(.LEFT) &&
-	   !ui_is_modal_blocked(i32(mouse_x), i32(mouse_y)) {
+	if opts.gamepad_focused && enabled {
+		draw_gamepad_focus_ring({f32(x), f32(y), f32(actual_width), f32(height)})
+	}
+
+	blocked := ui_is_modal_blocked(x + actual_width/2, y + height/2)
+	if enabled && !blocked &&
+	   ((hovered && raylib.IsMouseButtonPressed(.LEFT)) ||
+	    (opts.gamepad_focused && gamepad_confirm_pressed())) {
 		play_sound(.CLICK, .UI)
 		return true
 	}
@@ -798,6 +846,9 @@ render_icon_button :: proc(icon: raylib.Texture2D, rect: raylib.Rectangle, opts 
 	hovered := mouse_x >= x && mouse_x <= x + width && mouse_y >= y && mouse_y <= y + height
 	if !enabled || ui_active_dropdown_id != "" {
 		hovered = false
+	}
+	if opts.gamepad_focused && enabled {
+		hovered = true
 	}
 
 	button_color         := opts.button_color
@@ -854,8 +905,14 @@ render_icon_button :: proc(icon: raylib.Texture2D, rect: raylib.Rectangle, opts 
 
 	append(&ui_click_blocks, raylib.Rectangle{f32(x), f32(y), f32(width), f32(height)})
 
-	if hovered && raylib.IsMouseButtonPressed(.LEFT) &&
-	   !ui_is_modal_blocked(i32(mouse_x), i32(mouse_y)) {
+	if opts.gamepad_focused && enabled {
+		draw_gamepad_focus_ring({f32(x), f32(y), f32(width), f32(height)})
+	}
+
+	blocked := ui_is_modal_blocked(x + width/2, y + height/2)
+	if enabled && !blocked &&
+	   ((hovered && raylib.IsMouseButtonPressed(.LEFT)) ||
+	    (opts.gamepad_focused && gamepad_confirm_pressed())) {
 		play_sound(.CLICK, .UI)
 		return true
 	}
@@ -1030,10 +1087,14 @@ render_confirm_modal :: proc(text: string) -> Modal_Result {
 
 	result := Modal_Result.NONE
 
-	if render_button("Sí", {buttons_x, buttons_y, btn_w, btn_h}, {button_color = constants.UI_MODAL_CONFIRM_BUTTON_COLOR}) {
+	if render_button("Sí", {buttons_x, buttons_y, btn_w, btn_h}, {
+		button_color  = constants.UI_BUTTON_AFFIRMATIVE_COLOR,
+		hover_color   = constants.UI_BUTTON_AFFIRMATIVE_HOVER,
+		pressed_color = constants.UI_BUTTON_AFFIRMATIVE_PRESS,
+	}) {
 		result = .CONFIRMED
 	}
-	if render_button("No", {buttons_x + btn_w + btn_gap, buttons_y, btn_w, btn_h}, {button_color = constants.UI_MODAL_CANCEL_BUTTON_COLOR}) {
+	if render_button("No", {buttons_x + btn_w + btn_gap, buttons_y, btn_w, btn_h}) {
 		result = .CANCELLED
 	}
 

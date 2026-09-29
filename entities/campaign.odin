@@ -29,7 +29,6 @@ CAMPAIGN_SAVE_PATH    :: "campaign.bin"
 Campaign_Node_Flag :: enum u8 {
 	BOSS,      // nodo de jefe (visual destacado, recompensa mayor)
 	OPTIONAL,  // no bloquea el main path
-	STORY,     // muestra texto/diálogo antes de jugar
 	FINALE,    // último nodo de la campaña
 }
 Campaign_Node_Flags :: bit_set[Campaign_Node_Flag; u32]
@@ -164,7 +163,16 @@ campaign_completed_count :: proc(c: ^Campaign_File, completed: []bool) -> i32 {
 	return n
 }
 
-// Cuenta nodos NO opcionales (tamaño del main path).
+// Cuenta nodos NO opcionales (tamaño del main path) — usado por el
+// visualizador para dimensionar el canvas scrolleable.
+campaign_main_path_count :: proc(c: ^Campaign_File) -> int {
+	n := 0
+	for i in 0 ..< int(c.node_count) {
+		if .OPTIONAL not_in c.nodes[i].flags { n += 1 }
+	}
+	return n
+}
+
 // Crea un nodo nuevo con defaults sanos. Usado por el campaign editor cuando
 // el dev arrastra un mapa del browser al canvas.
 campaign_node_init :: proc(map_filename: string, display: string, pos_x, pos_y: f32) -> Campaign_Node {

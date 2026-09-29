@@ -6,6 +6,12 @@ import "../constants"
 import "core:fmt"
 import "core:math"
 
+// Dirección de navegación de mando resuelta este frame — cacheada acá
+// porque input_handle la calcula una sola vez, y las pantallas de
+// menus.odin/campaign.odin la leen (no la recalculan) para mover su
+// índice de foco. Ver gamepad_nav_update en systems/gamepad.odin.
+current_nav_dir: Gamepad_Nav_Dir
+
 // Handle all input
 input_handle :: proc(app: ^entities.App_State) {
 	// Tab: abrir/cerrar la consola (siempre, en cualquier estado)
@@ -29,7 +35,12 @@ input_handle :: proc(app: ^entities.App_State) {
 	if !(app.state == .EDITOR && app.editor.show_map_browser) && !app.sim.shop.active {
 		input_handle_camera(app)
 	}
-	
+
+	// Navegación de menús con mando — una sola lectura por frame, cacheada
+	// para que las pantallas de menus.odin/campaign.odin no la recalculen.
+	// Ver systems/gamepad.odin.
+	current_nav_dir = gamepad_nav_update(app, app.delta_time)
+
 	#partial switch app.state {
 	case .MENU:
 		input_handle_menu(app)
@@ -43,19 +54,26 @@ input_handle :: proc(app: ^entities.App_State) {
 		input_handle_game_over(app)
 	case .SETTINGS:
 		// Settings menu input is handled via render_button in render_settings_menu
-		if raylib.IsKeyPressed(.ESCAPE) {
+		if raylib.IsKeyPressed(.ESCAPE) || gamepad_cancel_pressed() {
 			entities.app_set_state(app, app.previous_state)
 		}
 	case .RUN_COMPLETE:
 		// Input handled via render_button in render_run_complete_ui
-	case .PROGRESSION:
-		// Input handled via render_button in render_progression_ui
-		if raylib.IsKeyPressed(.ESCAPE) {
-			entities.app_set_state(app, .MENU)
-		}
 	case .LIBRARY:
 		// Input handled via render_button in render_card_library_ui
-		if raylib.IsKeyPressed(.ESCAPE) {
+		if raylib.IsKeyPressed(.ESCAPE) || gamepad_cancel_pressed() {
+			entities.app_set_state(app, app.previous_state)
+		}
+	case .CREDITS:
+		// Input handled via render_button in render_credits_ui
+		if raylib.IsKeyPressed(.ESCAPE) || gamepad_cancel_pressed() {
+			entities.app_set_state(app, .MENU)
+		}
+	case .CAMPAIGN_MAP:
+		// Input handled via render_button / inline node clicks in render_campaign_map
+		if raylib.IsKeyPressed(.ESCAPE) || gamepad_cancel_pressed() {
+			campaign_map_scroll        = 0
+			campaign_map_selected_node = -1
 			entities.app_set_state(app, .MENU)
 		}
 	}
