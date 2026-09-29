@@ -12,8 +12,49 @@ import "core:math"
 // índice de foco. Ver gamepad_nav_update en systems/gamepad.odin.
 current_nav_dir: Gamepad_Nav_Dir
 
+// Durante PLAYING, mano y tienda pueden estar interactivas a la vez —
+// X/Triángulo/Círculo no pueden significar dos cosas a la vez el mismo
+// frame, así que hace falta saber cuál de las tres superficies "tiene el
+// control" ahora mismo. Cambia solo con qué tocaste último (mismo
+// criterio que app.gamepad_nav_active): tocar el stick derecho → CURSOR;
+// izq/der del D-pad (o stick izquierdo) → HAND (o se queda si ya estaba
+// en HAND/SHOP); arriba/abajo con la tienda abierta → alterna HAND↔SHOP.
+Playing_Gamepad_Context :: enum { HAND, SHOP, CURSOR }
+playing_gamepad_context: Playing_Gamepad_Context = .HAND
+
+_update_playing_gamepad_context :: proc(app: ^entities.App_State) {
+	if gamepad_virtual_mouse_update(app.delta_time) {
+		playing_gamepad_context = .CURSOR
+	} else {
+		switch current_nav_dir {
+		case .LEFT, .RIGHT:
+			if playing_gamepad_context == .CURSOR {
+				playing_gamepad_context = .HAND
+			}
+		case .UP, .DOWN:
+			if app.sim.shop.active {
+				playing_gamepad_context = .SHOP if playing_gamepad_context == .HAND else .HAND
+			}
+		case .NONE:
+		}
+	}
+	// Self-heal: no quedarse en SHOP si la tienda ya cerró.
+	if !app.sim.shop.active && playing_gamepad_context == .SHOP {
+		playing_gamepad_context = .HAND
+	}
+}
+
 // Handle all input
 input_handle :: proc(app: ^entities.App_State) {
+	// Fuera de PLAYING, playing_gamepad_context siempre vuelve a HAND —
+	// evita que quede pegado en .CURSOR (ej. si se pausó con el cursor
+	// libre activo) y ese estado colgado termine gatillando la rama
+	// "hovered + confirm sin gamepad_focused explícito" de render_button
+	// en una pantalla de menú donde no debería aplicar.
+	if app.state != .PLAYING {
+		playing_gamepad_context = .HAND
+	}
+
 	// Tab: abrir/cerrar la consola (siempre, en cualquier estado)
 	if raylib.IsKeyPressed(.TAB) {
 		app.console.open = !app.console.open
@@ -27,6 +68,13 @@ input_handle :: proc(app: ^entities.App_State) {
 	// render_ui/menus.odin, que ya lo suprime en EDITOR).
 	if raylib.IsKeyPressed(.F9) {
 		app.settings.show_fps = !app.settings.show_fps
+	}
+
+	// F10: mostrar/ocultar el overlay de diagnóstico de mando (siempre, en
+	// cualquier estado, sin depender de constants.DEVELOPER — ver
+	// render_gamepad_debug_overlay en systems/gamepad.odin).
+	if raylib.IsKeyPressed(.F10) {
+		gamepad_debug_active = !gamepad_debug_active
 	}
 
 	// No mover la cámara mientras el browser de mapas está abierto en el
@@ -70,11 +118,18 @@ input_handle :: proc(app: ^entities.App_State) {
 			entities.app_set_state(app, .MENU)
 		}
 	case .CAMPAIGN_MAP:
-		// Input handled via render_button / inline node clicks in render_campaign_map
+		// Input handled via render_button / inline node clicks in render_campaign_map.
+		// Cancelar/ESC es de dos niveles: si hay un panel de detalle
+		// abierto lo cierra primero (no sale de la pantalla), igual que
+		// "atrás" en cualquier UI de consola.
 		if raylib.IsKeyPressed(.ESCAPE) || gamepad_cancel_pressed() {
-			campaign_map_scroll        = 0
-			campaign_map_selected_node = -1
-			entities.app_set_state(app, .MENU)
+			if campaign_map_selected_node >= 0 {
+				campaign_map_selected_node = -1
+			} else {
+				campaign_map_scroll        = 0
+				campaign_map_gamepad_focus = -1
+				entities.app_set_state(app, .MENU)
+			}
 		}
 	}
 }
@@ -127,6 +182,11 @@ input_handle_menu :: proc(app: ^entities.App_State) {
 
 // Playing input
 input_handle_playing :: proc(app: ^entities.App_State) {
+	// Mando: mueve el cursor real con el stick derecho y resuelve qué
+	// superficie (mano/tienda/cursor libre) controla X/Triángulo/Círculo
+	// este frame — ver Playing_Gamepad_Context arriba.
+	_update_playing_gamepad_context(app)
+
 	// Mouse position for grid selection
 	mouse_x := raylib.GetMouseX()
 	mouse_y := raylib.GetMouseY()
@@ -146,8 +206,11 @@ input_handle_playing :: proc(app: ^entities.App_State) {
 		app.selected_cell.valid = false
 	}
 	
-	// Left click to place tower
-	if raylib.IsMouseButtonPressed(.LEFT) {
+	// Left click to place tower — o Confirmar de mando (X) cuando el
+	// cursor virtual tiene el control (playing_gamepad_context == .CURSOR;
+	// en .HAND/.SHOP, X lo consume render_card_hand/render_card_selection_overlay).
+	if raylib.IsMouseButtonPressed(.LEFT) ||
+	   (playing_gamepad_context == .CURSOR && gamepad_confirm_pressed()) {
 		// Don't process grid clicks if mouse is over any UI panel or button
 		if ui_is_click_blocked(mouse_x, mouse_y) {
 			return
@@ -313,8 +376,13 @@ case .GARDENER:
 	}
 	
 	// Right click to deselect or cancel — ignorado si cae sobre UI bloqueante
-	// (p. ej. la mano de cartas, que usa el clic derecho para vender).
-	if raylib.IsMouseButtonPressed(.RIGHT) && !ui_is_click_blocked(mouse_x, mouse_y) {
+	// (p. ej. la mano de cartas, que usa el clic derecho para vender). El
+	// Círculo del mando cuenta como este mismo gesto sólo con el cursor
+	// libre (en .HAND, Círculo no existe hoy; en .SHOP alterna el lock) —
+	// mismo chequeo de UI-bloqueada para ambos disparadores.
+	right_pressed := raylib.IsMouseButtonPressed(.RIGHT) ||
+		(playing_gamepad_context == .CURSOR && gamepad_cancel_pressed())
+	if right_pressed && !ui_is_click_blocked(mouse_x, mouse_y) {
 		if app.pending_tower_action != .TOWER {
 			// Cancelar acción con target — la carta vuelve a la mano sin gastarse
 			app.pending_tower_action = .TOWER
@@ -935,9 +1003,22 @@ input_handle_camera_3d :: proc(app: ^entities.App_State) {
 	wheel_movement := raylib.GetMouseWheelMove()
 	if wheel_movement != 0 {
 		app.target_zoom += wheel_movement * constants.ZOOM_SPEED
-		if app.target_zoom < constants.ZOOM_MIN { app.target_zoom = constants.ZOOM_MIN }
-		if app.target_zoom > constants.ZOOM_MAX { app.target_zoom = constants.ZOOM_MAX }
 	}
+
+	// Zoom continuo con los triggers del mando — LEFT_TRIGGER_1 acerca,
+	// RIGHT_TRIGGER_1 aleja, mientras se mantienen apretados (más zoom =
+	// más cerca, ver camera_distance_from_zoom).
+	if _gamepad_index >= 0 {
+		if raylib.IsGamepadButtonDown(_gamepad_index, .LEFT_TRIGGER_1) {
+			app.target_zoom += constants.CAMERA_GAMEPAD_ZOOM_SPEED * app.delta_time
+		}
+		if raylib.IsGamepadButtonDown(_gamepad_index, .RIGHT_TRIGGER_1) {
+			app.target_zoom -= constants.CAMERA_GAMEPAD_ZOOM_SPEED * app.delta_time
+		}
+	}
+
+	if app.target_zoom < constants.ZOOM_MIN { app.target_zoom = constants.ZOOM_MIN }
+	if app.target_zoom > constants.ZOOM_MAX { app.target_zoom = constants.ZOOM_MAX }
 
 	input_handle_camera_orbit(app)
 }
@@ -954,5 +1035,17 @@ input_handle_camera_orbit :: proc(app: ^entities.App_State) {
 	mouse_y := raylib.GetMouseY()
 	if raylib.IsMouseButtonDown(.MIDDLE) && !ui_is_click_blocked(mouse_x, mouse_y) {
 		app.camera_yaw -= raylib.GetMouseDelta().x * constants.CAMERA_ORBIT_SENSITIVITY
+	}
+
+	// Rotación continua con los triggers del mando — a diferencia del botón
+	// central (que rota por delta de arrastre), acá se gira a velocidad
+	// constante mientras el trigger sigue apretado.
+	if _gamepad_index >= 0 {
+		if raylib.IsGamepadButtonDown(_gamepad_index, .LEFT_TRIGGER_2) {
+			app.camera_yaw -= constants.CAMERA_GAMEPAD_ORBIT_SPEED * app.delta_time
+		}
+		if raylib.IsGamepadButtonDown(_gamepad_index, .RIGHT_TRIGGER_2) {
+			app.camera_yaw += constants.CAMERA_GAMEPAD_ORBIT_SPEED * app.delta_time
+		}
 	}
 }

@@ -161,6 +161,17 @@ CAMERA_PITCH_DEG :: f32(55)  // Ángulo fijo de inclinación de la cámara (isom
 // Radianes de yaw por píxel de arrastre horizontal del botón central —
 // única forma de rotar la cámara (no hay paneo). Valor a ajustar a ojo.
 CAMERA_ORBIT_SENSITIVITY :: f32(0.005)
+
+// Radianes de yaw por segundo mientras se mantiene apretado un trigger del
+// mando (LEFT_TRIGGER_2/RIGHT_TRIGGER_2) — rotación continua, no por delta
+// de arrastre como el botón central. ~2.4s para una vuelta completa.
+CAMERA_GAMEPAD_ORBIT_SPEED :: f32(2.6)
+
+// Unidades de zoom por segundo mientras se mantiene apretado
+// LEFT_TRIGGER_1 (acerca)/RIGHT_TRIGGER_1 (aleja) — mismas unidades que
+// ZOOM_SPEED (delta por tick de rueda), pero continuo. Cubre todo el
+// rango [ZOOM_MIN, ZOOM_MAX] en ~2.2s.
+CAMERA_GAMEPAD_ZOOM_SPEED :: f32(1.2)
 CAMERA_FOVY      :: f32(45) // Field of view vertical, grados
 
 // Distancia cámara-foco, mapeada desde app.zoom (inversamente proporcional:

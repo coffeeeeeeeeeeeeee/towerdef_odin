@@ -57,9 +57,14 @@ render_tooltip :: proc(rect: raylib.Rectangle) -> raylib.Rectangle {
 // Solo el primer llamado por frame tiene efecto (first-writer wins).
 // sublabel opcional: segunda línea en gris (UI_MAP_BROWSER_MUTED_COLOR),
 // mismo tratamiento que el nombre de archivo en el Map Browser.
-render_label_tooltip :: proc(app: ^entities.App_State, label: string, trigger_rect: raylib.Rectangle, sublabel: string = "") {
+// force=true salta el chequeo de posición del mouse — para cuando el
+// caller ya sabe que el widget está "hovereado" por otra vía (foco de
+// mando, ver gamepad_focused_node en render_campaign_map): sin esto, el
+// tooltip nunca se dispara con mando porque el mouse real puede estar en
+// cualquier lado de la pantalla mientras se navega con el D-pad.
+render_label_tooltip :: proc(app: ^entities.App_State, label: string, trigger_rect: raylib.Rectangle, sublabel: string = "", force: bool = false) {
 	if app.pending_tooltip.kind != .NONE { return }
-	if !raylib.CheckCollisionPointRec(raylib.GetMousePosition(), trigger_rect) { return }
+	if !force && !raylib.CheckCollisionPointRec(raylib.GetMousePosition(), trigger_rect) { return }
 	app.pending_tooltip = {
 		kind     = .LABEL,
 		trigger  = trigger_rect,
@@ -90,9 +95,12 @@ wrap_text_lines :: proc(font: raylib.Font, text: string, font_size: f32, max_wid
 }
 
 // Encola un tooltip de carta para que se dibuje al final del frame.
-render_card_tooltip :: proc(app: ^entities.App_State, card: entities.Card, trigger_rect: raylib.Rectangle) {
+// force=true saltea el chequeo de posición del mouse — mismo motivo que
+// render_label_tooltip: un widget "hovereado" por foco de mando (no por
+// el mouse real) igual necesita mostrar su tooltip.
+render_card_tooltip :: proc(app: ^entities.App_State, card: entities.Card, trigger_rect: raylib.Rectangle, force: bool = false) {
 	if app.pending_tooltip.kind != .NONE { return }
-	if !raylib.CheckCollisionPointRec(raylib.GetMousePosition(), trigger_rect) { return }
+	if !force && !raylib.CheckCollisionPointRec(raylib.GetMousePosition(), trigger_rect) { return }
 	app.pending_tooltip = {
 		kind    = .CARD,
 		trigger = trigger_rect,
@@ -684,14 +692,17 @@ Button_Opts :: struct {
 	gamepad_focused: bool,
 }
 
-// Anillo blanco alrededor de un widget con foco de navegación por mando —
-// mismo doble-DrawRectangleLinesRounded que el anillo de nodo activo del
-// mapa de campaña (systems/campaign.odin), para que se lea como "esto es
-// lo que el mando tiene seleccionado", distinto del hover de mouse normal.
+// Marco blanco bien notorio alrededor de un widget con foco de navegación
+// por mando — dos líneas superpuestas (mismo truco que el anillo de nodo
+// activo del mapa de campaña, systems/campaign.odin, para grosor ~4px sin
+// depender de una línea gruesa que a veces raylib dibuja con esquinas
+// mordidas) más un borde oscuro por detrás para que resalte incluso sobre
+// fondos claros o botones ya blancos.
 draw_gamepad_focus_ring :: proc(rect: raylib.Rectangle) {
-	pad :: f32(3)
+	pad :: f32(5)
 	r := raylib.Rectangle{rect.x - pad, rect.y - pad, rect.width + pad*2, rect.height + pad*2}
-	raylib.DrawRectangleRoundedLinesEx(r, constants.UI_BUTTON_ROUNDNESS, 8, 2, raylib.WHITE)
+	raylib.DrawRectangleRoundedLinesEx(r, constants.UI_BUTTON_ROUNDNESS, 8, 5, raylib.Color{0, 0, 0, 160})
+	raylib.DrawRectangleRoundedLinesEx(r, constants.UI_BUTTON_ROUNDNESS, 8, 3, raylib.WHITE)
 }
 
 render_button :: proc(
@@ -822,7 +833,12 @@ render_button :: proc(
 	blocked := ui_is_modal_blocked(x + actual_width/2, y + height/2)
 	if enabled && !blocked &&
 	   ((hovered && raylib.IsMouseButtonPressed(.LEFT)) ||
-	    (opts.gamepad_focused && gamepad_confirm_pressed())) {
+	    (opts.gamepad_focused && gamepad_confirm_pressed()) ||
+	    // Cursor virtual de PLAYING (stick derecho mueve el mouse real,
+	    // ver gamepad_virtual_mouse_update): si el cursor real ya está
+	    // hovereando este botón, X lo clickea sin necesitar un
+	    // gamepad_focused explícito — paneles de torre/obstáculo.
+	    (hovered && playing_gamepad_context == .CURSOR && gamepad_confirm_pressed())) {
 		play_sound(.CLICK, .UI)
 		return true
 	}
@@ -912,7 +928,8 @@ render_icon_button :: proc(icon: raylib.Texture2D, rect: raylib.Rectangle, opts 
 	blocked := ui_is_modal_blocked(x + width/2, y + height/2)
 	if enabled && !blocked &&
 	   ((hovered && raylib.IsMouseButtonPressed(.LEFT)) ||
-	    (opts.gamepad_focused && gamepad_confirm_pressed())) {
+	    (opts.gamepad_focused && gamepad_confirm_pressed()) ||
+	    (hovered && playing_gamepad_context == .CURSOR && gamepad_confirm_pressed())) {
 		play_sound(.CLICK, .UI)
 		return true
 	}

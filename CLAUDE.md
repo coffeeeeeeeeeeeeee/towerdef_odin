@@ -524,8 +524,20 @@ el usuario lo pida explícitamente para ese caso puntual.
 ## Soporte de mando — primera etapa: navegación de menús (`systems/gamepad.odin`)
 
 Todo el input crudo de mando vive en `systems/gamepad.odin` — un solo
-mando soportado por ahora (`GAMEPAD_INDEX :: 0`). `gamepad_nav_update(app,
-dt)` se llama **una sola vez por frame**, al principio de `input_handle`
+mando soportado por ahora, pero el **índice NO está fijo en 0**:
+`_gamepad_resolve_index()` prueba `IsGamepadAvailable` en los primeros
+`GAMEPAD_MAX_SLOTS` (4) índices y usa el primero disponible, una vez por
+frame. Trampa real encontrada: con el índice hardcodeado en 0 el mando no
+hacía absolutamente nada en algunos sistemas — típicamente Linux, donde el
+mando "real" no siempre enumera en el slot 0 (otro dispositivo, o un mando
+fantasma ya desconectado, puede ocupar ese índice) — sin ningún error
+visible, `IsGamepadAvailable(0)` simplemente daba `false` para siempre. Si
+"el mando no hace nada" vuelve a aparecer, lo primero es confirmar que
+`_gamepad_resolve_index()` esté encontrando el índice correcto (agregar un
+toast temporal con `_gamepad_index` para depurar), no asumir que el
+problema es de mapeo de botones.
+
+`gamepad_nav_update(app, dt)` se llama **una sola vez por frame**, al principio de `input_handle`
 (`systems/input.odin`), antes del switch por estado; devuelve la
 `Gamepad_Nav_Dir` (`.NONE`/`.UP`/`.DOWN`/`.LEFT`/`.RIGHT`) a mover este
 frame y queda cacheada en `current_nav_dir` (static de paquete) para que
@@ -543,8 +555,10 @@ jugador usa mouse.
 (`systems/interface.odin`)**: `Button_Opts` ganó `gamepad_focused: bool`.
 Si está en `true`, el botón se trata como hovereado (mismo color/estado
 visual que un hover de mouse, cero código nuevo de dibujo) y además dibuja
-`draw_gamepad_focus_ring(rect)` encima (anillo blanco, mismo patrón que el
-anillo de nodo activo del mapa de campaña). El click gana una rama:
+`draw_gamepad_focus_ring(rect)` encima — marco blanco grueso (3px, doble
+línea) con un borde oscuro detrás para que se note incluso sobre botones
+ya blancos, bien más marcado que un hover de mouse normal, a pedido
+explícito del usuario. El click gana una rama:
 `opts.gamepad_focused && gamepad_confirm_pressed()` (botón A/Cruz,
 `RIGHT_FACE_DOWN`), evaluada contra `ui_is_modal_blocked` en el **centro
 del rect del botón**, no en la posición del mouse (que puede estar en
@@ -585,6 +599,111 @@ con o sin el botón de Campaña), el anillo de foco puede no mostrarse hasta
 el primer input direccional, que lo re-clampea. No rompe nada, sólo tarda
 un input en aparecer.
 
+**Confirmado funcionando en un control real** (DualShock 4). La causa de
+"el mando no hace nada" en la primera prueba NO era código del juego: era
+que Bluetooth lo conectaba con el driver genérico (`hid_generic`) en vez
+de `hid-playstation`/`hid-sony`, así que el kernel nunca lo exponía como
+joystick — ni `IsGamepadAvailable` en ningún índice lo veía. Se arregló
+del lado del sistema (`sudo modprobe hid-playstation` + re-emparejar por
+Bluetooth), no tocando este código. La resolución dinámica de índice
+(`_gamepad_resolve_index`, arriba) sigue siendo válida igual — evita que
+el mismo síntoma vuelva a aparecer si el control enumera en otro slot.
+
+**Overlay de diagnóstico permanente, toggle con F10**
+(`render_gamepad_debug_overlay`, `gamepad_debug_active` en
+`systems/gamepad.odin`, tecla en `systems/input.odin`) — a propósito NO
+está atado a `constants.DEVELOPER`: sirve para diagnosticar en cualquier
+build, arrancado en `false`. Muestra en texto crudo, arriba a la
+izquierda: qué slots 0..3 devuelve `IsGamepadAvailable` y el nombre de
+cada uno, los 6 ejes con su valor numérico, y la lista completa de
+botones que `IsGamepadButtonDown` marca como presionados ahora mismo. Si
+"el mando no hace nada" vuelve a pasar, F10 es el primer paso: si no
+aparece ningún slot, el problema es de detección del SO/raylib (nada para
+arreglar acá); si aparece un slot pero tocar el D-pad/stick no cambia
+nada en "Ejes"/"Botones down", es mapeo de ESE control puntual; si los
+valores cambian pero `gamepad_nav_active`/`current_nav_dir` (última línea)
+no reaccionan, ahí sí hay un bug real en `gamepad_nav_update`.
+
+## Soporte de mando en PLAYING — mano, tienda, cursor virtual
+
+A diferencia de los menús, casi ninguna superficie de PLAYING usa
+`render_button` — la mano (`render_card_hand`) y la tienda
+(`render_card_selection_overlay`) hacen su propio hit-testing contra
+`raylib.GetMousePosition()`, y la grilla resuelve todo en un bloque único
+en `input_handle_playing` (`systems/input.odin`), también contra la
+posición real del mouse.
+
+**Cursor virtual = mover el cursor REAL del sistema.**
+`gamepad_virtual_mouse_update` (`systems/gamepad.odin`) lee el stick
+derecho y llama `raylib.SetMousePosition` — a propósito NO es un cursor
+dibujado aparte: al mover el cursor real, TODO el hit-testing que ya
+existía (mano, tienda, grilla, paneles de torre/obstáculo) sigue
+funcionando sin duplicar una sola línea de lógica de posición. Sólo hacía
+falta enseñarle a cada chequeo de "¿se apretó el botón?" a aceptar
+también el botón del mando — la posición ya estaba resuelta.
+
+**El problema real: X no puede significar dos cosas a la vez.**
+Si el D-pad tiene el foco puesto en una carta de la mano Y el stick
+derecho puede estar apuntando a la grilla al mismo tiempo, hace falta
+saber qué gana. Solución: `Playing_Gamepad_Context` (`systems/input.odin`,
+enum `HAND`/`SHOP`/`CURSOR`), que cambia sólo con qué tocaste último
+(mismo criterio que `app.gamepad_nav_active`) — tocar el stick derecho →
+`CURSOR`; D-pad izq/der (`current_nav_dir`) → `HAND` (o se queda si ya
+estaba en `HAND`/`SHOP`); arriba/abajo con la tienda abierta → alterna
+`HAND`↔`SHOP`. `_update_playing_gamepad_context`, llamada una vez por
+frame al principio de `input_handle_playing`, hace todo esto y además
+resetea a `HAND` si la tienda cierra. **Se fuerza a `HAND` fuera de
+PLAYING** (al principio de `input_handle`) para que no quede pegado en
+`.CURSOR` si se pausó con el cursor libre activo — sin esto, la rama
+nueva de `render_button` (ver abajo) podría dispararse en una pantalla de
+menú donde no corresponde.
+
+X/Triángulo/Círculo se interpretan según el contexto vigente ESE frame:
+- **`.HAND`**: `hand_gamepad_focus_idx` (`systems/menus.odin`) navega con
+  D-pad izq/der, fuerza `hovered_idx` a ese índice (ignora el mouse real
+  mientras dure este contexto) en `render_card_hand`. X
+  (`gamepad_confirm_pressed`) dispara la MISMA rama que hoy dispara
+  `IsMouseButtonPressed(.LEFT)` (arma torre/obstáculo, reliquia pasiva,
+  activa LUMBERJACK/OVERDRIVE/GARDENER). Triángulo (nueva
+  `gamepad_sell_pressed`, `RIGHT_FACE_UP`) dispara la misma rama que
+  `IsMouseButtonPressed(.RIGHT)` (vender, mismo guard `can_sell`).
+- **`.SHOP`**: `shop_gamepad_focus_idx` (`render_card_selection_overlay`)
+  navega cartas + Skip + Reroll como una sola lista (`0..<n_cards` son
+  cartas, `n_cards`/`n_cards+1` son los botones). X compra
+  (`shop_perform_buy`), Círculo alterna el lock
+  (`shop_perform_toggle_lock`) — misma rama que sus clicks de hoy. Skip/
+  Reroll ya eran `render_button` normales: sólo ganaron
+  `gamepad_focused`, gratis.
+- **`.CURSOR`**: no hay foco explícito de nada — el cursor real (movido
+  por el stick) ya está posicionado sobre lo que sea que esté hovereando,
+  y sólo hacía falta que el botón de confirmar/cancelar del mando
+  cuente como si fuera el click real:
+  - `input_handle_playing`: los dos bloques grandes (click izquierdo:
+    grilla/airdrop/acción pendiente/colocar; click derecho: cancelar)
+    ganan `|| (playing_gamepad_context == .CURSOR && gamepad_confirm_pressed()/gamepad_cancel_pressed())`.
+  - `render_button`/`render_icon_button` (`systems/interface.odin`) ganan
+    una tercera rama de click,
+    `hovered && playing_gamepad_context == .CURSOR && gamepad_confirm_pressed()`
+    — distinta de la rama `opts.gamepad_focused` que ya usan los menús:
+    acá no hace falta que el caller marque el botón como focuseado, el
+    hover ya viene gratis de la posición real del cursor. Así los
+    paneles de torre/obstáculo (Upgrade/Sell, ya `render_button`)
+    funcionan con mando sin tocarlos.
+
+**Trampa ya conocida, aplicada de nuevo acá:** `render_label_tooltip` Y
+`render_card_tooltip` (`systems/interface.odin`) revisan la posición del
+mouse real internamente — un widget "hovereado" sólo por foco de mando
+(D-pad, no el cursor real) no disparaba el tooltip sin más. Ambas
+funciones tienen un parámetro `force: bool` para saltear ese chequeo;
+`render_card_hand`/`render_card_selection_overlay` lo pasan cuando el
+hover viene del foco de mando, no del mouse.
+
+**Fuera de alcance, documentado, no construido:** `render_select` (el
+dropdown de estrategia de torre en el panel de torre) — misma categoría
+que Settings, necesita su propia lógica de ajuste-con-stick, no es un
+botón simple. Relic tray (sólo tooltip, sin acción). Vibración, remapeo
+de botones.
+
 ## Sistema de UI blocking
 
 `ui_blocks_clear()` se llama al inicio de cada frame desde `render_game`.
@@ -602,6 +721,69 @@ path (nodos sin `.OPTIONAL`) se distribuye en Y de 0 a 1
 (`compute_campaign_layout`), y los `.OPTIONAL` cuelgan a los costados
 (izquierda/derecha) de su `requires_node`, no arriba/abajo — es el eje
 invertido respecto a como era originalmente (main path en X).
+
+**Navegación de mando: vecino más cercano, no el grafo.**
+`campaign_map_gamepad_focus` (static, distinto de
+`campaign_map_selected_node`: uno es "el cursor", el otro "el panel está
+abierto para este nodo") se mueve con `campaign_nav_move`, que busca el
+nodo más cercano en la dirección pedida dentro del espacio normalizado
+`[0,1]²` que ya devuelve `compute_campaign_layout` — NO camina
+`requires_node`. Se descartó navegar el grafo porque las ramas OPTIONAL
+cuelgan a los costados del main path, no forman una secuencia natural de
+"arriba/abajo/izquierda/derecha"; el layout ya es espacial, así que
+buscar el vecino más cercano (penalizando el desalineamiento perpendicular
+el doble que la distancia, `along + perp*2.0`) da un resultado intuitivo
+sin tener que razonar sobre la estructura del árbol. Se auto-inicializa en
+`active_idx` (el mismo nodo que ya recibe el anillo blanco de "seguís por
+acá") cuando queda inválido — pantalla recién entrada, o la campaña
+cambió de tamaño.
+
+**Dos modos de foco que no compiten.** Modo grafo
+(`campaign_map_selected_node < 0`): el D-pad mueve
+`campaign_map_gamepad_focus` sobre los nodos; Confirmar (A, botón X en
+PlayStation) abre el panel de detalle del nodo enfocado (el nodo enfocado
+cuenta como "hovereado" — mismo tooltip que el mouse, mismo
+`gamepad_confirm_pressed()` disparando la misma rama de click).
+**Trampa real encontrada:** `render_label_tooltip` (`interface.odin`)
+revisaba la posición del mouse REAL internamente sin importar que el
+caller ya supiera que el nodo estaba "hovereado" por mando — el tooltip
+nunca aparecía navegando con D-pad porque el mouse físico puede estar en
+cualquier lado de la pantalla. Se agregó `force: bool` (default false) que
+saltea ese chequeo; `render_campaign_map` lo pasa como
+`force = gamepad_focused_node`. Si se agrega foco de mando a OTRA
+superficie que use `render_label_tooltip` (biblioteca de cartas, tienda,
+etc.), va a hacer falta el mismo `force` ahí también. Modo panel
+(`campaign_map_selected_node >= 0`):
+el foco pasa al botón "Jugar" (mismo patrón de widget único que ya usa
+Créditos, `gamepad_focused = app.gamepad_nav_active`, scoped solo porque
+`render_campaign_node_detail_panel` sólo se llama con el panel abierto).
+**El botón "Volver" ya NO es gamepad-focused incondicional** — lo fue en
+la primera pasada de esta pantalla (cuando era el único widget), pero
+ahora competiría por el foco con los nodos y con "Jugar". Salir de la
+pantalla con mando es **Cancelar (B)**, no Confirmar sobre Volver.
+
+**Cancelar es de dos niveles** (`systems/input.odin`, `case
+.CAMPAIGN_MAP`, para ESC y para `gamepad_cancel_pressed()` por igual): si
+hay un panel de detalle abierto lo cierra primero; recién si no hay panel,
+sale a `.MENU`. Antes ESC salía directo sin importar si había un panel
+abierto — se corrigió para ambos (teclado y mando) a la vez, ya que
+comparten la misma rama.
+
+**Anillo de foco: círculo, no el rectángulo genérico.** Los nodos son
+círculos — `draw_gamepad_focus_ring` (pensado para rects de botones) se
+vería raro acá. Se dibuja inline en `render_campaign_map`, mismo truco de
+doble `DrawCircleLines` que ya usa el anillo blanco del nodo activo, pero
+en `UI_BUTTON_AFFIRMATIVE_COLOR` y con un offset mayor — así si el nodo
+enfocado coincide con el nodo activo, se ven los dos anillos anidados en
+vez de pisarse.
+
+**Auto-scroll seguir-al-foco.** Después de mover
+`campaign_map_gamepad_focus`, si el nodo enfocado queda fuera de la banda
+visible (`vis_y_top..vis_y_bot`), se corre `campaign_map_scroll` lo mínimo
+necesario para volver a mostrarlo — mismo clamp `[0, max_scroll]` que ya
+usa la rueda del mouse, calculado ANTES de `y_top_eff`/`y_bot_eff` (que
+dependen de `campaign_map_scroll`) para que el resto del frame dibuje ya
+con el scroll corregido.
 
 **Scroll vertical sin tocar `campaign_pos_to_screen`.** La función sigue
 interpolando `pos∈[0,1]²` entre `x_lef..x_rig`/`y_top..y_bot` sin cambios de
@@ -930,6 +1112,28 @@ reintroducir esa función sin que se pida de nuevo.
 se llama tanto desde `input_handle_camera_3d` (PLAYING/EDITOR) como desde
 `input_handle_paused` (PAUSED no pasa por `input_handle_camera_3d`, así
 que necesita su propia llamada).
+
+**Rotación con mando: LEFT_TRIGGER_2/RIGHT_TRIGGER_2, velocidad
+constante.** A diferencia del botón central (rota por delta de arrastre
+del mouse), los triggers rotan a `CAMERA_GAMEPAD_ORBIT_SPEED` rad/s
+mientras se mantienen apretados (`IsGamepadButtonDown`, no
+`IsGamepadButtonPressed` — es continuo, no un toggle). Vive en la misma
+`input_handle_camera_orbit`, así que aplica automáticamente a
+PLAYING/EDITOR/PAUSED igual que el botón central, sin código nuevo por
+estado. Pedido explícito del usuario.
+
+**Zoom con mando: LEFT_TRIGGER_1 acerca, RIGHT_TRIGGER_1 aleja.** Mismo
+criterio que la rotación (triggers "1", no "2" — L2/R2 rotan, L1/R1
+zoomean): continuo mientras se mantienen apretados
+(`CAMERA_GAMEPAD_ZOOM_SPEED` por segundo, mismas unidades que
+`ZOOM_SPEED` que ya usa la rueda del mouse), sumado/restado a
+`app.target_zoom` en `input_handle_camera_3d` (sólo PLAYING/EDITOR, igual
+alcance que la rueda — no en PAUSED, que no pasa por esta función). Más
+zoom = cámara más cerca (`camera_distance_from_zoom` lo invierte), así
+que LEFT_TRIGGER_1 SUMA a `target_zoom`. El clamp `[ZOOM_MIN, ZOOM_MAX]`
+se sacó del `if wheel_movement != 0` y quedó incondicional al final de la
+función, para que agarre tanto a la rueda como a los triggers sin
+duplicar el clamp en cada fuente de input.
 
 `camera_yaw` no tiene lerp/target a diferencia de `camera_focus`/`zoom` —
 responde 1:1 al drag, no hay una versión "suavizada" que perseguir cada

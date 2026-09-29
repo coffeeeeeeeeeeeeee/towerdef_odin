@@ -581,6 +581,48 @@ draw_campaign_connection :: proc(from, to: [2]f32, thickness: f32, color: raylib
 campaign_map_scroll:        f32 = 0
 campaign_map_selected_node: i32 = -1
 
+// Nodo con foco de navegación por mando — sólo se usa en modo grafo
+// (campaign_map_selected_node < 0). Distinto de campaign_map_selected_node:
+// éste es "el cursor", aquél es "el panel está abierto para este nodo".
+// -1 = sin foco asignado todavía (se auto-inicializa en active_idx).
+campaign_map_gamepad_focus: i32 = -1
+
+// Vecino más cercano de `current` en la dirección `dir`, en el espacio
+// normalizado [0,1]² que ya devuelve compute_campaign_layout — no camina
+// el grafo (requires_node) porque las ramas OPTIONAL cuelgan a los
+// costados y el layout es espacial, no jerárquico. `along` mide qué tan
+// lejos está en la dirección pedida (se descarta si es <= 0, no está para
+// ese lado), `perp` qué tan desalineado está — se penaliza el
+// desalineado el doble que la distancia para preferir vecinos derechos
+// por sobre vecinos lejanos pero alineados.
+campaign_nav_move :: proc(c: ^entities.Campaign_File, layout: ^[constants.CAMPAIGN_MAX_NODES][2]f32, current: i32, dir: Gamepad_Nav_Dir) -> i32 {
+	if dir == .NONE || current < 0 { return current }
+	dir_vec: [2]f32
+	switch dir {
+	case .UP:    dir_vec = {0, -1}
+	case .DOWN:  dir_vec = {0, 1}
+	case .LEFT:  dir_vec = {-1, 0}
+	case .RIGHT: dir_vec = {1, 0}
+	case .NONE:
+	}
+	cur_pos := layout[current]
+	best_idx: i32 = -1
+	best_score := max(f32)
+	for i in 0 ..< int(c.node_count) {
+		if i32(i) == current { continue }
+		delta := layout[i] - cur_pos
+		along := delta.x*dir_vec.x + delta.y*dir_vec.y
+		if along <= 0.001 { continue }
+		perp := abs(delta.x*dir_vec.y - delta.y*dir_vec.x)
+		score := along + perp*2.0
+		if score < best_score {
+			best_score = score
+			best_idx = i32(i)
+		}
+	}
+	return best_idx if best_idx >= 0 else current
+}
+
 // Render del visualizador de campaña — Game_State.CAMPAIGN_MAP.
 render_campaign_map :: proc(app: ^entities.App_State) {
 	// Carga lazy de campaign.bin la primera vez que se entra.
@@ -673,9 +715,6 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 		if campaign_map_scroll < 0          { campaign_map_scroll = 0 }
 		if campaign_map_scroll > max_scroll { campaign_map_scroll = max_scroll }
 
-		y_top_eff := vis_y_top - campaign_map_scroll
-		y_bot_eff := y_top_eff + canvas_h
-
 		// Nodo "activo" — primer nodo NO opcional, desbloqueado y no completado.
 		// Recibe un anillo blanco para destacar visualmente "lo que sigue".
 		active_idx := -1
@@ -688,6 +727,32 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 				break
 			}
 		}
+
+		// Foco de mando — sólo en modo grafo (panel cerrado). Se
+		// auto-inicializa en el nodo activo si quedó inválido (pantalla
+		// recién entrada, o la campaña cambió de tamaño).
+		if campaign_map_gamepad_focus < 0 || campaign_map_gamepad_focus >= i32(c.node_count) {
+			campaign_map_gamepad_focus = i32(active_idx) if active_idx >= 0 else 0
+		}
+		if campaign_map_selected_node < 0 {
+			campaign_map_gamepad_focus = campaign_nav_move(c, &layout, campaign_map_gamepad_focus, current_nav_dir)
+
+			// Auto-scroll: si el nodo recién enfocado quedó fuera de la
+			// banda visible, correr el scroll lo mínimo necesario para
+			// volver a mostrarlo — mismo clamp [0, max_scroll] de la rueda.
+			focus_margin : f32 = 40
+			focus_y := vis_y_top - campaign_map_scroll + layout[campaign_map_gamepad_focus].y*canvas_h
+			if focus_y < vis_y_top + focus_margin {
+				campaign_map_scroll -= (vis_y_top + focus_margin) - focus_y
+			} else if focus_y > vis_y_bot - focus_margin {
+				campaign_map_scroll += focus_y - (vis_y_bot - focus_margin)
+			}
+			if campaign_map_scroll < 0          { campaign_map_scroll = 0 }
+			if campaign_map_scroll > max_scroll { campaign_map_scroll = max_scroll }
+		}
+
+		y_top_eff := vis_y_top - campaign_map_scroll
+		y_bot_eff := y_top_eff + canvas_h
 
 		scissor_margin := constants.CAMPAIGN_SCISSOR_MARGIN_PX
 		raylib.BeginScissorMode(
@@ -765,10 +830,15 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 				raylib.DrawCircleV({pos[0], pos[1]}, glow_r, pulse_col)
 			}
 
-			// Hover check (círculo, no hay widget compartido para esto)
+			// Hover check (círculo, no hay widget compartido para esto). El
+			// nodo con foco de mando (sólo en modo grafo, panel cerrado)
+			// cuenta como hovereado igual que el mouse — mismo tooltip,
+			// mismo gatillo de click.
 			dx := mouse.x - pos[0]
 			dy := mouse.y - pos[1]
-			hovered := dx*dx + dy*dy <= radius*radius && !mouse_blocked
+			gamepad_focused_node := app.gamepad_nav_active && campaign_map_selected_node < 0 &&
+				campaign_map_gamepad_focus == i32(i)
+			hovered := (dx*dx + dy*dy <= radius*radius && !mouse_blocked) || gamepad_focused_node
 
 			// Dibujar círculo + borde
 			raylib.DrawCircleV({pos[0], pos[1]}, radius, fill_col)
@@ -780,6 +850,15 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 				r0 := radius + f32(constants.CAMPAIGN_ACTIVE_RING_OFFSET)
 				raylib.DrawCircleLines(i32(pos[0]), i32(pos[1]), r0,     raylib.WHITE)
 				raylib.DrawCircleLines(i32(pos[0]), i32(pos[1]), r0 + 1, raylib.WHITE)
+			}
+
+			// Anillo de foco de mando — offset mayor que el del nodo activo,
+			// para que si coinciden en el mismo nodo se vean los dos anillos
+			// anidados en vez de pisarse.
+			if gamepad_focused_node {
+				r1 := radius + f32(constants.CAMPAIGN_ACTIVE_RING_OFFSET) + 6
+				raylib.DrawCircleLines(i32(pos[0]), i32(pos[1]), r1,     constants.UI_BUTTON_AFFIRMATIVE_COLOR)
+				raylib.DrawCircleLines(i32(pos[0]), i32(pos[1]), r1 + 1, constants.UI_BUTTON_AFFIRMATIVE_COLOR)
 			}
 
 			// Estrellas para completados (texto centrado)
@@ -824,13 +903,15 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 				if i < len(app.campaign_map_biome_valid) && app.campaign_map_biome_valid[i] {
 					sub_line = fmt.tprintf("%s - %s", map_fname, constants.get_biome_name(app.campaign_map_biomes[i]))
 				}
-				render_label_tooltip(app, quick_line, node_rect, sub_line)
+				render_label_tooltip(app, quick_line, node_rect, sub_line, force = gamepad_focused_node)
 			}
 
-			// Click selecciona/deselecciona el nodo y abre el panel de
-			// detalle — ya NO lanza la run directamente (evita lanzamientos
-			// accidentales y permite ver info de nodos bloqueados).
-			if hovered && raylib.IsMouseButtonPressed(.LEFT) {
+			// Click (o Confirmar de mando sobre el nodo enfocado) selecciona/
+			// deselecciona el nodo y abre el panel de detalle — ya NO lanza
+			// la run directamente (evita lanzamientos accidentales y
+			// permite ver info de nodos bloqueados).
+			if hovered && (raylib.IsMouseButtonPressed(.LEFT) ||
+			   (gamepad_focused_node && gamepad_confirm_pressed())) {
 				if campaign_map_selected_node == i32(i) {
 					campaign_map_selected_node = -1
 				} else {
@@ -859,16 +940,18 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 		}
 	}
 
-	// Botón de volver
+	// Botón de volver — ya NO gamepad-focused incondicional: compite con el
+	// foco de nodos y con "Jugar" del panel. Con mando, salir de esta
+	// pantalla es Cancelar (B), no Confirmar sobre este botón (ver
+	// systems/input.odin, case .CAMPAIGN_MAP).
 	back_w : f32 = 140
 	back_h : f32 = 32
 	back_x := sw / 2 - back_w / 2
 	back_y := sh - back_h - 24
-	if render_button(constants.get_text("CAMPAIGN_MAP_BACK"), {back_x, back_y, back_w, back_h},
-		{gamepad_focused = app.gamepad_nav_active},
-	) {
+	if render_button(constants.get_text("CAMPAIGN_MAP_BACK"), {back_x, back_y, back_w, back_h}) {
 		campaign_map_scroll        = 0
 		campaign_map_selected_node = -1
+		campaign_map_gamepad_focus = -1
 		entities.app_set_state(app, .MENU)
 		play_sound(.CLICK, .UI)
 	}
@@ -988,6 +1071,9 @@ render_campaign_node_detail_panel :: proc(app: ^entities.App_State, node_idx: i3
 		button_color  = constants.UI_BUTTON_AFFIRMATIVE_COLOR,
 		hover_color   = constants.UI_BUTTON_AFFIRMATIVE_HOVER,
 		pressed_color = constants.UI_BUTTON_AFFIRMATIVE_PRESS,
+		// Único widget de "modo panel" — scoped automáticamente porque esta
+		// función sólo se llama mientras el panel está abierto.
+		gamepad_focused = app.gamepad_nav_active,
 	}) {
 		launch_campaign_node(app, node_idx)
 	}

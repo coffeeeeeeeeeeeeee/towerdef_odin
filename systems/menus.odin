@@ -124,6 +124,12 @@ render_ui :: proc(app: ^entities.App_State) {
 			raylib.WHITE,
 		)
 	}
+
+	// Overlay de diagnóstico de mando — toggle con F10 (systems/input.odin),
+	// no atado a DEVELOPER. Ver render_gamepad_debug_overlay.
+	if gamepad_debug_active {
+		render_gamepad_debug_overlay(app)
+	}
 }
 
 // Render gradient background with subtle pattern for menus
@@ -2547,6 +2553,12 @@ shop_next_reroll_cost :: proc(app: ^entities.App_State) -> i32 {
 // Click izquierdo sobre una carta la compra directamente.
 // Click derecho sobre una carta la bloquea (sobrevive al reroll).
 // El shop se cierra solo con el botón Skip (o cuando se abre la siguiente oleada).
+// Foco de mando sobre la tienda — D-pad izq/der navega, X compra, Círculo
+// bloquea/desbloquea (ver playing_gamepad_context, systems/input.odin).
+// Índices 0..<n_cards son cartas; n_cards/n_cards+1 son Skip/Reroll.
+// Clampeado cada frame dentro de render_card_selection_overlay.
+shop_gamepad_focus_idx: int = 0
+
 render_card_selection_overlay :: proc(app: ^entities.App_State) {
 	// Limpiamos ui_modal_blocks: la UI de juego subyacente ya fue procesada y
 	// correctamente bloqueada; ahora solo los botones del shop deben recibir clicks.
@@ -2596,6 +2608,19 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 	HOVER_LIFT     :: f32(8)
 	LOCK_ICON_SIZE :: f32(18)
 
+	// Navegación con mando — sólo cuando la tienda tiene el contexto
+	// activo (ver playing_gamepad_context). +2 = Skip/Reroll, al final.
+	if shop_gamepad_focus_idx >= n_cards+2 { shop_gamepad_focus_idx = n_cards+1 }
+	if shop_gamepad_focus_idx < 0 { shop_gamepad_focus_idx = 0 }
+	if playing_gamepad_context == .SHOP {
+		switch current_nav_dir {
+		case .LEFT:  shop_gamepad_focus_idx = max(shop_gamepad_focus_idx-1, 0)
+		case .RIGHT: shop_gamepad_focus_idx = min(shop_gamepad_focus_idx+1, n_cards+1)
+		case .NONE, .UP, .DOWN:
+		}
+	}
+	shop_gamepad_active := playing_gamepad_context == .SHOP
+
 	for i in 0 ..< n_cards {
 		card     := sim.shop.choices[i]
 		cx       := panel_x + CARD_GAP + f32(i) * (CARD_W + CARD_GAP)
@@ -2614,7 +2639,8 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		if bought { continue }
 
 		card_rect := raylib.Rectangle{cx, cy, CARD_W, CARD_H}
-		hovered   := raylib.CheckCollisionPointRec(mouse, card_rect)
+		gamepad_focused_card := shop_gamepad_active && shop_gamepad_focus_idx == i
+		hovered   := raylib.CheckCollisionPointRec(mouse, card_rect) || gamepad_focused_card
 		lift      := hovered ? HOVER_LIFT : f32(0)
 		draw_cy   := cy - lift
 
@@ -2642,7 +2668,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		)
 
 		lifted_rect := raylib.Rectangle{cx, draw_cy, CARD_W, CARD_H}
-		render_card_tooltip(app, card, lifted_rect)
+		render_card_tooltip(app, card, lifted_rect, force = gamepad_focused_card)
 
 		// Indicador de lock — borde dorado constante + ícono de candado esquina sup izq.
 		// lock_locked cuando el slot está bloqueado; lock_unlocked al hacer hover sobre
@@ -2687,13 +2713,17 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 			append(&ui_click_blocks, card_rect)
 		}
 
-		// Click izquierdo: comprar — la lógica vive en shop_perform_buy (simulation.odin)
-		if hovered && can_buy && raylib.IsMouseButtonPressed(.LEFT) {
+		// Click izquierdo (o X con foco de mando): comprar — la lógica vive
+		// en shop_perform_buy (simulation.odin)
+		if hovered && can_buy && (raylib.IsMouseButtonPressed(.LEFT) ||
+		   (gamepad_focused_card && gamepad_confirm_pressed())) {
 			shop_perform_buy(app, i)
 		}
 
-		// Click derecho: toggle lock — la lógica vive en shop_perform_toggle_lock
-		if hovered && raylib.IsMouseButtonPressed(.RIGHT) {
+		// Click derecho (o Círculo con foco de mando): toggle lock — la
+		// lógica vive en shop_perform_toggle_lock
+		if hovered && (raylib.IsMouseButtonPressed(.RIGHT) ||
+		   (gamepad_focused_card && gamepad_cancel_pressed())) {
 			shop_perform_toggle_lock(app, i)
 		}
 	}
@@ -2720,7 +2750,9 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		skip_label = constants.get_text("SHOP_SKIP")
 	}
 
-	if render_button(skip_label, {skip_x, btn_y, BTN_W, BTN_H}) {
+	if render_button(skip_label, {skip_x, btn_y, BTN_W, BTN_H}, {
+		gamepad_focused = shop_gamepad_active && shop_gamepad_focus_idx == n_cards,
+	}) {
 		shop_perform_skip(app)
 	}
 
@@ -2742,6 +2774,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 			button_color  = can_reroll ? constants.UI_BUTTON_AFFIRMATIVE_COLOR : constants.COLOR_NONE,
 			hover_color   = can_reroll ? constants.UI_BUTTON_AFFIRMATIVE_HOVER : constants.COLOR_NONE,
 			pressed_color = can_reroll ? constants.UI_BUTTON_AFFIRMATIVE_PRESS : constants.COLOR_NONE,
+			gamepad_focused = shop_gamepad_active && shop_gamepad_focus_idx == n_cards+1,
 		},
 	) {
 		shop_perform_reroll(app)
@@ -2835,6 +2868,11 @@ activate_pending_action :: proc(app: ^entities.App_State, kind: entities.Card_Ki
 	play_sound(.SELECT, .UI)
 }
 
+// Foco de mando sobre la mano — D-pad izq/der navega, X activa, Triángulo
+// vende (ver playing_gamepad_context, systems/input.odin). Clampeado cada
+// frame contra el tamaño actual de la mano dentro de render_card_hand.
+hand_gamepad_focus_idx: int = 0
+
 // Renderiza la mano del jugador en la zona inferior.
 // Las cartas están plegadas (solapadas). Pasar el mouse sobre una carta
 // separa el mazo en dos mitades para revelarla completamente.
@@ -2863,12 +2901,32 @@ render_card_hand :: proc(app: ^entities.App_State) {
 
 	mouse := raylib.GetMousePosition()
 
-	// Detectar carta bajo el cursor (última = la más encima).
+	// Foco de mando sobre la mano — sólo manda cuando
+	// playing_gamepad_context == .HAND (D-pad izq/der del mismo mando que
+	// ya resuelve current_nav_dir, ver systems/input.odin). Se clampea acá
+	// mismo contra el tamaño actual de la mano (puede cambiar de un frame
+	// a otro si se juega/vende una carta).
+	if hand_gamepad_focus_idx >= n { hand_gamepad_focus_idx = n - 1 }
+	if hand_gamepad_focus_idx < 0 { hand_gamepad_focus_idx = 0 }
+	if playing_gamepad_context == .HAND {
+		switch current_nav_dir {
+		case .LEFT:  hand_gamepad_focus_idx = max(hand_gamepad_focus_idx-1, 0)
+		case .RIGHT: hand_gamepad_focus_idx = min(hand_gamepad_focus_idx+1, n-1)
+		case .NONE, .UP, .DOWN:
+		}
+	}
+
+	// Detectar carta bajo el cursor (última = la más encima). Con el
+	// contexto de mando en .HAND, el foco del D-pad manda por completo
+	// (ignora el mouse real, que puede estar en cualquier lado de la
+	// pantalla) — en .SHOP/.CURSOR sigue siendo puro mouse, como siempre.
 	// No se usa ui_is_modal_blocked: el shop bloquea la pantalla completa vía
 	// ui_modal_blocks, pero la mano debe seguir siendo vendible mientras el shop
 	// está abierto. Solo el modal de confirmación Sí/No bloquea la mano.
 	hovered_idx := -1
-	if !app.confirm_modal.active {
+	if playing_gamepad_context == .HAND && !app.confirm_modal.active {
+		hovered_idx = hand_gamepad_focus_idx
+	} else if !app.confirm_modal.active {
 		for i in 0 ..< n {
 			cx := start_x + f32(i) * step
 			if raylib.CheckCollisionPointRec(mouse, raylib.Rectangle{cx, card_y, CARD_W, CARD_H}) {
@@ -2917,7 +2975,7 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		}
 		card_rect := raylib.Rectangle{cx, cy, CARD_W, CARD_H}
 		append(&ui_click_blocks, card_rect)
-		render_card_tooltip(app, card, card_rect)
+		render_card_tooltip(app, card, card_rect, force = playing_gamepad_context == .HAND)
 
 		// Clic para seleccionar/colocar torre-obstáculo o activar una reliquia con
 		// objetivo — bloqueado si el shop está abierto (el mapa queda tapado).
@@ -2946,7 +3004,12 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		// fuera de rango.
 		something_armed := app.pending_tower_action != .TOWER || app.sim.selected_build_tower != .EMPTY
 		can_sell := !something_armed || app.sim.cards.selected_card_idx == i
-		if raylib.IsMouseButtonPressed(.RIGHT) && can_sell {
+		// Triángulo = vender, sólo con el contexto de mando en .HAND (en
+		// .CURSOR el click derecho real ya pasa por acá vía IsMouseButtonPressed
+		// normal si el cursor virtual está sobre la carta).
+		sell_pressed := raylib.IsMouseButtonPressed(.RIGHT) ||
+			(playing_gamepad_context == .HAND && gamepad_sell_pressed())
+		if sell_pressed && can_sell {
 			sell_card_at(app, i, card)
 		}
 
@@ -2957,7 +3020,12 @@ render_card_hand :: proc(app: ^entities.App_State) {
 		is_targeted_action := card.kind == .LUMBERJACK || card.kind == .OVERDRIVE || card.kind == .GARDENER
 		is_passive_relic   := entities.is_relic(card.kind) && !is_targeted_action
 
-		if raylib.IsMouseButtonPressed(.LEFT) {
+		// X = click izquierdo, sólo con el contexto de mando en .HAND (en
+		// .CURSOR el cursor virtual ya dispara el IsMouseButtonPressed
+		// normal si está posicionado sobre la carta).
+		activate_pressed := raylib.IsMouseButtonPressed(.LEFT) ||
+			(playing_gamepad_context == .HAND && gamepad_confirm_pressed())
+		if activate_pressed {
 			// Toggle: segundo clic sobre la carta activa cancela el modo selección
 			if app.pending_tower_action != .TOWER && app.sim.cards.selected_card_idx == i {
 				app.pending_tower_action = .TOWER
