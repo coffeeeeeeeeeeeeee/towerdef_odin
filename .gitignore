@@ -1,2 +1,8 @@
 dist/
 .build-cache/
+
+# Binarios de build sueltos en la raíz (odin build . sin -out: los deja acá
+# con el nombre de la carpeta) — se colaron por error en un commit una vez,
+# no deberían trackearse.
+/towerdef_odin
+/towerdef_odin.exe
