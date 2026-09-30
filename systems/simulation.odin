@@ -2171,6 +2171,17 @@ simulation_set_speed :: proc(app: ^entities.App_State, speed: f32) {
 simulation_init_from_editor :: proc(app: ^entities.App_State) -> bool {
 	simulation_reset(app)
 
+	// Foco de mando: toda run nueva arranca en la mano de cartas — los
+	// statics de contexto/foco (systems/input.odin, systems/menus.odin)
+	// persisten entre runs dentro del mismo proceso, así que sin este
+	// reset una run nueva podía heredar SHOP/HUD/CURSOR (o un índice de
+	// foco apuntando a una carta que ya no existe) de la run anterior.
+	// Pedido explícito del usuario.
+	playing_gamepad_context = .HAND
+	hand_gamepad_focus_idx  = 0
+	shop_gamepad_focus_idx  = 0
+	hud_gamepad_focus_idx   = 0
+
 	// Copy towers from editor grid (use actual map dimensions)
 	for row in 0 ..< app.editor.game_map.height {
 		for col in 0 ..< app.editor.game_map.width {

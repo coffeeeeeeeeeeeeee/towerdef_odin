@@ -13,6 +13,7 @@ import "vendor:raylib"
 // render_menu_ui/render_run_complete_ui y systems/gamepad.odin.
 menu_focused_idx: i32 = 0
 run_complete_focused_idx: i32 = 0
+game_over_focused_idx: i32 = 0
 
 render_ui :: proc(app: ^entities.App_State) {
 	// El shop es modal: bloquea toda la pantalla para que los botones de PLAYING
@@ -1718,14 +1719,25 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 	btn_width   := i32(constants.UI_BUTTON_WIDTH) * 2
 	gap         := i32(10)
 	btn_y       := i32(stats_y) + stats_total + spacing
-	is_campaign := app.current_campaign_node >= 0
+	is_campaign := app.last_run_was_campaign
 	num_btns    := 2 if is_campaign else 1
 	total_w     := btn_width * i32(num_btns) + gap * i32(num_btns - 1)
 	btn_x       := i32(stats_x) + i32(stats_panel_w) / 2 - total_w / 2
 
+	// Navegación con mando: horizontal, clamp contra el conteo real de
+	// botones — mismo patrón que run_complete_focused_idx.
+	if game_over_focused_idx >= i32(num_btns) { game_over_focused_idx = i32(num_btns) - 1 }
+	if game_over_focused_idx < 0 { game_over_focused_idx = 0 }
+	switch current_nav_dir {
+	case .LEFT:  game_over_focused_idx = max(game_over_focused_idx - 1, 0)
+	case .RIGHT: game_over_focused_idx = min(game_over_focused_idx + 1, i32(num_btns) - 1)
+	case .NONE, .UP, .DOWN:
+	}
+
 	if render_button(
 		constants.get_text("GAME_OVER_BUTTON_MENU"),
 		{f32(btn_x), f32(btn_y), f32(btn_width), f32(btn_height)},
+		{gamepad_focused = app.gamepad_nav_active && game_over_focused_idx == 0},
 	) {
 		simulation_reset(app)
 		entities.app_set_state(app, .MENU)
@@ -1733,6 +1745,7 @@ render_game_over_ui :: proc(app: ^entities.App_State) {
 	if is_campaign && render_button(
 		constants.get_text("CAMPAIGN_MAP_BACK"),
 		{f32(btn_x + btn_width + gap), f32(btn_y), f32(btn_width), f32(btn_height)},
+		{gamepad_focused = app.gamepad_nav_active && game_over_focused_idx == 1},
 	) {
 		simulation_reset(app)
 		entities.app_set_state(app, .CAMPAIGN_MAP)
@@ -2654,10 +2667,14 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 
 	// Navegación con mando — sólo cuando la tienda tiene el contexto
 	// activo (ver playing_gamepad_context). +2 = Skip/Reroll, al final.
-	// Izq/der leen sólo el stick izquierdo (sin d-pad, pedido explícito) y
+	// Izq/der leen current_nav_dir (d-pad Y stick fusionados, pedido
+	// explícito del usuario: quiere las dos formas, no sólo el stick) y
 	// se mueven DENTRO de la fila actual — cambiar de fila (cartas ↔
 	// Saltar/Reroll) es cosa de arriba/abajo, resuelto en
-	// _update_playing_gamepad_context (systems/input.odin).
+	// _update_playing_gamepad_context (systems/input.odin). El chequeo de
+	// eje dominante en _gamepad_dir_down (systems/gamepad.odin) evita que
+	// una deriva vertical del stick durante un empuje horizontal se cuele
+	// como arriba/abajo y salte de fila a mitad de la navegación.
 	if shop_gamepad_focus_idx >= n_cards+2 { shop_gamepad_focus_idx = n_cards+1 }
 	if shop_gamepad_focus_idx < 0 { shop_gamepad_focus_idx = 0 }
 	if playing_gamepad_context == .SHOP {
@@ -2668,7 +2685,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 		on_buttons := shop_gamepad_focus_idx >= n_cards
 		row_start, row_count := 0, n_cards
 		if on_buttons { row_start, row_count = n_cards, 2 }
-		switch gamepad_shop_stick_dir(app.delta_time) {
+		switch current_nav_dir {
 		case .LEFT:
 			rel := shop_gamepad_focus_idx - row_start
 			shop_gamepad_focus_idx = row_start + ((rel - 1 + row_count) % row_count)
@@ -3273,7 +3290,7 @@ render_run_complete_ui :: proc(app: ^entities.App_State) {
 	gap    := i32(10)
 	btns_y := i32(acum_y) + i32(font_size) + spacing * 2
 
-	is_campaign := app.current_campaign_node >= 0
+	is_campaign := app.last_run_was_campaign
 
 	// Navegación con mando: horizontal, clamp contra el conteo real de
 	// botones de la rama (derrota o victoria tienen el mismo num_btns).

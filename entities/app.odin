@@ -368,6 +368,13 @@ App_State :: struct {
 	campaign:               Campaign_File,
 	campaign_loaded:        bool,
 	current_campaign_node:  i32,   // -1 = el run actual no es de campaña; >=0 = índice del nodo
+	// Copia de "¿el run que acaba de terminar era de campaña?" tomada ANTES
+	// de que app_finish_run resetee current_campaign_node a -1 — las
+	// pantallas de fin de partida (render_game_over_ui/render_run_complete_ui,
+	// systems/menus.odin) la usan para decidir si mostrar "Volver a
+	// Campaña" en vez de leer current_campaign_node directo (que para
+	// entonces siempre da -1).
+	last_run_was_campaign: bool,
 	campaign_file_mtime:    i64,   // mtime de campaign.bin para hot-reload (DEVELOPER only)
 
 	// Nombre editable (Map.display_name) del .map de cada nodo, cacheado al
@@ -557,6 +564,10 @@ app_finish_run :: proc(app: ^App_State, victory: bool) {
 	// congelada (ver main.odin), pero por las dudas evita procesar el
 	// resultado dos veces si algo más dispara otro finish_run en el medio.
 	if app.screen_fade.active { return }
+
+	// Tomar la copia ANTES de que el path de campaña, más abajo, resetee
+	// current_campaign_node a -1 — ver el comentario del campo.
+	app.last_run_was_campaign = app.current_campaign_node >= 0
 
 	app.sim.is_victory = victory
 	lives := app.sim.health if victory else 0

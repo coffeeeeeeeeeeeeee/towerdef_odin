@@ -55,23 +55,36 @@ _gamepad_resolve_index :: proc() -> i32 {
 
 // True si `dir` está siendo empujada ahora mismo (D-pad o stick izquierdo
 // más allá del deadzone) — no aplica repeat, es el estado crudo "down".
+// El aporte del STICK exige eje dominante (|eje relevante| >= |el otro
+// eje|) — sin esto, un empuje "hacia la derecha" con la más mínima deriva
+// vertical (inevitable en un stick analógico real) también cruza el
+// deadzone de Y y, como UP/DOWN se evalúan antes que LEFT/RIGHT en
+// `_GAMEPAD_NAV_DIRS`, current_nav_dir salía DOWN en vez de RIGHT ese
+// frame. En la tienda eso disparaba el salto a Saltar/Reroll a mitad de
+// una navegación horizontal — bug real reportado por el usuario ("no
+// puede elegir a partir de la segunda carta"). El botón de D-pad no lleva
+// este chequeo (una pulsación de botón no tiene "magnitud" que comparar,
+// y presionar dos direcciones de d-pad a la vez es intencional, no deriva
+// analógica).
 _gamepad_dir_down :: proc(dir: Gamepad_Nav_Dir) -> bool {
 	if _gamepad_index < 0 { return false }
+	ax := raylib.GetGamepadAxisMovement(_gamepad_index, .LEFT_X)
+	ay := raylib.GetGamepadAxisMovement(_gamepad_index, .LEFT_Y)
 	switch dir {
 	case .NONE:
 		return false
 	case .UP:
 		return raylib.IsGamepadButtonDown(_gamepad_index, .LEFT_FACE_UP) ||
-			raylib.GetGamepadAxisMovement(_gamepad_index, .LEFT_Y) < -GAMEPAD_DEADZONE
+			(ay < -GAMEPAD_DEADZONE && abs(ay) >= abs(ax))
 	case .DOWN:
 		return raylib.IsGamepadButtonDown(_gamepad_index, .LEFT_FACE_DOWN) ||
-			raylib.GetGamepadAxisMovement(_gamepad_index, .LEFT_Y) > GAMEPAD_DEADZONE
+			(ay > GAMEPAD_DEADZONE && abs(ay) >= abs(ax))
 	case .LEFT:
 		return raylib.IsGamepadButtonDown(_gamepad_index, .LEFT_FACE_LEFT) ||
-			raylib.GetGamepadAxisMovement(_gamepad_index, .LEFT_X) < -GAMEPAD_DEADZONE
+			(ax < -GAMEPAD_DEADZONE && abs(ax) >= abs(ay))
 	case .RIGHT:
 		return raylib.IsGamepadButtonDown(_gamepad_index, .LEFT_FACE_RIGHT) ||
-			raylib.GetGamepadAxisMovement(_gamepad_index, .LEFT_X) > GAMEPAD_DEADZONE
+			(ax > GAMEPAD_DEADZONE && abs(ax) >= abs(ay))
 	}
 	return false
 }
@@ -95,49 +108,15 @@ _gamepad_dir_check :: proc(dir: Gamepad_Nav_Dir, dt: f32) -> bool {
 	return new_steps > prev_steps
 }
 
-// Timer de repeat separado para el chequeo "sólo stick" de abajo — no
-// comparte estado con _gamepad_dir_held (que fusiona d-pad+stick) porque
-// ambos se evalúan el mismo frame por caminos distintos.
-_gamepad_stick_dir_held: [Gamepad_Nav_Dir]f32
-
-// Igual que _gamepad_dir_down pero ignorando los botones de d-pad — sólo
-// el stick izquierdo más allá del deadzone. Usado por la tienda (ver
-// gamepad_shop_stick_dir): pedido explícito del usuario, navegar/comprar
-// cartas con el stick, no con el d-pad.
-_gamepad_stick_dir_down :: proc(dir: Gamepad_Nav_Dir) -> bool {
-	if _gamepad_index < 0 { return false }
-	switch dir {
-	case .LEFT:
-		return raylib.GetGamepadAxisMovement(_gamepad_index, .LEFT_X) < -GAMEPAD_DEADZONE
-	case .RIGHT:
-		return raylib.GetGamepadAxisMovement(_gamepad_index, .LEFT_X) > GAMEPAD_DEADZONE
-	case .NONE, .UP, .DOWN:
-	}
-	return false
-}
-
-_gamepad_stick_dir_check :: proc(dir: Gamepad_Nav_Dir, dt: f32) -> bool {
-	if !_gamepad_stick_dir_down(dir) {
-		_gamepad_stick_dir_held[dir] = 0
-		return false
-	}
-	prev := _gamepad_stick_dir_held[dir]
-	_gamepad_stick_dir_held[dir] += dt
-	if prev == 0 { return true }
-	if prev < GAMEPAD_NAV_REPEAT_DELAY { return false }
-	prev_steps := int((prev - GAMEPAD_NAV_REPEAT_DELAY) / GAMEPAD_NAV_REPEAT_INTERVAL)
-	new_steps  := int((_gamepad_stick_dir_held[dir] - GAMEPAD_NAV_REPEAT_DELAY) / GAMEPAD_NAV_REPEAT_INTERVAL)
-	return new_steps > prev_steps
-}
-
-// LEFT/RIGHT leyendo únicamente el stick izquierdo (sin d-pad), con el
-// mismo repeat hand-rolleado que current_nav_dir — usado sólo por la
-// tienda (render_card_selection_overlay) para navegar/comprar cartas.
-gamepad_shop_stick_dir :: proc(dt: f32) -> Gamepad_Nav_Dir {
-	if _gamepad_stick_dir_check(.LEFT, dt)  { return .LEFT }
-	if _gamepad_stick_dir_check(.RIGHT, dt) { return .RIGHT }
-	return .NONE
-}
+// NOTA: hubo acá un chequeo "sólo stick, sin d-pad" (_gamepad_stick_dir_*/
+// gamepad_shop_stick_dir) para la navegación de cartas de la tienda,
+// agregado a pedido explícito ("saca el d-pad") y sacado de nuevo a
+// pedido explícito poco después ("quiero que el d-pad también funcione
+// ahí") — la tienda volvió a usar `current_nav_dir` (fusionado) como
+// cualquier otra pantalla, ver render_card_selection_overlay
+// (systems/menus.odin). El chequeo de eje dominante en `_gamepad_dir_down`
+// de arriba sigue vigente y es lo que de verdad soluciona el problema que
+// motivó el intento "sólo stick" en primer lugar.
 
 gamepad_confirm_pressed :: proc() -> bool {
 	return _gamepad_index >= 0 && raylib.IsGamepadButtonPressed(_gamepad_index, .RIGHT_FACE_DOWN)

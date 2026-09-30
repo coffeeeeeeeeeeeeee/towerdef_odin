@@ -570,12 +570,31 @@ frame; nada dentro de `render_button` lo garantiza.
 **Por pantalla — índice de foco como static de paquete** (mismo criterio
 que `library_scroll`/`campaign_map_scroll`): `menu_focused_idx` (menú
 principal, navegación vertical con `.UP`/`.DOWN`, clamp no wrap contra
-`slot_count`, ya existente) y `run_complete_focused_idx` (fin de partida,
-horizontal con `.LEFT`/`.RIGHT`, clamp contra `num_btns` — ambas ramas
-derrota/victoria comparten el mismo conteo y usan el helper local
-`focused(app, idx)`). Créditos y los botones sueltos de "Volver" en
+`slot_count`, ya existente), `run_complete_focused_idx` (`.RUN_COMPLETE`,
+fin de partida NO-campaña, horizontal con `.LEFT`/`.RIGHT`, clamp contra
+`num_btns` — ambas ramas derrota/victoria comparten el mismo conteo y
+usan el helper local `focused(app, idx)`) y `game_over_focused_idx`
+(`.GAME_OVER`, `render_game_over_ui` — la pantalla de fin de partida
+cuando SÍ viene de campaña, pedido explícito del usuario: "quiero manejar
+con el joystick la botonera que aparece cuando termina la partida"; mismo
+patrón de clamp horizontal, sin helper local porque sólo son 1-2 botones
+en vez de 3-4). Créditos y los botones sueltos de "Volver" en
 Biblioteca/Mapa de campaña no necesitan índice — son un único widget
 focuseable, `gamepad_focused = app.gamepad_nav_active` directo.
+
+**Bug ya arreglado: `App_State.last_run_was_campaign`.** Tanto
+`render_game_over_ui` como `render_run_complete_ui` calculaban
+`is_campaign := app.current_campaign_node >= 0` para decidir si mostrar
+el botón "Volver a Campaña" — pero `app_finish_run` (`entities/app.odin`)
+ya pisaba `app.current_campaign_node = -1` ANTES de transicionar a
+cualquiera de los dos estados (tanto en el path de campaña como en el
+no-campaña, este último por definición sólo se toma cuando ya es `-1`),
+así que `is_campaign` daba `false` SIEMPRE en las dos pantallas — el
+botón nunca se mostraba, en ninguna de las dos. Fix: `last_run_was_campaign: bool`
+(`App_State`), copiado de `app.current_campaign_node >= 0` en la PRIMERA
+línea de `app_finish_run`, antes de que el path de campaña lo resetee.
+Ambos renders leen `app.last_run_was_campaign` en vez de
+`current_campaign_node` directo.
 
 **Cancelar** (botón B/Círculo, `RIGHT_FACE_RIGHT`,
 `gamepad_cancel_pressed()`) se sumó con `||` a los `if
@@ -712,6 +731,40 @@ PLAYING** (al principio de `input_handle`) para que no quede pegado en
 nueva de `render_button` (ver abajo) podría dispararse en una pantalla de
 menú donde no corresponde.
 
+**Toda run nueva arranca el foco en la mano.**
+`playing_gamepad_context`/`hand_gamepad_focus_idx`/`shop_gamepad_focus_idx`/
+`hud_gamepad_focus_idx` son statics de paquete — persisten entre runs
+dentro del mismo proceso. Sin resetearlos, una run nueva podía arrancar
+con el contexto heredado de la run anterior (SHOP/HUD/CURSOR en vez de
+HAND, pedido explícito del usuario: "el focus mientras se juega debería
+comenzar en las cartas de la mano") o con un índice de foco apuntando a
+una carta/botón que ya no existe en la mano/tienda nueva.
+`simulation_init_from_editor` (`systems/simulation.odin`, el punto de
+entrada común a TODA forma de arrancar una run — editor, campaña,
+reinicio) los reinicia a `HAND`/`0` justo después de `simulation_reset`.
+
+**Bug real de navegación en la tienda: eje dominante del stick.**
+Reporte del usuario: "no puedo elegir a partir de la segunda carta".
+Causa: `current_nav_dir` (usado para el salto de fila arriba/abajo en
+`_update_playing_gamepad_context`) resuelve UP/DOWN ANTES que LEFT/RIGHT
+(orden de `_GAMEPAD_NAV_DIRS`, `systems/gamepad.odin`) — un empuje del
+stick "hacia la derecha" casi nunca es perfectamente horizontal, y la
+mínima deriva vertical (inevitable en un stick analógico real) alcanzaba
+para cruzar también el deadzone de Y. Resultado: en medio de una
+navegación horizontal por las cartas, el frame quedaba leído como DOWN en
+vez de RIGHT, y el branch de tienda saltaba el foco directo a
+Saltar/Reroll — exactamente la sensación de "no puedo pasar de la
+segunda carta" (cualquier intento de seguir a la derecha con la más
+mínima deriva te sacaba de la fila de cartas). Fix: `_gamepad_dir_down` Y
+`_gamepad_stick_dir_down` (`systems/gamepad.odin`) ahora exigen EJE
+DOMINANTE para el aporte del stick — `abs(eje relevante) >= abs(el otro
+eje)`, además del deadzone de siempre. El aporte del D-pad (botones) no
+lleva este chequeo — una pulsación de botón no tiene "magnitud" que
+comparar, y presionar dos botones de d-pad a la vez es intencional, no
+deriva analógica. Este fix es global (afecta `current_nav_dir` en todas
+partes, no sólo la tienda) — beneficio esperado en cualquier pantalla que
+navegue con el stick, no sólo un parche puntual.
+
 X/Triángulo/Círculo se interpretan según el contexto vigente ESE frame:
 - **`.HAND`**: `hand_gamepad_focus_idx` (`systems/menus.odin`) navega con
   D-pad izq/der, fuerza `hovered_idx` a ese índice (ignora el mouse real
@@ -723,13 +776,16 @@ X/Triángulo/Círculo se interpretan según el contexto vigente ESE frame:
   `IsMouseButtonPressed(.RIGHT)` (vender, mismo guard `can_sell`).
 - **`.SHOP`**: `shop_gamepad_focus_idx` (`render_card_selection_overlay`)
   navega dos filas — cartas (`0..<n_cards`) y Skip/Reroll
-  (`n_cards`/`n_cards+1`). Izquierda/derecha leen **sólo el stick
-  izquierdo** (`gamepad_shop_stick_dir`, `systems/gamepad.odin` — NO el
-  d-pad, pedido explícito del usuario) y CICLAN dentro de la fila actual
-  (módulo sobre `row_count`, no clamp — desde la última carta, derecha
-  vuelve a la primera y viceversa; pedido explícito tras la primera
-  versión, que se clavaba en la punta y no dejaba "ciclar entre todas las
-  cartas"), sin cruzar a la otra fila. Cambiar de fila es cosa de arriba/abajo,
+  (`n_cards`/`n_cards+1`). Izquierda/derecha leen `current_nav_dir`
+  (d-pad Y stick fusionados, como cualquier otra pantalla — hubo un
+  intento intermedio de "sólo stick, sin d-pad" a pedido explícito del
+  usuario, revertido poco después a pedido igual de explícito porque
+  quería las dos formas disponibles, no una en lugar de la otra) y CICLAN
+  dentro de la fila actual (módulo sobre `row_count`, no clamp — desde la
+  última carta, derecha vuelve a la primera y viceversa; pedido explícito
+  tras una versión anterior que se clavaba en la punta y no dejaba
+  "ciclar entre todas las cartas"), sin cruzar a la otra fila. Cambiar de
+  fila es cosa de arriba/abajo,
   resuelto en `_update_playing_gamepad_context`
   (`systems/input.odin`, rama especial para `.SHOP` que reemplaza al
   ciclo genérico de contextos mientras la tienda tiene el control): abajo
