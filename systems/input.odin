@@ -12,19 +12,178 @@ import "core:math"
 // índice de foco. Ver gamepad_nav_update en systems/gamepad.odin.
 current_nav_dir: Gamepad_Nav_Dir
 
-// Durante PLAYING, mano y tienda pueden estar interactivas a la vez —
-// X/Triángulo/Círculo no pueden significar dos cosas a la vez el mismo
-// frame, así que hace falta saber cuál de las tres superficies "tiene el
-// control" ahora mismo. Cambia solo con qué tocaste último (mismo
-// criterio que app.gamepad_nav_active): tocar el stick derecho → CURSOR;
-// izq/der del D-pad (o stick izquierdo) → HAND (o se queda si ya estaba
-// en HAND/SHOP); arriba/abajo con la tienda abierta → alterna HAND↔SHOP.
-Playing_Gamepad_Context :: enum { HAND, SHOP, CURSOR }
+// Durante PLAYING, mano/tienda/fila de HUD (Comenzar, Skip Shop, Pausa,
+// velocidades) pueden estar interactivas a la vez — X/Triángulo/Círculo no
+// pueden significar dos cosas a la vez el mismo frame, así que hace falta
+// saber cuál de las superficies "tiene el control" ahora mismo:
+// - Arriba/abajo del D-pad CICLA entre HAND → SHOP (si la tienda está
+//   abierta) → HUD → HAND… (`_playing_gamepad_cycle`) — EXCEPTO estando ya
+//   en SHOP, que maneja arriba/abajo por su cuenta (ver abajo).
+// - Si algo está "armado" (torre/obstáculo seleccionado o acción con
+//   objetivo pendiente) el contexto pasa a CURSOR sí o sí — izq/der del
+//   D-pad mueve el cursor real a pasos fijos (pedido explícito del
+//   usuario: NO quiere apuntar con el stick para colocar torres,
+//   `gamepad_snap_cursor_to_grid`) en vez de navegar mano/tienda.
+// - Sin nada armado, el stick derecho sigue siendo la forma de entrar a
+//   CURSOR libremente (para llegar al panel de una torre ya colocada,
+//   por ejemplo) — ahí no compite con nada porque el D-pad no tiene otro
+//   uso posible en ese momento salvo salir de CURSOR hacia HAND.
+// - Dentro de SHOP: izq/der navegan/compran cartas leyendo SÓLO el stick
+//   izquierdo (`gamepad_shop_stick_dir`, no el d-pad — pedido explícito
+//   del usuario). Abajo baja de la fila de cartas a Saltar/Reroll; arriba
+//   vuelve de esos botones a las cartas, o — si ya estaba en las cartas —
+//   sale directo a HAND, SIN pasar por HUD (pedido explícito: no quiere
+//   ciclar hacia el HUD estando en la tienda).
+Playing_Gamepad_Context :: enum { HAND, SHOP, HUD, CURSOR }
 playing_gamepad_context: Playing_Gamepad_Context = .HAND
 
+// Arriba/abajo alterna entre los contextos "de navegación" disponibles
+// este frame (HAND siempre, SHOP sólo con la tienda abierta, HUD
+// siempre) — cíclico, ya que son pocos ítems y da la vuelta en cualquier
+// sentido sin quedar trabado en una punta.
+_playing_gamepad_cycle :: proc(app: ^entities.App_State, dir: Gamepad_Nav_Dir) {
+	avail: [3]Playing_Gamepad_Context
+	n := 0
+	avail[n] = .HAND; n += 1
+	if app.sim.shop.active { avail[n] = .SHOP; n += 1 }
+	avail[n] = .HUD; n += 1
+
+	cur_idx := 0
+	for i in 0 ..< n {
+		if avail[i] == playing_gamepad_context { cur_idx = i; break }
+	}
+	switch dir {
+	case .UP:   cur_idx = (cur_idx - 1 + n) % n
+	case .DOWN: cur_idx = (cur_idx + 1) % n
+	case .NONE, .LEFT, .RIGHT: return
+	}
+	playing_gamepad_context = avail[cur_idx]
+}
+
+// Celda "recordada" del cursor de mando mientras algo está armado — NO se
+// recalcula desde cero cada tap a partir del mouse real. Se sincroniza
+// sola a la celda real bajo el mouse cuando esa celda es válida, pero si
+// el mouse real arranca fuera de la grilla (ej. recién armada la torre
+// desde una carta al pie de pantalla — el mouse real puede seguir ahí
+// mismo, que no es ningún tile) sigue teniendo de dónde partir en vez de
+// quedar trabada: bug real reportado por el usuario ("no puedo
+// posicionar una torre con el joystick") — la versión anterior, que
+// exigía una celda válida bajo el mouse ANTES de mover un solo paso, no
+// hacía nada en ese caso y el D-pad quedaba sin efecto.
+_gamepad_grid_cursor_row: i32 = -1
+_gamepad_grid_cursor_col: i32 = -1
+
+// Mueve el cursor real al centro de la celda de grilla vecina en la
+// dirección pedida, en vez de un desplazamiento fijo en píxeles de
+// pantalla — la grilla está en proyección 3D (perspectiva + rotación de
+// cámara con L2/R2), así que "un paso" en píxeles no corresponde a un
+// tile real según el zoom/ángulo (podía saltear celdas enteras o no
+// alcanzar la siguiente). Entre las 4 celdas vecinas de
+// `_gamepad_grid_cursor_row/col` (fila/columna ±1) se elige la que mejor
+// se alinea en PANTALLA con la dirección pedida (mayor producto punto
+// contra el vector de pantalla de esa dirección) — así respeta la
+// rotación de cámara actual: "arriba" en el D-pad siempre mueve hacia
+// donde se ve "arriba" en pantalla, sin importar hacia dónde mira la
+// cámara en ese momento.
+gamepad_snap_cursor_to_grid :: proc(app: ^entities.App_State, dir: Gamepad_Nav_Dir) {
+	m := &app.editor.game_map
+
+	// Sincronizar con la celda real bajo el mouse si es válida — así un
+	// click/movimiento de mouse real de por medio no deja el cursor de
+	// mando "desactualizado".
+	mouse := raylib.GetMousePosition()
+	if col, row := screen_to_grid(app, i32(mouse.x), i32(mouse.y)); col >= 0 && col < m.width && row >= 0 && row < m.height {
+		_gamepad_grid_cursor_row = row
+		_gamepad_grid_cursor_col = col
+	}
+
+	if dir == .NONE { return }
+
+	// Nunca hubo una celda válida (mouse real arrancó fuera de la grilla)
+	// — arrancamos del centro del mapa en vez de quedarnos sin poder
+	// mover un solo paso.
+	if _gamepad_grid_cursor_row < 0 || _gamepad_grid_cursor_col < 0 {
+		_gamepad_grid_cursor_row = m.height / 2
+		_gamepad_grid_cursor_col = m.width / 2
+	}
+
+	screen_dir: raylib.Vector2
+	switch dir {
+	case .UP:    screen_dir = {0, -1}
+	case .DOWN:  screen_dir = {0, 1}
+	case .LEFT:  screen_dir = {-1, 0}
+	case .RIGHT: screen_dir = {1, 0}
+	case .NONE:
+	}
+
+	cur_center, _ := tile_world_top(m, _gamepad_grid_cursor_row, _gamepad_grid_cursor_col)
+	cur_screen := raylib.GetWorldToScreen(cur_center, app.camera3d)
+
+	candidates := [4][2]i32{
+		{_gamepad_grid_cursor_row - 1, _gamepad_grid_cursor_col},
+		{_gamepad_grid_cursor_row + 1, _gamepad_grid_cursor_col},
+		{_gamepad_grid_cursor_row, _gamepad_grid_cursor_col - 1},
+		{_gamepad_grid_cursor_row, _gamepad_grid_cursor_col + 1},
+	}
+	best_score := f32(0)
+	best_row, best_col := _gamepad_grid_cursor_row, _gamepad_grid_cursor_col
+	best_pos := cur_screen
+	found := false
+	for c in candidates {
+		nr, nc := c[0], c[1]
+		if nr < 0 || nr >= m.height || nc < 0 || nc >= m.width { continue }
+		center, _ := tile_world_top(m, nr, nc)
+		screen := raylib.GetWorldToScreen(center, app.camera3d)
+		delta := raylib.Vector2{screen.x - cur_screen.x, screen.y - cur_screen.y}
+		length := math.sqrt(delta.x*delta.x + delta.y*delta.y)
+		if length < 0.001 { continue }
+		score := (delta.x*screen_dir.x + delta.y*screen_dir.y) / length
+		if score > best_score {
+			best_score = score
+			best_row, best_col = nr, nc
+			best_pos = screen
+			found = true
+		}
+	}
+	if found {
+		_gamepad_grid_cursor_row = best_row
+		_gamepad_grid_cursor_col = best_col
+	}
+	raylib.SetMousePosition(
+		i32(clamp(best_pos.x, 0, f32(raylib.GetScreenWidth()))),
+		i32(clamp(best_pos.y, 0, f32(raylib.GetScreenHeight()))),
+	)
+}
+
 _update_playing_gamepad_context :: proc(app: ^entities.App_State) {
-	if gamepad_virtual_mouse_update(app.delta_time) {
+	armed := app.sim.selected_build_tower != .EMPTY || app.pending_tower_action != .TOWER
+
+	if armed {
 		playing_gamepad_context = .CURSOR
+		gamepad_snap_cursor_to_grid(app, current_nav_dir)
+	} else if !app.sim.shop.active && gamepad_virtual_mouse_update(app.delta_time) {
+		// El stick derecho (mouse virtual) queda desactivado mientras la
+		// tienda está abierta — pedido explícito del usuario: no quiere
+		// que mover el stick derecho por error se lleve el contexto a
+		// CURSOR y lo saque de la navegación de la tienda.
+		playing_gamepad_context = .CURSOR
+	} else if playing_gamepad_context == .SHOP {
+		// La tienda no usa el ciclo genérico de contextos para
+		// arriba/abajo — navega su propia fila cartas↔Saltar/Reroll y
+		// sale directo a HAND desde arriba (nunca hacia HUD).
+		n_cards := shop_card_slot_count(app)
+		on_buttons := shop_gamepad_focus_idx >= n_cards
+		switch current_nav_dir {
+		case .DOWN:
+			if !on_buttons { shop_gamepad_focus_idx = n_cards }
+		case .UP:
+			if on_buttons {
+				shop_gamepad_focus_idx = 0
+			} else {
+				playing_gamepad_context = .HAND
+			}
+		case .NONE, .LEFT, .RIGHT:
+		}
 	} else {
 		switch current_nav_dir {
 		case .LEFT, .RIGHT:
@@ -32,9 +191,7 @@ _update_playing_gamepad_context :: proc(app: ^entities.App_State) {
 				playing_gamepad_context = .HAND
 			}
 		case .UP, .DOWN:
-			if app.sim.shop.active {
-				playing_gamepad_context = .SHOP if playing_gamepad_context == .HAND else .HAND
-			}
+			_playing_gamepad_cycle(app, current_nav_dir)
 		case .NONE:
 		}
 	}

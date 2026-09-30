@@ -642,6 +642,60 @@ funcionando sin duplicar una sola línea de lógica de posición. Sólo hacía
 falta enseñarle a cada chequeo de "¿se apretó el botón?" a aceptar
 también el botón del mando — la posición ya estaba resuelta.
 
+**Desactivado por completo mientras la tienda está abierta**
+(`_update_playing_gamepad_context`, `systems/input.odin`): con
+`app.sim.shop.active`, ni siquiera se llama a
+`gamepad_virtual_mouse_update` (cortocircuito del `&&`) — pedido
+explícito del usuario, que no quería que tocar el stick derecho sin
+querer lo sacara de la navegación de la tienda saltando a `.CURSOR`. El
+stick derecho vuelve a funcionar normalmente en cuanto la tienda cierra.
+
+**Colocar torres/obstáculos (algo "armado"): el D-pad ajusta el cursor al
+centro real del tile vecino, no un paso fijo en píxeles.**
+`gamepad_snap_cursor_to_grid` (`systems/input.odin`, llamado desde
+`_update_playing_gamepad_context` mientras `armed` es true) reemplazó a un
+primer intento (`gamepad_virtual_mouse_step`, ya eliminado) que sumaba
+`GAMEPAD_VIRTUAL_MOUSE_STEP_PX` px de pantalla fijos por tap/repeat.
+Reporte real del usuario: "el mouse se saltea algunos lugares de la
+grilla y nunca se puede posicionar... en un espacio libre" — la grilla
+vive en proyección 3D en perspectiva (más la rotación de cámara con
+L2/R2), así que un paso fijo en píxeles NO corresponde a un tile real: el
+tamaño en pantalla de una celda cambia con el zoom y con dónde cae en la
+pantalla (foreshortening de la perspectiva), así que ese paso podía
+saltear celdas enteras, quedarse corto, o aterrizar en cualquier punto
+que no fuera el centro de ningún tile. Fix: en vez de sumar píxeles,
+`gamepad_snap_cursor_to_grid` resuelve la celda REAL bajo el cursor
+(`screen_to_grid`, la misma que ya usa el click real para colocar), mira
+sus 4 vecinas (fila/columna ±1, `tile_world_top` para el centro en
+mundo), las proyecta a pantalla (`raylib.GetWorldToScreen`) y salta
+directo al centro de la que mejor se alinee con la dirección pedida
+(mayor producto punto normalizado contra el vector de pantalla de esa
+dirección — UP=(0,-1), etc.). Aterriza siempre exacto en un tile, y al
+elegir por alineación en PANTALLA (no por offset de fila/columna crudo en
+mundo) respeta la rotación de cámara actual sin ningún caso especial:
+"arriba" en el D-pad siempre es "arriba" en pantalla, sin importar hacia
+dónde mira la cámara en ese momento.
+
+**Segundo bug real, mismo síntoma final ("no puedo posicionar una torre
+con el joystick") — estado propio (`_gamepad_grid_cursor_row/col`), no
+recalcular todo desde el mouse real cada tap.** La primera versión exigía
+una celda de grilla VÁLIDA bajo el mouse real antes de mover un solo
+paso (`if col < 0 || ... { return }`) — si el mouse real arrancaba fuera
+de la grilla (ej. recién armada la torre desde una carta al pie de
+pantalla, donde el mouse real seguía posado, que no es ningún tile), la
+función no hacía absolutamente nada en NINGÚN tap, el D-pad quedaba sin
+efecto para siempre y jamás se podía llegar a la grilla. Fix: dos statics
+de paquete (`_gamepad_grid_cursor_row/col`, arranca en `-1`) guardan la
+celda del cursor de mando de forma persistente entre frames — se
+sincronizan con la celda real bajo el mouse cuando ésta es válida (para
+que un movimiento de mouse real de por medio no deje el cursor de mando
+desactualizado), pero si nunca hubo ninguna celda válida, arrancan del
+CENTRO DEL MAPA en vez de quedarse sin poder dar un solo paso. Los
+vecinos/proyección a pantalla (ver arriba) ahora se calculan a partir de
+esta celda recordada, no del mouse real crudo — más robusto también
+porque no depende de que el mouse real esté flotando exactamente sobre el
+centro de un tile.
+
 **El problema real: X no puede significar dos cosas a la vez.**
 Si el D-pad tiene el foco puesto en una carta de la mano Y el stick
 derecho puede estar apuntando a la grilla al mismo tiempo, hace falta
@@ -668,8 +722,27 @@ X/Triángulo/Círculo se interpretan según el contexto vigente ESE frame:
   `gamepad_sell_pressed`, `RIGHT_FACE_UP`) dispara la misma rama que
   `IsMouseButtonPressed(.RIGHT)` (vender, mismo guard `can_sell`).
 - **`.SHOP`**: `shop_gamepad_focus_idx` (`render_card_selection_overlay`)
-  navega cartas + Skip + Reroll como una sola lista (`0..<n_cards` son
-  cartas, `n_cards`/`n_cards+1` son los botones). X compra
+  navega dos filas — cartas (`0..<n_cards`) y Skip/Reroll
+  (`n_cards`/`n_cards+1`). Izquierda/derecha leen **sólo el stick
+  izquierdo** (`gamepad_shop_stick_dir`, `systems/gamepad.odin` — NO el
+  d-pad, pedido explícito del usuario) y CICLAN dentro de la fila actual
+  (módulo sobre `row_count`, no clamp — desde la última carta, derecha
+  vuelve a la primera y viceversa; pedido explícito tras la primera
+  versión, que se clavaba en la punta y no dejaba "ciclar entre todas las
+  cartas"), sin cruzar a la otra fila. Cambiar de fila es cosa de arriba/abajo,
+  resuelto en `_update_playing_gamepad_context`
+  (`systems/input.odin`, rama especial para `.SHOP` que reemplaza al
+  ciclo genérico de contextos mientras la tienda tiene el control): abajo
+  baja de cartas a Saltar/Reroll (siempre aterriza en Saltar,
+  `shop_gamepad_focus_idx = n_cards`, no conserva qué carta estaba
+  enfocada); arriba vuelve de los botones a la primera carta, o — si ya
+  estaba en la fila de cartas — sale directo a `.HAND`, **sin pasar por
+  `.HUD`** (pedido explícito: no quiere ciclar hacia el HUD estando en la
+  tienda; el ciclo genérico de 3 contextos sigue intacto para cuando se
+  entra a SHOP desde HAND/HUD, sólo el comportamiento DESDE DENTRO de
+  SHOP es especial). `shop_card_slot_count(app)` centraliza el cálculo de
+  cuántas cartas hay (compartido entre el render y la lógica de contexto,
+  para que ambos acuerden dónde termina la fila de cartas). X compra
   (`shop_perform_buy`), Círculo alterna el lock
   (`shop_perform_toggle_lock`) — misma rama que sus clicks de hoy. Skip/
   Reroll ya eran `render_button` normales: sólo ganaron

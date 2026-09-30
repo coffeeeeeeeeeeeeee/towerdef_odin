@@ -95,6 +95,50 @@ _gamepad_dir_check :: proc(dir: Gamepad_Nav_Dir, dt: f32) -> bool {
 	return new_steps > prev_steps
 }
 
+// Timer de repeat separado para el chequeo "sólo stick" de abajo — no
+// comparte estado con _gamepad_dir_held (que fusiona d-pad+stick) porque
+// ambos se evalúan el mismo frame por caminos distintos.
+_gamepad_stick_dir_held: [Gamepad_Nav_Dir]f32
+
+// Igual que _gamepad_dir_down pero ignorando los botones de d-pad — sólo
+// el stick izquierdo más allá del deadzone. Usado por la tienda (ver
+// gamepad_shop_stick_dir): pedido explícito del usuario, navegar/comprar
+// cartas con el stick, no con el d-pad.
+_gamepad_stick_dir_down :: proc(dir: Gamepad_Nav_Dir) -> bool {
+	if _gamepad_index < 0 { return false }
+	switch dir {
+	case .LEFT:
+		return raylib.GetGamepadAxisMovement(_gamepad_index, .LEFT_X) < -GAMEPAD_DEADZONE
+	case .RIGHT:
+		return raylib.GetGamepadAxisMovement(_gamepad_index, .LEFT_X) > GAMEPAD_DEADZONE
+	case .NONE, .UP, .DOWN:
+	}
+	return false
+}
+
+_gamepad_stick_dir_check :: proc(dir: Gamepad_Nav_Dir, dt: f32) -> bool {
+	if !_gamepad_stick_dir_down(dir) {
+		_gamepad_stick_dir_held[dir] = 0
+		return false
+	}
+	prev := _gamepad_stick_dir_held[dir]
+	_gamepad_stick_dir_held[dir] += dt
+	if prev == 0 { return true }
+	if prev < GAMEPAD_NAV_REPEAT_DELAY { return false }
+	prev_steps := int((prev - GAMEPAD_NAV_REPEAT_DELAY) / GAMEPAD_NAV_REPEAT_INTERVAL)
+	new_steps  := int((_gamepad_stick_dir_held[dir] - GAMEPAD_NAV_REPEAT_DELAY) / GAMEPAD_NAV_REPEAT_INTERVAL)
+	return new_steps > prev_steps
+}
+
+// LEFT/RIGHT leyendo únicamente el stick izquierdo (sin d-pad), con el
+// mismo repeat hand-rolleado que current_nav_dir — usado sólo por la
+// tienda (render_card_selection_overlay) para navegar/comprar cartas.
+gamepad_shop_stick_dir :: proc(dt: f32) -> Gamepad_Nav_Dir {
+	if _gamepad_stick_dir_check(.LEFT, dt)  { return .LEFT }
+	if _gamepad_stick_dir_check(.RIGHT, dt) { return .RIGHT }
+	return .NONE
+}
+
 gamepad_confirm_pressed :: proc() -> bool {
 	return _gamepad_index >= 0 && raylib.IsGamepadButtonPressed(_gamepad_index, .RIGHT_FACE_DOWN)
 }
@@ -133,6 +177,16 @@ gamepad_virtual_mouse_update :: proc(dt: f32) -> bool {
 	raylib.SetMousePosition(i32(pos.x), i32(pos.y))
 	return true
 }
+
+// NOTA: el paso fijo en píxeles de pantalla que había acá (48px por
+// tap/repeat del D-pad) se sacó — con la grilla en proyección 3D
+// (perspectiva + rotación de cámara con L2/R2) un paso de píxeles fijo no
+// corresponde a un tile real: según el zoom/ángulo podía saltear celdas
+// enteras o no alcanzar la siguiente, y nunca aterrizaba prolijo en el
+// centro de un tile ("el mouse se saltea algunos lugares de la grilla",
+// reporte real del usuario). Reemplazado por `gamepad_snap_cursor_to_grid`
+// (`systems/input.odin`, que sí tiene a mano el mapa/cámara para resolver
+// el tile vecino real en vez de un desplazamiento ciego en píxeles).
 
 // Actualiza el estado de navegación de mando y decide qué dispositivo está
 // "activo" (el último que se usó — si hay input de mando, mando; si hay

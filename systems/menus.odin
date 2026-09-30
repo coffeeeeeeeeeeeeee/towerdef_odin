@@ -523,6 +523,24 @@ render_game_ui :: proc(app: ^entities.App_State) {
 	speed2_x := speed1_x + speed1_width + gap
 	speed3_x := speed2_x + speed2_width + gap
 
+	// Foco de mando sobre esta fila (Comenzar/Skip Shop/[Siguiente]/Pausa/
+	// velocidades) — sólo cuando playing_gamepad_context == .HUD. Orden
+	// izquierda a derecha, igual al layout real; el índice se clampea acá
+	// contra el conteo real de botones visibles este frame (Siguiente es
+	// condicional).
+	hud_btn_count := visible_button_count
+	if hud_gamepad_focus_idx >= int(hud_btn_count) { hud_gamepad_focus_idx = int(hud_btn_count) - 1 }
+	if hud_gamepad_focus_idx < 0 { hud_gamepad_focus_idx = 0 }
+	if playing_gamepad_context == .HUD {
+		switch current_nav_dir {
+		case .LEFT:  hud_gamepad_focus_idx = max(hud_gamepad_focus_idx-1, 0)
+		case .RIGHT: hud_gamepad_focus_idx = min(hud_gamepad_focus_idx+1, int(hud_btn_count)-1)
+		case .NONE, .UP, .DOWN:
+		}
+	}
+	hud_gamepad_active := playing_gamepad_context == .HUD
+	hud_idx := 0
+
 	// Active-state colors
 	active_green        := constants.UI_BUTTON_TOGGLE_ACTIVE_COLOR
 	active_green_hover  := constants.UI_BUTTON_TOGGLE_ACTIVE_HOVER
@@ -548,6 +566,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			hover_color   = constants.UI_BUTTON_AFFIRMATIVE_HOVER,
 			pressed_color = constants.UI_BUTTON_AFFIRMATIVE_PRESS,
 			scale         = s,
+			gamepad_focused = hud_gamepad_active && hud_gamepad_focus_idx == hud_idx,
 		},
 	) {
 		if can_start_wave {
@@ -555,6 +574,7 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			start_next_wave(app)
 		}
 	}
+	hud_idx += 1
 
 	// Skip Shop toggle — activa/desactiva el cierre automático de la tienda al final de cada oleada
 	if render_button(
@@ -565,23 +585,29 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			hover_color   = app.settings.auto_skip_shop ? active_green_hover : no_color,
 			pressed_color = app.settings.auto_skip_shop ? active_green_press : no_color,
 			scale         = s,
+			gamepad_focused = hud_gamepad_active && hud_gamepad_focus_idx == hud_idx,
 		},
 	) {
 		app.settings.auto_skip_shop = !app.settings.auto_skip_shop
 	}
+	hud_idx += 1
 
 	// Next Wave button (hidden when auto-start is enabled)
 	if show_next_wave_button {
 		if render_button(
 			next_wave_text,
 			{f32(next_wave_x), f32(button_y), f32(next_wave_width), f32(icon_btn_size)},
-			{disabled = !is_between_waves, scale = s},
+			{
+				disabled = !is_between_waves, scale = s,
+				gamepad_focused = hud_gamepad_active && hud_gamepad_focus_idx == hud_idx,
+			},
 		) {
 			if is_between_waves {
 				simulation_set_pause(app, false)
 				start_next_wave(app)
 			}
 		}
+		hud_idx += 1
 	}
 
 	// Pause/resume icon button — yellow when paused; icon shows the action (play=resume, pause=pause)
@@ -599,10 +625,12 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			button_color  = pause_col,
 			hover_color   = pause_hover_col,
 			pressed_color = pause_press_col,
+			gamepad_focused = hud_gamepad_active && hud_gamepad_focus_idx == hud_idx,
 		},
 	) {
 		simulation_toggle_pause(app)
 	}
+	hud_idx += 1
 
 	// Speed icon buttons — green when that speed is active
 	speed1_col, speed1_hover_col, speed1_press_col := no_color, no_color, no_color
@@ -618,10 +646,12 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			button_color  = speed1_col,
 			hover_color   = speed1_hover_col,
 			pressed_color = speed1_press_col,
+			gamepad_focused = hud_gamepad_active && hud_gamepad_focus_idx == hud_idx,
 		},
 	) {
 		simulation_set_speed(app, 1.0)
 	}
+	hud_idx += 1
 
 	speed2_col, speed2_hover_col, speed2_press_col := no_color, no_color, no_color
 	if app.sim.speed == 2.0 {
@@ -636,10 +666,12 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			button_color  = speed2_col,
 			hover_color   = speed2_hover_col,
 			pressed_color = speed2_press_col,
+			gamepad_focused = hud_gamepad_active && hud_gamepad_focus_idx == hud_idx,
 		},
 	) {
 		simulation_set_speed(app, 2.0)
 	}
+	hud_idx += 1
 
 	speed3_col, speed3_hover_col, speed3_press_col := no_color, no_color, no_color
 	if app.sim.speed == 3.0 {
@@ -654,10 +686,12 @@ render_game_ui :: proc(app: ^entities.App_State) {
 			button_color  = speed3_col,
 			hover_color   = speed3_hover_col,
 			pressed_color = speed3_press_col,
+			gamepad_focused = hud_gamepad_active && hud_gamepad_focus_idx == hud_idx,
 		},
 	) {
 		simulation_set_speed(app, 3.0)
 	}
+	hud_idx += 1
 
 	// Render build toolbar (shared logic)
 	render_build_toolbar(app)
@@ -2553,11 +2587,23 @@ shop_next_reroll_cost :: proc(app: ^entities.App_State) -> i32 {
 // Click izquierdo sobre una carta la compra directamente.
 // Click derecho sobre una carta la bloquea (sobrevive al reroll).
 // El shop se cierra solo con el botón Skip (o cuando se abre la siguiente oleada).
-// Foco de mando sobre la tienda — D-pad izq/der navega, X compra, Círculo
-// bloquea/desbloquea (ver playing_gamepad_context, systems/input.odin).
-// Índices 0..<n_cards son cartas; n_cards/n_cards+1 son Skip/Reroll.
-// Clampeado cada frame dentro de render_card_selection_overlay.
+// Foco de mando sobre la tienda — stick izq. navega/compra cartas (sin
+// d-pad, pedido explícito), X compra, Círculo bloquea/desbloquea (ver
+// playing_gamepad_context, systems/input.odin). Índices 0..<n_cards son
+// cartas; n_cards/n_cards+1 son Skip/Reroll. Clampeado cada frame dentro
+// de render_card_selection_overlay.
 shop_gamepad_focus_idx: int = 0
+
+// Cantidad de slots de tienda activos según el bioma — compartida entre
+// render_card_selection_overlay (layout) y _update_playing_gamepad_context
+// (systems/input.odin, necesita saber dónde termina la fila de cartas
+// para decidir si arriba/abajo cambia de fila o sale de la tienda).
+shop_card_slot_count :: proc(app: ^entities.App_State) -> int {
+	n := int(app.sim.shop.slot_count)
+	if n <= 0 { n = int(constants.SHOP_BASE_SLOTS) }
+	if n > int(constants.MAX_SHOP_SLOTS) { n = int(constants.MAX_SHOP_SLOTS) }
+	return n
+}
 
 render_card_selection_overlay :: proc(app: ^entities.App_State) {
 	// Limpiamos ui_modal_blocks: la UI de juego subyacente ya fue procesada y
@@ -2572,9 +2618,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 	raylib.DrawRectangle(0, 0, i32(screen_w), i32(screen_h), raylib.Color{0, 0, 0, 160})
 
 	// Cantidad de slots activos según el bioma (clamped a [1, MAX_SHOP_SLOTS]).
-	n_cards := int(sim.shop.slot_count)
-	if n_cards <= 0 { n_cards = int(constants.SHOP_BASE_SLOTS) }
-	if n_cards > int(constants.MAX_SHOP_SLOTS) { n_cards = int(constants.MAX_SHOP_SLOTS) }
+	n_cards := shop_card_slot_count(app)
 
 	// Posición del panel — se centra sobre la cantidad real de slots
 	panel_w  := f32(n_cards) * CARD_W + f32(n_cards + 1) * CARD_GAP
@@ -2610,12 +2654,27 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 
 	// Navegación con mando — sólo cuando la tienda tiene el contexto
 	// activo (ver playing_gamepad_context). +2 = Skip/Reroll, al final.
+	// Izq/der leen sólo el stick izquierdo (sin d-pad, pedido explícito) y
+	// se mueven DENTRO de la fila actual — cambiar de fila (cartas ↔
+	// Saltar/Reroll) es cosa de arriba/abajo, resuelto en
+	// _update_playing_gamepad_context (systems/input.odin).
 	if shop_gamepad_focus_idx >= n_cards+2 { shop_gamepad_focus_idx = n_cards+1 }
 	if shop_gamepad_focus_idx < 0 { shop_gamepad_focus_idx = 0 }
 	if playing_gamepad_context == .SHOP {
-		switch current_nav_dir {
-		case .LEFT:  shop_gamepad_focus_idx = max(shop_gamepad_focus_idx-1, 0)
-		case .RIGHT: shop_gamepad_focus_idx = min(shop_gamepad_focus_idx+1, n_cards+1)
+		// Izq/der CICLAN (dan la vuelta) dentro de la fila actual, no se
+		// quedan clavadas en la punta — pedido explícito tras el primer
+		// intento (clamp sin wrap), que no dejaba llegar a algunas cartas
+		// desde el otro extremo.
+		on_buttons := shop_gamepad_focus_idx >= n_cards
+		row_start, row_count := 0, n_cards
+		if on_buttons { row_start, row_count = n_cards, 2 }
+		switch gamepad_shop_stick_dir(app.delta_time) {
+		case .LEFT:
+			rel := shop_gamepad_focus_idx - row_start
+			shop_gamepad_focus_idx = row_start + ((rel - 1 + row_count) % row_count)
+		case .RIGHT:
+			rel := shop_gamepad_focus_idx - row_start
+			shop_gamepad_focus_idx = row_start + ((rel + 1) % row_count)
 		case .NONE, .UP, .DOWN:
 		}
 	}
@@ -2872,6 +2931,10 @@ activate_pending_action :: proc(app: ^entities.App_State, kind: entities.Card_Ki
 // vende (ver playing_gamepad_context, systems/input.odin). Clampeado cada
 // frame contra el tamaño actual de la mano dentro de render_card_hand.
 hand_gamepad_focus_idx: int = 0
+
+// Foco de mando sobre la fila de HUD (Comenzar/Skip Shop/Siguiente/Pausa/
+// velocidades 1x-2x-3x) — sólo activo cuando playing_gamepad_context == .HUD.
+hud_gamepad_focus_idx: int = 0
 
 // Renderiza la mano del jugador en la zona inferior.
 // Las cartas están plegadas (solapadas). Pasar el mouse sobre una carta
