@@ -44,6 +44,9 @@ CREDITS_TECH_LIB|PORTUGUESE|Renderização com raylib
 CREDITS_TECH_FONT|ENGLISH|Font: Orbitron (Google Fonts, SIL Open Font License)
 CREDITS_TECH_FONT|SPANISH|Tipografía: Orbitron (Google Fonts, SIL Open Font License)
 CREDITS_TECH_FONT|PORTUGUESE|Fonte: Orbitron (Google Fonts, SIL Open Font License)
+CREDITS_TECH_SFX|ENGLISH|Sound effects: Kenney (kenney.nl, CC0)
+CREDITS_TECH_SFX|SPANISH|Efectos de sonido: Kenney (kenney.nl, CC0)
+CREDITS_TECH_SFX|PORTUGUESE|Efeitos sonoros: Kenney (kenney.nl, CC0)
 CREDITS_THANKS|ENGLISH|Thanks for playing
 CREDITS_THANKS|SPANISH|Gracias por jugar
 CREDITS_THANKS|PORTUGUESE|Obrigado por jogar

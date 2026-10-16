@@ -402,7 +402,8 @@ patrón que `draw_badge` en el editor de campaña). Crédito de diseño/
 desarrollo hardcodeado ("Posta Argentina", pedido explícito del usuario —
 no inferir un nombre del autor de git, que es un username, no un nombre
 para mostrar) + atribución de terceros (lenguaje Odin, raylib, fuente
-Orbitron bajo SIL OFL). Mismo back-button al pie que Progression/Library
+Orbitron bajo SIL OFL, efectos de sonido de Kenney/kenney.nl bajo CC0 —
+`CREDITS_TECH_SFX`, `translations.txt`). Mismo back-button al pie que Progression/Library
 (reusa la clave `PROGRESSION_BACK`), ESC vuelve a `.MENU` (`input.odin`),
 fondo de nébula activado igual que el resto de las pantallas de menú
 (`render_game`, `rendering.odin`).

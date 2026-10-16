@@ -3773,6 +3773,7 @@ render_credits_ui :: proc(app: ^entities.App_State) {
 	draw_tech_line(constants.get_text("CREDITS_TECH_LANG"), &y)
 	draw_tech_line(constants.get_text("CREDITS_TECH_LIB"), &y)
 	draw_tech_line(constants.get_text("CREDITS_TECH_FONT"), &y)
+	draw_tech_line(constants.get_text("CREDITS_TECH_SFX"), &y)
 	y += f32(spacing) * 3
 
 	// Agradecimiento final
