@@ -881,8 +881,14 @@ render_campaign_map :: proc(app: ^entities.App_State) {
 			append(&ui_click_blocks, node_rect)
 
 			// Tooltip rápido de una línea en hover (widget compartido, no un
-			// DrawRectangleRounded a mano).
-			if hovered {
+			// DrawRectangleRounded a mano). Suprimido mientras el panel de
+			// detalle ya está abierto — el panel vive en una 3ª pasada y
+			// `render_tooltip_layer` dibuja DESPUÉS de todo lo demás (al
+			// final de render_game), así que el tooltip quedaba pintándose
+			// ENCIMA del panel cuando el nodo hovereado era el mismo que
+			// tenía el panel abierto (bug real: título del panel ilegible,
+			// texto superpuesto). El panel ya muestra toda esta info y más.
+			if hovered && campaign_map_selected_node < 0 {
 				disp := campaign_node_title(app, i)
 				status: string
 				switch {

@@ -2836,7 +2836,7 @@ render_card_selection_overlay :: proc(app: ^entities.App_State) {
 	// bioma o uno de los MOUNTAIN_FREE_REROLLS gratis de MOUNTAIN).
 	reroll_label: string
 	if reroll_cost == 0 {
-		reroll_label = fmt.tprintf("%s (gratis)", constants.get_text("DECK_REROLL_BUTTON"))
+		reroll_label = fmt.tprintf("%s (%s)", constants.get_text("DECK_REROLL_BUTTON"), constants.get_text("DECK_REROLL_FREE"))
 	} else {
 		reroll_label = fmt.tprintf("%s $%d", constants.get_text("DECK_REROLL_BUTTON"), reroll_cost)
 	}
